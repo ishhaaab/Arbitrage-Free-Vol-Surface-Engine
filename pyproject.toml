@@ -11,18 +11,13 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pytest",
-  "basedpyright",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.basedpyright]
+[tool.pyright]
 include = ["src", "tests"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"

@@ -1,26 +1,25 @@
 """Black-Scholes pricing functions."""
 
-from math import log, sqrt, exp
 from scipy.stats import norm
 
 from arbfree_vol.models.option import BlackScholesInput, OptionType
+from arbfree_vol.pricing._core import core
 
-def price(model: BlackScholesInput):
+def price(model: BlackScholesInput) -> float:
 
     s= model.spot
     k= model.contract.strike
+    t= model.expiry_time
     r= model.risk_free
     q= model.div_yield
-    t= model.expiry_time
     sigma= model.volatility
 
-    d1= (log(s/k) + (r - q + 0.5*sigma**2)*t)/(sigma*sqrt(t))
-    d2= d1- sigma*sqrt(t)
+    c= core(S=s,K=k,T=t,r=r,q=q,sigma=sigma)
 
     if model.contract.option_type== OptionType.CALL:
-        return s * exp(-q*t) * float(norm.cdf(d1)) - k * exp(-r*t) * float(norm.cdf(d2))
+        return s * c.df_q * float(norm.cdf(c.d1)) - k * c.df_r * float(norm.cdf(c.d2))
     
     elif model.contract.option_type== OptionType.PUT:
-        return  k * exp(-r*t) * float(norm.cdf(-d2)) - s * exp(-q*t) * float(norm.cdf(-d1)) 
+        return  k * c.df_r * float(norm.cdf(-c.d2)) - s * c.df_q * float(norm.cdf(-c.d1)) 
     
     raise ValueError("Invalid Option Type")

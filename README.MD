@@ -75,8 +75,7 @@ The project currently focuses on the Python-only quant core:
 - SciPy
 - Pydantic
 - Pytest
-- Ruff
-- basedpyright
+- Pylance (Pyright-based type checking)
 
 Future additions may include:
 
