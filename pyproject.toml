@@ -1,0 +1,29 @@
+[project]
+name = "arbfree-vol-surface"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy",
+  "scipy",
+  "pydantic",
+]
+
+[dependency-groups]
+dev = [
+  "pytest",
+  "basedpyright",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.basedpyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
+reportMissingTypeStubs = false
