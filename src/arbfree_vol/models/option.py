@@ -21,3 +21,11 @@ class BlackScholesInput(BaseModel):
     div_yield: float
     volatility: float= Field(..., gt=0)
 
+
+class ImpliedVolInput(BaseModel):
+    contract: OptionContract
+    spot: float= Field(..., gt=0)
+    expiry_time: float= Field(..., gt=0) # time to expiry in years
+    risk_free: float
+    div_yield: float
+    market_price: float= Field(..., gt=0)
