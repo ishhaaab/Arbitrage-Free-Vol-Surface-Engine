@@ -84,6 +84,40 @@ def test_parity_violation_is_detected() -> None:
     assert v.magnitude == approx(1.0, abs=1e-6)
 
 
+def test_monotonicity_violation_is_detected() -> None:
+    # Call prices must fall as strike rises; here the 110 call is dearer than the
+    # 100 call -> a vertical-spread arbitrage.
+    surface = _surface(
+        [
+            Quote(strike=100.0, option_type=OptionType.CALL, price=5.0),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=6.0),
+        ]
+    )
+
+    report = detect(surface)
+
+    assert not report.is_arbitrage_free
+    kinds = [v.kind for v in report.violations]
+    assert ViolationType.MONOTONICITY in kinds
+    mono = next(v for v in report.violations if v.kind == ViolationType.MONOTONICITY)
+    assert mono.magnitude == approx(1.0, abs=1e-6)
+
+
+def test_monotonic_calls_are_arbitrage_free() -> None:
+    # Properly decreasing call prices across strikes -> no monotonicity violation.
+    surface = _surface(
+        [
+            Quote(strike=90.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 90.0)),
+            Quote(strike=100.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 100.0)),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 110.0)),
+        ]
+    )
+
+    report = detect(surface)
+
+    assert report.is_arbitrage_free
+
+
 def test_unpaired_strike_is_skipped() -> None:
     # Only a call at this strike => parity cannot be checked, no violation.
     call = _bs_price(OptionType.CALL, 100.0)

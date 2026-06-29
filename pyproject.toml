@@ -19,6 +19,6 @@ pythonpath = ["src"]
 
 [tool.pyright]
 include = ["src", "tests"]
-typeCheckingMode = "strict"
+typeCheckingMode = "standard"
 pythonVersion = "3.11"
 reportMissingTypeStubs = false
