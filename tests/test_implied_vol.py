@@ -19,7 +19,7 @@ def _contract(option_type: OptionType) -> OptionContract:
         symbol="NVDA",
         option_type=option_type,
         strike=100,
-        expiry=date(2026, 11, 27),
+        expiry_date=date(2026, 11, 27),
     )
 
 
@@ -81,7 +81,7 @@ def test_price_below_intrinsic_returns_none() -> None:
             symbol="NVDA",
             option_type=OptionType.CALL,
             strike=50,
-            expiry=date(2026, 11, 27),
+            expiry_date=date(2026, 11, 27),
         ),
         spot=100,
         expiry_time=1,

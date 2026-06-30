@@ -10,7 +10,7 @@ class OptionContract(BaseModel):
     symbol: str= Field(..., min_length=1)
     option_type: OptionType
     strike: float= Field(..., gt=0)
-    expiry: date
+    expiry_date: date
 
 
 class BlackScholesInput(BaseModel):

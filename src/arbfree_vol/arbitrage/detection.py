@@ -1,6 +1,9 @@
 from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
-from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.option import OptionType, OptionContract, ImpliedVolInput
+from arbfree_vol.pricing.implied_vol import implied_vol
+
+from datetime import date
 
 from math import exp
 
@@ -106,6 +109,65 @@ def _check_butterfly(
 
 
 
+def _slice_total_variance(
+        surface: VolSurface,
+        s:ExpirySlice) -> dict[float, float]:
+    
+
+
+    out: dict[float, float] = {}
+
+
+    for q in s.quotes:
+        iv_input= ImpliedVolInput(
+            contract= OptionContract(symbol="_",  #placeholder symbol; not req for any calcs
+                                    option_type= q.option_type, 
+                                    strike= q.strike,
+                                    expiry_date= date(2004,1,1)), #placeholder date; not req for any calcs
+            spot= surface.spot, 
+            expiry_time= s.expiry_time,
+            risk_free= surface.risk_free,
+            div_yield= surface.div_yield,
+            market_price= q.price
+        ) 
+
+        sigma = implied_vol(iv_input)
+        if sigma is not None:
+            out[q.strike] = sigma**2 * s.expiry_time    # the key (the quote's K) gets assigned the value sigma sq * T (total variance)
+        
+    return out
+    
+
+
+def _check_calendar(
+    surface: VolSurface,
+    violations: list[ArbitrageViolation]
+)-> None:
+    
+    ordered = sorted(surface.slices, key=lambda sl: sl.expiry_time) # we sort the slices by expiry time
+
+    for i in range(len(ordered)-1):
+
+        earlier= ordered[i]
+        later= ordered[i+1]
+
+        total_variance_earlier= _slice_total_variance(surface, earlier) 
+        total_variance_later= _slice_total_variance(surface, later)
+
+        for K in total_variance_earlier.keys() & total_variance_later.keys(): # for all common Ks in i, i+1 check for any discrepancy in total variance as a non decreasing func of expiry time
+                                                                              # later ill interpolate K instead of finding out common ones.
+
+            diff = total_variance_earlier[K] - total_variance_later[K]
+            
+            threshold= 1e-4
+            if diff > threshold:
+
+                violations.append(ArbitrageViolation(
+                    kind=ViolationType.CALENDAR,
+                    detail=f"calendar arb at K={K}: w={total_variance_earlier[K]:.4f} at T={earlier.expiry_time} exceeds w={total_variance_later[K]:.4f} at T={later.expiry_time}",
+                    magnitude=  float(total_variance_earlier[K] - total_variance_later[K])
+                ))
+
 
 
 def detect(surface:VolSurface) -> ArbitrageReport:
@@ -116,5 +178,8 @@ def detect(surface:VolSurface) -> ArbitrageReport:
         calls = _normalize_to_calls(surface, slices)
         _check_monotonicity(calls, violations)
         _check_butterfly(calls, violations)
+
+    _check_calendar(surface, violations) 
+
     return ArbitrageReport(violations=violations)
 

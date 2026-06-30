@@ -13,7 +13,7 @@ def test_call_price_matches_known_black_scholes_value() -> None:
         symbol="NVDA",
         option_type=OptionType.CALL,
         strike=100,
-        expiry=date(2026, 11, 27),
+        expiry_date=date(2026, 11, 27),
     )
     model = BlackScholesInput(
         contract=contract,
@@ -32,7 +32,7 @@ def test_put_price_matches_known_black_scholes_value() -> None:
         symbol="NVDA",
         option_type=OptionType.PUT,
         strike=100,
-        expiry=date(2026, 11, 27),
+        expiry_date=date(2026, 11, 27),
     )
     model = BlackScholesInput(
         contract=contract,

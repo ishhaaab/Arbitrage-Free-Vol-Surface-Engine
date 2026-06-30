@@ -13,7 +13,7 @@ def _model(option_type: OptionType) -> BlackScholesInput:
         symbol="NVDA",
         option_type=option_type,
         strike=100,
-        expiry=date(2026, 11, 27),
+        expiry_date=date(2026, 11, 27),
     )
     return BlackScholesInput(
         contract=contract,

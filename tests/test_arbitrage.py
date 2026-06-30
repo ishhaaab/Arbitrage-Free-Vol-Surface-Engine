@@ -25,7 +25,7 @@ def _bs_price(option_type: OptionType, strike: float, sigma: float = 0.2) -> flo
         symbol="NVDA",
         option_type=option_type,
         strike=strike,
-        expiry=date(2026, 11, 27),
+        expiry_date=date(2026, 11, 27),
     )
     model = BlackScholesInput(
         contract=contract,
@@ -145,6 +145,58 @@ def test_convex_calls_are_arbitrage_free() -> None:
             Quote(strike=110.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 110.0)),
         ]
     )
+
+    report = detect(surface)
+
+    assert report.is_arbitrage_free
+
+
+def _call_quote(strike: float, sigma: float, t: float) -> Quote:
+    """A call quote priced at a given vol and maturity."""
+    contract = OptionContract(
+        symbol="NVDA",
+        option_type=OptionType.CALL,
+        strike=strike,
+        expiry_date=date(2026, 11, 27),
+    )
+    model = BlackScholesInput(
+        contract=contract,
+        spot=SPOT,
+        expiry_time=t,
+        risk_free=RISK_FREE,
+        div_yield=DIV_YIELD,
+        volatility=sigma,
+    )
+    return Quote(strike=strike, option_type=OptionType.CALL, price=price(model))
+
+
+def _two_expiry_surface(t1: float, sig1: float, t2: float, sig2: float) -> VolSurface:
+    # Same strike (100) at two maturities, each priced at its own vol.
+    return VolSurface(
+        spot=SPOT,
+        risk_free=RISK_FREE,
+        div_yield=DIV_YIELD,
+        slices=[
+            ExpirySlice(expiry_time=t1, quotes=[_call_quote(100.0, sig1, t1)]),
+            ExpirySlice(expiry_time=t2, quotes=[_call_quote(100.0, sig2, t2)]),
+        ],
+    )
+
+
+def test_calendar_violation_is_detected() -> None:
+    # Short expiry (T=0.5, sigma=0.40 -> w=0.08) carries MORE total variance than
+    # the long expiry (T=1.0, sigma=0.20 -> w=0.04) -> calendar arbitrage.
+    surface = _two_expiry_surface(t1=0.5, sig1=0.40, t2=1.0, sig2=0.20)
+
+    report = detect(surface)
+
+    cal = next(v for v in report.violations if v.kind == ViolationType.CALENDAR)
+    assert cal.magnitude == approx(0.08 - 0.04, abs=1e-4)
+
+
+def test_increasing_total_variance_is_arbitrage_free() -> None:
+    # Total variance rises with maturity (w=0.02 -> w=0.04) -> no calendar arb.
+    surface = _two_expiry_surface(t1=0.5, sig1=0.20, t2=1.0, sig2=0.20)
 
     report = detect(surface)
 
