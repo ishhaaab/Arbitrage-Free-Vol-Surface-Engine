@@ -6,18 +6,20 @@ from math import exp
 
 # helper funcs:
 
-def _forward(surface: VolSurface, 
-             s: ExpirySlice, 
-             strike: float) -> float: #returns the fwd price: F = Se^{−qT} − Ke^{−rT}
+def _forward(
+        surface: VolSurface, 
+        s: ExpirySlice, 
+        strike: float) -> float: #returns the fwd price: F = Se^{−qT} − Ke^{−rT}
     
     return surface.spot * exp(-surface.div_yield * s.expiry_time) \
         - strike * exp(-surface.risk_free * s.expiry_time)
 
 
 
-def _check_parity(surface:VolSurface,
-                   s:ExpirySlice, 
-                   violations: list[ArbitrageViolation])-> None: # checks whether there's put call parity over different Ks
+def _check_parity(
+        surface:VolSurface,
+        s:ExpirySlice, 
+        violations: list[ArbitrageViolation])-> None: # checks whether there's put call parity over different Ks
 
     by_strike= {}                       # we want to group options by K, ie K is the key and
     for q in s.quotes:                  # {option_type:price} which is another dict is assigned to K whenever 
@@ -41,8 +43,9 @@ def _check_parity(surface:VolSurface,
                 magnitude= float(abs((C-P)-F))))
 
 
-def _normalize_to_calls(surface:VolSurface,
-                        s:ExpirySlice)-> list[tuple[float, float]]:
+def _normalize_to_calls(
+        surface:VolSurface,
+        s:ExpirySlice)-> list[tuple[float, float]]:
     
     by_strike= {} # again we sort by strike price, K
     for q in s.quotes:
@@ -62,7 +65,8 @@ def _normalize_to_calls(surface:VolSurface,
     return sorted(calls)
 
 
-def _check_monotonicity(calls: list[tuple[float, float]],
+def _check_monotonicity(
+    calls: list[tuple[float, float]],
     violations: list[ArbitrageViolation]) -> None:
     # Call prices must be non increasing in strike. A strict rise leads to arbitrage.
 
@@ -79,6 +83,30 @@ def _check_monotonicity(calls: list[tuple[float, float]],
                 magnitude=float(jump),
             ))
 
+def _check_butterfly(
+    calls: list[tuple[float, float]],
+    violations: list[ArbitrageViolation]) -> None:
+    # Call prices must convex in strike. We check that via line joining two points test
+    
+    for i in range(len(calls)-2):
+        k1, c1= calls[i]
+        k2, c2= calls[i+1]
+        k3, c3= calls[i+2]
+        
+        w= (k3-k2)/(k3-k1)
+        line= w*c1 + (1-w)*c3
+        
+        threshold= 1e-4
+        if c2 - line > threshold:
+            violations.append(ArbitrageViolation(
+                kind= ViolationType.BUTTERFLY,
+                detail=f"call convexity broken at K={k2}: C={c2:.4f} exceeds line {line:.4f} (from K={k1},{k3})",
+                magnitude= float(c2- line)
+            ))
+
+
+
+
 
 def detect(surface:VolSurface) -> ArbitrageReport:
 
@@ -87,5 +115,6 @@ def detect(surface:VolSurface) -> ArbitrageReport:
         _check_parity(surface, slices, violations)
         calls = _normalize_to_calls(surface, slices)
         _check_monotonicity(calls, violations)
+        _check_butterfly(calls, violations)
     return ArbitrageReport(violations=violations)
 

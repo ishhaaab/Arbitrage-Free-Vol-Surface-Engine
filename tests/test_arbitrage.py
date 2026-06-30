@@ -118,6 +118,39 @@ def test_monotonic_calls_are_arbitrage_free() -> None:
     assert report.is_arbitrage_free
 
 
+def test_butterfly_violation_is_detected() -> None:
+    # Strikes 90/100/110 (evenly spaced -> line = average of outer two = 6.0).
+    # A middle call of 8.0 pokes 2.0 above the line -> negative density.
+    surface = _surface(
+        [
+            Quote(strike=90.0, option_type=OptionType.CALL, price=10.0),
+            Quote(strike=100.0, option_type=OptionType.CALL, price=8.0),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=2.0),
+        ]
+    )
+
+    report = detect(surface)
+
+    assert not report.is_arbitrage_free
+    fly = next(v for v in report.violations if v.kind == ViolationType.BUTTERFLY)
+    assert fly.magnitude == approx(2.0, abs=1e-6)
+
+
+def test_convex_calls_are_arbitrage_free() -> None:
+    # Call prices from a flat-vol model are convex in strike by construction.
+    surface = _surface(
+        [
+            Quote(strike=90.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 90.0)),
+            Quote(strike=100.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 100.0)),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=_bs_price(OptionType.CALL, 110.0)),
+        ]
+    )
+
+    report = detect(surface)
+
+    assert report.is_arbitrage_free
+
+
 def test_unpaired_strike_is_skipped() -> None:
     # Only a call at this strike => parity cannot be checked, no violation.
     call = _bs_price(OptionType.CALL, 100.0)
