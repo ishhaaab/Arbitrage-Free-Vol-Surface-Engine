@@ -4,22 +4,21 @@ from typing import cast
 
 from scipy.optimize import brentq
 
-from arbfree_vol.models.option import BlackScholesInput, ImpliedVolInput
-from arbfree_vol.pricing.black_scholes import price
+from arbfree_vol.models.option import ImpliedVolInput, OptionType
+from arbfree_vol.pricing.black_scholes import price_floats
 
 
 def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -> float | None:
-    base = BlackScholesInput(
-        contract=model.contract,
-        spot=model.spot,
-        expiry_time=model.expiry_time,
-        risk_free=model.risk_free,
-        div_yield=model.div_yield,
-        volatility=1.0,  # seed vol, overwritten each evaluation
-    )
+    S = model.spot
+    K = model.contract.strike
+    T = model.expiry_time
+    r = model.risk_free
+    q = model.div_yield
+    is_call = model.contract.option_type == OptionType.CALL
+    target = model.market_price
 
     def f(sigma: float) -> float:
-        return price(base.model_copy(update={"volatility": sigma})) - model.market_price
+        return price_floats(S, K, T, r, q, sigma, is_call) - target
 
     f_low = f(low)
     f_high = f(high)
