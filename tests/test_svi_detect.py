@@ -34,3 +34,17 @@ def test_healthy_params_are_arbitrage_free() -> None:
     report = detect_svi(p)
 
     assert report.is_arbitrage_free
+
+
+def test_butterfly_arbitrage_is_flagged() -> None:
+    # Steep wings (large b, extreme rho, tiny sigma): g(k) dips well below 0,
+    # but w_min stays positive -> isolates the butterfly check.
+    p = SVIParams(a=0.04, b=0.8, rho=-0.9, m=0.0, sigma=0.02)
+
+    report = detect_svi(p)
+
+    kinds = [v.kind for v in report.violations]
+    assert ViolationType.BUTTERFLY in kinds
+    assert ViolationType.NEGATIVE_VARIANCE not in kinds  # variance is fine here
+    fly = next(v for v in report.violations if v.kind == ViolationType.BUTTERFLY)
+    assert fly.magnitude > 1.0  # deeply negative g (~3.16)

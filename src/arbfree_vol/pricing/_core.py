@@ -18,7 +18,7 @@ def norm_pdf(x: float) -> float:
 
 
 @dataclass(frozen=True, slots=True)
-class BSCore:
+class BScore:
     d1: float
     d2: float
     df_r: float
@@ -26,7 +26,7 @@ class BSCore:
     sqrt_T: float
 
 
-def core(S: float, K: float, T: float, r: float, q: float, sigma: float) -> BSCore:
+def core(S: float, K: float, T: float, r: float, q: float, sigma: float) -> BScore:
 
     sqrt_T = sqrt(T)
     d1 = (log(S / K) + (r - q + 0.5 * sigma**2) * T) / (sigma * sqrt_T)
@@ -34,4 +34,4 @@ def core(S: float, K: float, T: float, r: float, q: float, sigma: float) -> BSCo
     df_r = exp(-r * T)
     df_q = exp(-q * T)
 
-    return BSCore(d1=d1, d2=d2, df_r=df_r, df_q=df_q, sqrt_T=sqrt_T)
+    return BScore(d1=d1, d2=d2, df_r=df_r, df_q=df_q, sqrt_T=sqrt_T)
