@@ -8,8 +8,8 @@ import numpy as np
 
 
 def calibrate(points: list[tuple[float,float]]) -> SVIParams:
-    # we feed raw list of (k,w) tuples as input and calc residuals from these points vs
-    # the model to get the best fit 5 params for the model
+    """Calc residuals from raw list of (k,w) tuples vs
+     the model (k,p) points to get the best fit 5 params for the model """
     if len(points) < 5: raise ValueError("Min 5 points required")
 
     def residuals(p):

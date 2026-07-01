@@ -7,6 +7,7 @@ class ViolationType(str, Enum):
     BUTTERFLY = "butterfly"
     CALENDAR = "calendar"
     PARITY = "parity"
+    NEGATIVE_VARIANCE = "negative_variance"
 
 @dataclass(frozen=True, slots=True)
 class ArbitrageViolation:   

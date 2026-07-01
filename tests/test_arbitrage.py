@@ -4,7 +4,7 @@ from datetime import date
 
 from pytest import approx
 
-from arbfree_vol.arbitrage.detection import detect
+from arbfree_vol.arbitrage.quote_detect import detect
 from arbfree_vol.arbitrage.report import ViolationType
 from arbfree_vol.models.option import (
     BlackScholesInput,
