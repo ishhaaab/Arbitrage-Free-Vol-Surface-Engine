@@ -24,4 +24,4 @@ Replace the bare `minimize_scalar` call with a **coarse grid scan + local refine
 
 121 extra `svi_g` evaluations is negligible cost. The function signature and output contract do not change.
 
-**Status:** Known, documented. Test `test_butterfly_violation_outside_prev_range` currently fails because of this.
+**Status:** Fixed. Grid scan (121 points) + local bounded refinement applied. All 13 tests pass.

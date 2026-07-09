@@ -38,21 +38,32 @@ def _check_butterfly(params: SVIParams,
     """Check that the SVI curve admits no butterfly arbitrage.
 
     Uses Gatheral's g(k): the density condition g(k) >= 0 for all k
-    in [k_min, k_max].  The minimum of g(k) is found via bounded
-    minimization; if it dips below -tolerance, a violation is recorded.
-    
-    Note: bounded minimize_scalar is a local method and can miss
-    violations when g(k) has multiple local minima (see issues.md).
+    in [k_min, k_max].  A coarse grid scan locates the approximate
+    minimum, then bounded minimization refines it locally.  This
+    avoids being trapped by the sharp spike at k=m.
     """
     a, b, rho, m, sigma= params.a, params.b, params.rho, params.m, params.sigma
     
     def single_g(k):
         return svi_g(k, a, b, rho, m, sigma)
         
-    
-    min_g=  minimize_scalar(fun= single_g, method="bounded", bounds= (k_min,k_max))
-    value, location= min_g.fun, min_g.x
-    
+    # coarse grid scan using 121 points to find the approximate minimum
+    N_GRID = 121
+    k_grid = linspace(k_min, k_max, N_GRID)
+    g_min = float('inf')
+    min_idx = 0
+    for i in range(N_GRID):
+        g_val = single_g(k_grid[i])
+        if g_val < g_min:
+            g_min = g_val
+            min_idx = i
+
+    # refine with local bounded minimization around the best grid point
+    bracket_lo = k_grid[max(0, min_idx - 3)]
+    bracket_hi = k_grid[min(N_GRID - 1, min_idx + 3)]
+    result = minimize_scalar(fun=single_g, method='bounded', bounds=(bracket_lo, bracket_hi))
+    value, location = result.fun, result.x
+
     tolerance= 1e-4
     if value < -tolerance:
         violations.append(ArbitrageViolation(
