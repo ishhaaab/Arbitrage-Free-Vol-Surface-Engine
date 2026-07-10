@@ -4,3 +4,4 @@ pydantic>=2.0
 pytest>=8.0
 ruff>=0.6
 basedpyright>=1.18
+matplotlib>=3.8
