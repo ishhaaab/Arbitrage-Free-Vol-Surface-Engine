@@ -22,12 +22,13 @@ def _check_min_variance(params: SVIParams,
     """
     total_variance_min= min_total_variance(params)
 
-    tolerance= 1e-4 
+    tolerance= 1e-4
     if total_variance_min < - tolerance :
         violations.append(ArbitrageViolation(
             kind= ViolationType.NEGATIVE_VARIANCE,
             detail=f"SVI min total variance is negative: w_min={total_variance_min:.4f}",
-            magnitude= -total_variance_min
+            magnitude= -total_variance_min,
+            offending=(),
         ))
 
 
@@ -62,14 +63,15 @@ def _check_butterfly(params: SVIParams,
     bracket_lo = k_grid[max(0, min_idx - 3)]
     bracket_hi = k_grid[min(N_GRID - 1, min_idx + 3)]
     result = minimize_scalar(fun=single_g, method='bounded', bounds=(bracket_lo, bracket_hi))
-    value, location = result.fun, result.x
+    value, location = result.fun, result.x # type: ignore 
 
     tolerance= 1e-4
     if value < -tolerance:
         violations.append(ArbitrageViolation(
             kind=ViolationType.BUTTERFLY,
             detail=f"SVI butterfly arbitrage: g={value:.6f} < 0 at k={location:.4f} (negative risk-neutral density)",
-            magnitude= -value
+            magnitude= -value,
+            offending=(),
         ))
 
 
@@ -128,6 +130,7 @@ def _check_calendar(slices: list[tuple[float, SVIParams]],
                                 f"k=[{k_grid[run_start]:.4f}, {k_grid[j-1]:.4f}], "
                                 f"worst gap={max_gap:.6f}",
                         magnitude= max_gap,
+                        offending=(),
                     ))
                     in_run= False
 
@@ -139,6 +142,7 @@ def _check_calendar(slices: list[tuple[float, SVIParams]],
                         f"k=[{k_grid[run_start]:.4f}, {k_grid[-1]:.4f}], "
                         f"worst gap={max_gap:.6f}",
                 magnitude= max_gap,
+                offending=(),
             ))
 
 

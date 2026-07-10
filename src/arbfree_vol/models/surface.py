@@ -6,6 +6,8 @@ class Quote(BaseModel): # one option quote
     strike: float= Field(..., gt=0)
     option_type: OptionType
     price: float= Field(..., gt=0)
+    bid: float | None= None
+    ask: float | None= None
 
 
 class ExpirySlice(BaseModel):  # set of quotes with the same expiry
