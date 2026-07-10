@@ -2,10 +2,15 @@ from pydantic import BaseModel, Field
 
 from arbfree_vol.models.option import OptionType
 
-class Quote(BaseModel): # one option quote 
+class Quote(BaseModel): # one option quote
+    # price has no constraint so the ingestion layer can construct raw
+    # quotes from messy market data; the cleaning layer is responsible
+    # for rejecting price=0 and negative prices with an audit record.
+    # After cleaning, kept quotes should have price > 0 which is enforced by
+    # the cleaning rule and not by Pydantic.
     strike: float= Field(..., gt=0)
     option_type: OptionType
-    price: float= Field(..., gt=0)
+    price: float
     bid: float | None= None
     ask: float | None= None
 

@@ -4,4 +4,4 @@ Project.MD
 __pycache__/
 *.egg-info/
 .memories/
-
+*.png
