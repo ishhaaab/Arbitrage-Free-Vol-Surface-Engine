@@ -7,6 +7,7 @@ from math import sqrt
 
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib import cm
 
 
 def _lerp(a: float, b: float, t: float) -> float:
@@ -38,27 +39,13 @@ def _interpolate_params(
 
 def plot_surface(
     fitted_slices: list[FittedSlice],
-    n_k: int = 100,
-    n_T: int = 80,
+    n_k: int = 200,
+    n_T: int = 150,
 ) -> Figure:
-    """Plot a smooth 3D surface of fitted total variance over (T, k) space.
+    """Make a 3D plot of the fitted SVI surface.
 
-    The T axis is upsampled via linear interpolation of SVI parameters
-    between adjacent fitted slices so the surface appears smooth even
-    when fitted maturities are sparse.
-
-    Parameters
-    ----------
-    fitted_slices : list[FittedSlice]
-        List of fitted slices (one per fitted expiry).
-    n_k : int
-        Number of log-moneyness grid points (k-axis).
-    n_T : int
-        Number of time grid points (T-axis) — interpolated between slices.
-
-    Returns
-    -------
-    matplotlib.figure.Figure
+    Interpolates SVI parameters between slices so the surface is smooth
+    even with only a handful fitted expiries.
     """
     ordered = sorted(fitted_slices, key=lambda fs: fs.expiry_time)
     if len(ordered) < 2:
@@ -84,7 +71,6 @@ def plot_surface(
                                     ordered[-1].params.rho, ordered[-1].params.m,
                                     ordered[-1].params.sigma)
         else:
-            # Find the two adjacent slices bracketing T
             for j in range(len(ordered) - 1):
                 if ordered[j].expiry_time <= T <= ordered[j + 1].expiry_time:
                     a, b, rho, m, sigma = _interpolate_params(
@@ -101,13 +87,22 @@ def plot_surface(
 
     K_grid, T_mesh = np.meshgrid(k_grid, T_grid)
 
-    fig = Figure(figsize=(10, 7))
+    fig = Figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
-    ax.plot_surface(T_mesh, K_grid, sigma_surface, cmap="viridis", alpha=0.85)
 
-    ax.set_xlabel("Time to expiry (yrs)")
-    ax.set_ylabel("Log-moneyness k")
-    ax.set_zlabel("Implied volatility")
+    # Surface with subtle wireframe to show curvature, fully opaque
+    surf = ax.plot_surface(T_mesh, K_grid, sigma_surface,
+                            cmap="plasma", linewidth=0.15,
+                            antialiased=True, alpha=1.0, edgecolor="black")
+
+    # Colorbar to map colors to vol values
+    cb = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=20, pad=0.1)
+    cb.set_label("Implied volatility")
+
+    ax.view_init(elev=28, azim=-55)
+    ax.set_xlabel("Time to expiry (yrs)", labelpad=10)
+    ax.set_ylabel("Log-moneyness k", labelpad=10)
+    ax.set_zlabel("Implied volatility", labelpad=10)
     ax.set_title("Fitted implied volatility surface")
 
     fig.tight_layout()

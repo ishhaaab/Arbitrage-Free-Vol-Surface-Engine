@@ -62,15 +62,10 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
 
 
 def populate_per_slice_r(surface: VolSurface, fwd_curve: dict[float, float]) -> None:
-    """Compute per-maturity risk-free rates from the forward curve.
+    """Set per-slice risk_free from the forward curve estimate.
 
-    For each slice, solves  ``F(T) = S * exp((r - q) * T)`` for ``r``::
-
-        r(T) = log(F(T) / S) / T + q
-
-    and stores the result on ``sl.risk_free``.  Slices without a valid
-    forward estimate keep their current value (typically ``None``, which
-    falls back to ``surface.risk_free`` via ``get_r()``).
+    For each slice: r(T) = log(F / S) / T + q.  Slices without a valid
+    forward keep their current value (None = falls back to surface.r).
     """
     q = surface.div_yield
     for sl in surface.slices:

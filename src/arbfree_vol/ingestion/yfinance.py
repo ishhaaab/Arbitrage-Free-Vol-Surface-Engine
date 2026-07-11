@@ -93,37 +93,17 @@ def fetch_chain(
     max_expiries: int = 5,
     min_T_years: float = 7.0 / 365.0,
 ) -> tuple[VolSurface, list[RejectionRecord]]:
-    """Fetch a VolSurface for the given symbol from yfinance.
+    """Fetch an option chain from yfinance and return a cleaned VolSurface.
 
-    Applies the quote cleaning layer (wide spreads, crossed markets,
-    deep moneyness, near-expiry, zero/negative prices) and returns
-    an audit trail of rejected quotes.
+    Steps through the nearest expiries, builds quotes from mid prices
+    (not stale lastPrice), applies the cleaning layer (wide spreads,
+    crossed markets, deep moneyness, near-expiry, zero prices), and
+    returns the cleaned surface plus an audit trail of rejects.
 
-    Steps:
-      1. Fetch real ``r`` from ``^IRX`` (13-week T-bill) and real ``q``
-         from ``ticker.info.dividendYield``.
-      2. Fetch the nearest *max_expiries* option chains.
-      3. Build quotes using **mid** prices (``(bid+ask)/2``).
-      4. Run the cleaning layer on each expiry slice.
-      5. Return the cleaned ``VolSurface`` and the rejection list.
-
-    When real ``r`` or ``q`` cannot be sourced (rate limit, missing
-    data), the surface-level rates default to ``r=0.05, q=0.0`` and
-    the repair pipeline's ``detect_with_forward()`` fallback handles
-    the correction.
-
-    Parameters
-    ----------
-    symbol : str
-        Ticker symbol (e.g. ``"SPY"``, ``"NVDA"``).
-    max_expiries : int
-        Number of expiries to fetch (nearest first).
-    min_T_years : float
-        Minimum time-to-expiry in years (default 7 days).
-
-    Returns
-    -------
-    tuple[VolSurface, list[RejectionRecord]]
+    Real r comes from ``^IRX`` (13-week T-bill), real q from
+    ``info.dividendYield``.  When either is unavailable, defaults to
+    ``r=0.05, q=0.0`` — the repair pipeline's ``detect_with_forward()``
+    corrects for that at detection time.
     """
     ticker = yf.Ticker(symbol)
     expiries = ticker.options

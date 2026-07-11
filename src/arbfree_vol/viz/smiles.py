@@ -16,15 +16,10 @@ def plot_smiles(
     fitted_slices: list[FittedSlice],
     n_k: int= 80,
 ) -> Figure:
-    """Plot fitted SVI smiles overlaid with observed total-variance points.
+    """Plot fitted SVI smiles with raw total-variance data beneath.
 
-    One subplot per expiry slice.  Each subplot shows:
-      - scatter points (k, w) from the raw surface
-      - the fitted SVI curve as a continuous line
-
-    Returns
-    -------
-    matplotlib.figure.Figure
+    One subplot per expiry: raw (k, w) as scatter, fitted SVI as a line.
+    Helps you see how well each slice was fit.
     """
     by_T: dict[float, list[tuple[float, float]]]= {}
     for sl in surface.slices:

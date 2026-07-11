@@ -16,7 +16,7 @@ from arbfree_vol.viz.comparison import plot_comparison
 
 # --- 1. Fetch + clean ---
 symbol = "SPY"
-print(f"Fetching {symbol} chain (mid prices, real r/q, with cleaning)...")
+print(f"Fetching {symbol} chain (mid prices, real r/q, with cleaning).")
 surface, rejected = fetch_chain(symbol, max_expiries=20, min_T_years=7.0 / 365.0)
 
 T_count = len(surface.slices)
@@ -31,7 +31,7 @@ if rejected:
     print(f"  Rejection reasons: {rules}")
 
 # --- 2. Repair ---
-print("Repairing...")
+print("Repairing.")
 report = repair(surface)
 
 print(f"  Violations before: {report.metrics.n_violations_before}")
@@ -43,7 +43,7 @@ for v in report.remaining_violations.violations:
     print(f"  Remaining: {v.kind.value} — {v.detail[:80]}")
 
 # --- 3. Save plots ---
-print("Saving plots...")
+print("Saving plots")
 fig1 = plot_surface(list(report.fitted_slices))
 fig1.savefig("examples/yfinance_demo_surface.png", dpi=150)
 
@@ -53,4 +53,4 @@ fig2.savefig("examples/yfinance_demo_smiles.png", dpi=150)
 fig3 = plot_comparison(report, report)
 fig3.savefig("examples/yfinance_demo_comparison.png", dpi=150)
 
-print("Done — plots saved to examples/yfinance_demo_*.png")
+print("Done, plots saved to examples/yfinance_demo_*.png")
