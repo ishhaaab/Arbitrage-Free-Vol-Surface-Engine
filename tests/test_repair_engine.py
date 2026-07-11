@@ -160,3 +160,30 @@ def test_repair_metrics_consistency() -> None:
     assert m.n_rejected + m.n_violations_before == 0
     assert m.n_slices_fitted <= m.n_slices_input
     assert 0.0 <= m.rejection_rate <= 1.0
+
+
+def test_repair_with_ssvi_populates_fitted_ssvi_slices() -> None:
+    surface = _clean_surface(n_strikes=7)
+
+    report = repair(surface, use_ssvi=True)
+
+    assert report.metrics.n_slices_fitted == 1
+    assert len(report.fitted_slices) == 1
+    assert len(report.fitted_ssvi_slices) == 1
+    # The raw SVI params (mapped from eSSVI) are also present so the
+    # existing SVI-based pipeline (plots, detection) keeps working.
+    assert report.fitted_slices[0].params is not None
+    # The native eSSVI parameters carry theta, rho, psi.
+    fssvi = report.fitted_ssvi_slices[0]
+    assert fssvi.ssvi.theta > 0
+    assert -1.0 < fssvi.ssvi.rho < 1.0
+    assert fssvi.ssvi.psi > 0
+
+
+def test_repair_default_omits_ssvi() -> None:
+    # Default path (use_ssvi=False) should not populate fitted_ssvi_slices.
+    surface = _clean_surface(n_strikes=7)
+
+    report = repair(surface)
+
+    assert report.fitted_ssvi_slices == ()

@@ -7,11 +7,14 @@ from arbfree_vol.arbitrage.report import ArbitrageReport
 from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 from arbfree_vol.svi.calibration import calibrate
-from arbfree_vol.svi.model import svi_total_variance
+from arbfree_vol.svi.model import svi_total_variance, SVIParams
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
+from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.report import (
     RejectedQuote,
     FittedSlice,
+    FittedSSVISlice,
     RepairMetrics,
     RepairReport,
 )
@@ -26,12 +29,12 @@ def _build_rejection_set(
     Returns (identity_set, rejected_quote_list) where the set is used for
     fast lookup and the list preserves the rejection reason.
     """
-    seen: set[tuple[float, float, OptionType]] = set()
-    rejected: list[RejectedQuote] = []
+    seen: set[tuple[float, float, OptionType]]= set()
+    rejected: list[RejectedQuote]= []
 
     for v in violations:
         for oq in v.offending:
-            key = (oq.strike, oq.expiry_time, oq.option_type)
+            key= (oq.strike, oq.expiry_time, oq.option_type)
             if key not in seen:
                 seen.add(key)
                 rejected.append(
@@ -52,11 +55,11 @@ def _build_cleaned_surface(surface: VolSurface,
 ) -> VolSurface | None:
    
     """Remove all rejected quotes and drop empty slices."""
-    cleaned: list[ExpirySlice] = []
+    cleaned: list[ExpirySlice]= []
     for sl in surface.slices:
-        kept = []
+        kept= []
         for q in sl.quotes:
-            key = (q.strike, sl.expiry_time, q.option_type)
+            key= (q.strike, sl.expiry_time, q.option_type)
             if key not in reject_set:
                 kept.append(q)
         if kept:
@@ -78,31 +81,31 @@ def _build_cleaned_surface(surface: VolSurface,
 def _fit_slice(sl: ExpirySlice,
                forward_price: float,
                surface: VolSurface) -> FittedSlice | None:
-   
+
     """Fit SVI to one cleaned slice using the estimated forward price.
 
     Returns None if fewer than 5 (k, w) points are available.
     """
     # total variance uses the surface r/q for IV solving (independent of forward)
-    strike_w = slice_total_variance(surface, sl)
+    strike_w= slice_total_variance(surface, sl)
     if len(strike_w) < 5:
         return None
 
     # build (k, w) points using the estimated forward, not surface r/q
-    points = [
+    points= [
         (log(strike / forward_price), w)
         for strike, w in strike_w.items()
     ]
     points.sort()
 
-    params = calibrate(points)
+    params= calibrate(points)
 
     # RMSE in w-space
-    errors = [
+    errors= [
         (svi_total_variance(k, params.a, params.b, params.rho, params.m, params.sigma) - w) ** 2
         for k, w in points
     ]
-    rmse = sqrt(mean(errors))
+    rmse= sqrt(mean(errors))
 
     return FittedSlice(
         expiry_time=sl.expiry_time,
@@ -114,52 +117,115 @@ def _fit_slice(sl: ExpirySlice,
     )
 
 
-def repair(surface: VolSurface) -> RepairReport:
+def _fit_slice_ssvi(sl: ExpirySlice,
+                    forward_price: float,
+                    surface: VolSurface) -> tuple[FittedSlice, FittedSSVISlice] | None:
+    """Fit eSSVI to one cleaned slice and map to raw SVI for visualization.
+
+    Returns (FittedSlice, FittedSSVISlice) or None if too few points.
+    """
+    strike_w= slice_total_variance(surface, sl)
+    if len(strike_w) < 5:
+        return None
+
+    points= [
+        (log(strike / forward_price), w)
+        for strike, w in strike_w.items()
+    ]
+    points.sort()
+
+    ssvi_params= fit_ssvi_slice(points)
+
+    # RMSE in w-space using SSVI formula
+    errors= [
+        (ssvi_w(k, ssvi_params.theta, ssvi_params.rho, ssvi_params.psi) - w) ** 2
+        for k, w in points
+    ]
+    rmse= sqrt(mean(errors))
+
+    # Map to raw SVI params so existing SVI-based pipeline (plots, detection) works
+    a, b, rho, m, sigma= to_raw_svi_params(
+        ssvi_params.theta, ssvi_params.rho, ssvi_params.psi
+    )
+    raw_svi_params= SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)
+
+    fitted_svi= FittedSlice(
+        expiry_time=sl.expiry_time,
+        params=raw_svi_params,
+        rmse=rmse,
+        forward_price=forward_price,
+        n_quotes_total=len(sl.quotes),
+        n_quotes_used=len(points),
+    )
+    fitted_ssvi= FittedSSVISlice(
+        expiry_time=sl.expiry_time,
+        ssvi=ssvi_params,
+        rmse=rmse,
+        forward_price=forward_price,
+        n_quotes_total=len(sl.quotes),
+        n_quotes_used=len(points),
+    )
+    return fitted_svi, fitted_ssvi
+
+
+def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
     """Repair a volatility surface by rejecting arb violating quotes,
     re estimating the forward curve, and refitting SVI slices.
 
-    Returns a RepairReport with rejected quotes, fitted slices, remaining
-    violations, quality metrics, and the cleaned surface.
+    If ``use_ssvi=True``, fits eSSVI which is arb free by construction
+    instead of raw SVI per slice.  The fitted eSSVI parameters are
+    mapped back to raw SVI for the ``fitted_slices`` field, so the
+    existing SVI-based visualization and detection code continues to
+    work.  The native eSSVI parameters are stored in
+    ``fitted_ssvi_slices``.
     """
-    n_total_quotes = sum(len(sl.quotes) for sl in surface.slices)
-    n_slices_input = len(surface.slices)
+    n_total_quotes= sum(len(sl.quotes) for sl in surface.slices)
+    n_slices_input= len(surface.slices)
 
     # step 1: detect violations on the raw surface
-    arb_report = detect_with_forward(surface)
-    n_violations_before = len(arb_report.violations)
+    arb_report= detect_with_forward(surface)
+    n_violations_before= len(arb_report.violations)
 
     # step 2: build rejection set from violation offending fields
-    reject_set, rejected = _build_rejection_set(arb_report.violations)
+    reject_set, rejected= _build_rejection_set(arb_report.violations)
 
     # step 3: build cleaned surface
-    cleaned_surface = _build_cleaned_surface(surface, reject_set)
+    cleaned_surface= _build_cleaned_surface(surface, reject_set)
 
     # step 4: estimate forward curve from survivors and populate per-slice r
-    fwd_curve = {}
+    fwd_curve= {}
     if cleaned_surface is not None:
-        fwd_curve = estimate_forward_curve(cleaned_surface)
+        fwd_curve= estimate_forward_curve(cleaned_surface)
         populate_per_slice_r(cleaned_surface, fwd_curve)
 
-    # step 5: fit SVI on each cleaned slice
-    fitted: list[FittedSlice] = []
+    # step 5: fit SVI (or eSSVI) on each cleaned slice
+    fitted: list[FittedSlice]= []
+    fitted_ssvi: list[FittedSSVISlice]= []
     if cleaned_surface is not None:
         for sl in cleaned_surface.slices:
-            F = fwd_curve.get(sl.expiry_time)
+            F= fwd_curve.get(sl.expiry_time)
             if F is None:
                 continue
-            fs = _fit_slice(sl, F, cleaned_surface)
-            if fs is not None:
-                fitted.append(fs)
+            if use_ssvi:
+                result= _fit_slice_ssvi(sl, F, cleaned_surface)
+                if result is not None:
+                    fs, fssvi= result
+                    fitted.append(fs)
+                    fitted_ssvi.append(fssvi)
+            else:
+                fs= _fit_slice(sl, F, cleaned_surface)
+                if fs is not None:
+                    fitted.append(fs)
 
     # step 6: detect remaining violations on the fitted surface
     if fitted:
-        svi_slices = [(fs.expiry_time, fs.params) for fs in fitted]
-        remaining = detect_svi_surface(svi_slices)
+        svi_slices= [(fs.expiry_time, fs.params) for fs in fitted]
+        remaining= detect_svi_surface(svi_slices)
     else:
-        remaining = ArbitrageReport(violations=[])
+        remaining= ArbitrageReport(violations=[])
 
     # step 7: metrics
-    metrics = RepairMetrics(
+    metrics= RepairMetrics(
         n_rejected=len(rejected),
         n_total_quotes=n_total_quotes,
         n_slices_input=n_slices_input,
@@ -171,6 +237,7 @@ def repair(surface: VolSurface) -> RepairReport:
     return RepairReport(
         rejected=tuple(rejected),
         fitted_slices=tuple(fitted),
+        fitted_ssvi_slices=tuple(fitted_ssvi),
         remaining_violations=remaining,
         metrics=metrics,
         cleaned_surface=cleaned_surface,
