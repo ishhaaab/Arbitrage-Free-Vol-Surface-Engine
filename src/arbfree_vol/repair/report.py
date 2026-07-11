@@ -26,6 +26,7 @@ class FittedSlice:
     forward_price: float
     n_quotes_total: int
     n_quotes_used: int
+    data_points: tuple[tuple[float, float], ...] | None= None
 
 @dataclass(frozen=True, slots=True)
 class FittedSSVISlice:

@@ -16,9 +16,9 @@ from pydantic import BaseModel, Field
 class SSVIParams(BaseModel):
     """SSVI parameters for one expiry slice.
 
-    ``theta``: ATM total variance (sigma_atm**2 * T)
-    ``rho``:   correlation between spot and vol, -1 < rho < 1
-    ``psi``:   angle function at this theta (controls wing slope)
+    - ``theta``: ATM total variance (sigma_atm**2 * T)
+    - ``rho``:   correlation between spot and vol, -1 < rho < 1
+    - ``psi``:   angle function at this theta (controls wing slope)
     """
     theta: float= Field(..., gt=0)
     rho: float= Field(..., gt=-1, lt=1)
@@ -28,8 +28,8 @@ class SSVIParams(BaseModel):
 class eSSVISurfaceParams(BaseModel):
     """eSSVI wing function: psi(theta)= eta / theta**gamma.
 
-    ``eta``:   power-law coefficient, > 0
-    ``gamma``: power-law exponent, in [0, 1] for arb-free surfaces
+    - ``eta``:   power-law coefficient, > 0
+    - ``gamma``: power-law exponent, in [0, 1] for arb-free surfaces
     """
     eta: float= Field(..., gt=0)
     gamma: float= Field(..., ge=0, le=1)

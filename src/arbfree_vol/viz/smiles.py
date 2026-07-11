@@ -63,3 +63,62 @@ def plot_smiles(
 
     fig.tight_layout()
     return fig
+
+
+def plot_smiles_heatmap(
+    fitted_slices: list[FittedSlice],
+    n_k: int = 150,
+    symbol: str = "SPY",
+) -> Figure:
+    """One-smile-per-row heatmap: T rows, k columns, color = implied vol.
+
+    Each row corresponds to one fitted expiry.  The color shows the
+    total variance (w) at that (k, T).  Missing cells are left empty.
+    """
+    from math import sqrt as _sqrt
+
+    ordered = sorted(fitted_slices, key=lambda fs: fs.expiry_time)
+    if len(ordered) < 1:
+        raise ValueError("No fitted slices to plot")
+
+    pts_by_T: dict[float, list[tuple[float, float]]] = {}
+    for fs in ordered:
+        if fs.data_points is None:
+            continue
+        pts_by_T[fs.expiry_time] = list(fs.data_points)
+
+    if not pts_by_T:
+        raise ValueError("No data points in any fitted slice")
+
+    T_vals = sorted(pts_by_T.keys())
+
+    k_min, k_max = -1.5, 1.5
+    k_grid = np.linspace(k_min, k_max, n_k)
+
+    # Build rows: each row is a (k_grid, w_interp) for one T
+    rows: list[np.ndarray] = []
+    for T in T_vals:
+        pts = np.array(sorted(pts_by_T[T]))
+        ks, ws = pts[:, 0], pts[:, 1]
+        if len(ks) < 2:
+            w_row = np.full(n_k, np.nan)
+        else:
+            w_row = np.interp(k_grid, ks, ws, left=np.nan, right=np.nan)
+        rows.append(w_row)
+
+    w_grid = np.ma.masked_invalid(np.array(rows))  # (n_T, n_k)
+
+    fig = Figure(figsize=(11, 0.4 * len(T_vals) + 2))
+    ax = fig.add_subplot(111)
+
+    mesh = ax.pcolormesh(k_grid, T_vals, w_grid, cmap="plasma", shading="auto")
+
+    cb = fig.colorbar(mesh, ax=ax, shrink=0.7, aspect=25, pad=0.02)
+    cb.set_label("Total variance w")
+
+    ax.set_xlabel("Log-moneyness k")
+    ax.set_ylabel("Time to expiry T")
+    ax.set_title(f"{symbol} per-slice smiles ({len(T_vals)} expiries)")
+
+    fig.tight_layout()
+    return fig

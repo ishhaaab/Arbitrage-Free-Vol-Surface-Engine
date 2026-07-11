@@ -114,6 +114,7 @@ def _fit_slice(sl: ExpirySlice,
         forward_price=forward_price,
         n_quotes_total=len(sl.quotes),
         n_quotes_used=len(points),
+        data_points=tuple(points),
     )
 
 
@@ -156,6 +157,7 @@ def _fit_slice_ssvi(sl: ExpirySlice,
         forward_price=forward_price,
         n_quotes_total=len(sl.quotes),
         n_quotes_used=len(points),
+        data_points=tuple(points),
     )
     fitted_ssvi= FittedSSVISlice(
         expiry_time=sl.expiry_time,

@@ -10,8 +10,8 @@ import matplotlib; matplotlib.use("Agg")
 
 from arbfree_vol.ingestion.yfinance import fetch_chain
 from arbfree_vol.repair.engine import repair
-from arbfree_vol.viz.surface import plot_surface
-from arbfree_vol.viz.smiles import plot_smiles
+from arbfree_vol.viz.surface import plot_surface, plot_heatmap_2d
+from arbfree_vol.viz.smiles import plot_smiles, plot_smiles_heatmap
 from arbfree_vol.viz.comparison import plot_comparison
 
 # --- 1. Fetch + clean ---
@@ -52,5 +52,11 @@ fig2.savefig("examples/yfinance_demo_smiles.png", dpi=150)
 
 fig3 = plot_comparison(report, report)
 fig3.savefig("examples/yfinance_demo_comparison.png", dpi=150)
+
+fig4 = plot_heatmap_2d(list(report.fitted_slices), symbol=symbol)
+fig4.savefig("examples/yfinance_demo_heatmap.png", dpi=150)
+
+fig5 = plot_smiles_heatmap(list(report.fitted_slices), symbol=symbol)
+fig5.savefig("examples/yfinance_demo_smiles_heatmap.png", dpi=150)
 
 print("Done, plots saved to examples/yfinance_demo_*.png")

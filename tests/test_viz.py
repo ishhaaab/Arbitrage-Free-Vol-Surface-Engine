@@ -70,3 +70,19 @@ def test_comparison_plot_returns_figure() -> None:
     _, r = _two_expiry_surface()
     fig = plot_comparison(r, r)
     assert fig.axes is not None
+
+
+def test_heatmap_2d_returns_figure() -> None:
+    from arbfree_vol.viz.surface import plot_heatmap_2d
+
+    _, r = _two_expiry_surface()
+    fig = plot_heatmap_2d(list(r.fitted_slices))
+    assert fig.axes is not None
+
+
+def test_smiles_heatmap_returns_figure() -> None:
+    from arbfree_vol.viz.smiles import plot_smiles_heatmap
+
+    _, r = _two_expiry_surface()
+    fig = plot_smiles_heatmap(list(r.fitted_slices))
+    assert fig.axes is not None

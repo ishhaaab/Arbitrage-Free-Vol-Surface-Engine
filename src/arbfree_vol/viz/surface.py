@@ -1,109 +1,138 @@
-"""3D surface plot of the fitted implied volatility surface."""
-
-from arbfree_vol.svi.model import svi_total_variance
-from arbfree_vol.repair.report import FittedSlice
+"""3D viewer (per-slice model ribbons + data scatter) and 2D heatmap."""
 
 from math import sqrt
 
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib import cm
+from scipy.interpolate import griddata
 
-
-def _lerp(a: float, b: float, t: float) -> float:
-    """Linear interpolation: ``a * (1 - t) + b * t``."""
-    return a * (1.0 - t) + b * t
-
-
-def _interpolate_params(
-    T_target: float,
-    earlier: FittedSlice,
-    later: FittedSlice,
-) -> tuple[float, float, float, float, float]:
-    """Interpolate SVI params between two adjacent fitted slices at *T_target*.
-
-    Clamps ``b >= 0`` and ``sigma > 0`` after interpolation.
-    """
-    t = (T_target - earlier.expiry_time) / (later.expiry_time - earlier.expiry_time)
-    t = max(0.0, min(1.0, t))
-
-    p_e = earlier.params
-    p_l = later.params
-    a = _lerp(p_e.a, p_l.a, t)
-    b = max(_lerp(p_e.b, p_l.b, t), 1e-8)
-    rho = _lerp(p_e.rho, p_l.rho, t)
-    m = _lerp(p_e.m, p_l.m, t)
-    sigma = max(_lerp(p_e.sigma, p_l.sigma, t), 1e-8)
-    return a, b, rho, m, sigma
+from arbfree_vol.repair.report import FittedSlice
+from arbfree_vol.svi.model import svi_total_variance
 
 
 def plot_surface(
     fitted_slices: list[FittedSlice],
     n_k: int = 200,
-    n_T: int = 150,
 ) -> Figure:
-    """Make a 3D plot of the fitted SVI surface.
+    """3D view of per-expiry fitted SVI curves with raw data on top.
 
-    Interpolates SVI parameters between slices so the surface is smooth
-    even with only a handful fitted expiries.
+    Each fitted slice is plotted as its own smooth SVI curve (ribbon).
+    Actual (k, vol) data points are overlaid as scatter.  Nothing is
+    interpolated between slices — what you see is what was fit.
     """
     ordered = sorted(fitted_slices, key=lambda fs: fs.expiry_time)
     if len(ordered) < 2:
-        raise ValueError("Need at least two fitted slices for a surface plot")
+        raise ValueError("Need at least two fitted slices to render")
 
-    k_min, k_max = -1.5, 1.5
-    k_grid = np.linspace(k_min, k_max, n_k)
-
-    # Build a dense T grid that spans the fitted range
-    T_start = ordered[0].expiry_time
-    T_end = ordered[-1].expiry_time
-    T_grid = np.linspace(T_start, T_end, n_T)
-
-    Z = np.zeros((n_T, n_k))
-
-    for i, T in enumerate(T_grid):
-        if T <= ordered[0].expiry_time:
-            a, b, rho, m, sigma = (ordered[0].params.a, ordered[0].params.b,
-                                    ordered[0].params.rho, ordered[0].params.m,
-                                    ordered[0].params.sigma)
-        elif T >= ordered[-1].expiry_time:
-            a, b, rho, m, sigma = (ordered[-1].params.a, ordered[-1].params.b,
-                                    ordered[-1].params.rho, ordered[-1].params.m,
-                                    ordered[-1].params.sigma)
-        else:
-            for j in range(len(ordered) - 1):
-                if ordered[j].expiry_time <= T <= ordered[j + 1].expiry_time:
-                    a, b, rho, m, sigma = _interpolate_params(
-                        T, ordered[j], ordered[j + 1])
-                    break
-
-        for j, k in enumerate(k_grid):
-            Z[i, j] = svi_total_variance(k, a, b, rho, m, sigma)
-
-    # Convert total variance to implied vol for readability
-    with np.errstate(divide="ignore", invalid="ignore"):
-        sigma_surface = np.where(T_grid[:, None] > 0,
-                                 np.sqrt(Z / T_grid[:, None]), 0.0)
-
-    K_grid, T_mesh = np.meshgrid(k_grid, T_grid)
+    k_grid = np.linspace(-1.5, 1.5, n_k)
+    T_min = ordered[0].expiry_time
+    T_max = ordered[-1].expiry_time
+    cmap = cm.viridis
 
     fig = Figure(figsize=(12, 8))
     ax = fig.add_subplot(111, projection="3d")
 
-    # Surface with subtle wireframe to show curvature, fully opaque
-    surf = ax.plot_surface(T_mesh, K_grid, sigma_surface,
-                            cmap="plasma", linewidth=0.15,
-                            antialiased=True, alpha=1.0, edgecolor="black")
+    for fs in ordered:
+        p = fs.params
+        ws = [svi_total_variance(float(k), p.a, p.b, p.rho, p.m, p.sigma)
+              for k in k_grid]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            vols = [sqrt(w / fs.expiry_time) if w > 0 else 0.0 for w in ws]
 
-    # Colorbar to map colors to vol values
-    cb = fig.colorbar(surf, ax=ax, shrink=0.5, aspect=20, pad=0.1)
+        T_arr = [fs.expiry_time] * n_k
+        t_norm = (fs.expiry_time - T_min) / (T_max - T_min) if T_max > T_min else 0.0
+        ax.plot(k_grid, T_arr, vols, color=cmap(t_norm), alpha=0.6, linewidth=1)
+
+        if fs.data_points:
+            ks_data = [float(k) for k, w in fs.data_points]
+            ws_data = [float(w) for k, w in fs.data_points]
+            vols_data = [sqrt(w / fs.expiry_time) if w > 0 else 0.0 for w in ws_data]
+            ax.scatter(ks_data, [fs.expiry_time] * len(ks_data), vols_data,
+                       color="crimson", edgecolors="black", linewidths=0.3,
+                       s=20, alpha=0.9, zorder=5)
+
+    ax.set_xlabel("Log-moneyness k", labelpad=10)
+    ax.set_ylabel("Time to expiry (yrs)", labelpad=10)
+    ax.set_zlabel("Implied volatility", labelpad=10)
+    ax.set_title(f"Fitted SVI per-expiry smiles ({len(ordered)} expiries)")
+
+    fig.tight_layout()
+    return fig
+
+
+def _build_point_cloud(fitted_slices: list[FittedSlice],
+                       ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Build a (k, T, vol) point cloud from fitted slice data points.
+
+    Returns None if fewer than 5 points exist across all slices.
+    """
+    pts: list[tuple[float, float, float]] = []
+    for fs in fitted_slices:
+        if fs.data_points is None:
+            continue
+        for k, w in fs.data_points:
+            if w > 0 and fs.expiry_time > 0:
+                vol = sqrt(w / fs.expiry_time)
+                pts.append((float(k), float(fs.expiry_time), float(vol)))
+
+    if len(pts) < 5:
+        return None
+
+    pts_arr = np.array(pts)
+    return pts_arr[:, 0], pts_arr[:, 1], pts_arr[:, 2]
+
+
+def plot_heatmap_2d(
+    fitted_slices: list[FittedSlice],
+    n_k: int = 200,
+    n_T: int = 150,
+    symbol: str = "SPY",
+    source: str = "yfinance",
+) -> Figure:
+    """2D heatmap of implied vol over (T, k) — the industry-standard view.
+
+    Each cell shows the fitted implied vol.  Cells outside the data
+    convex hull are left empty.
+    """
+    ordered = sorted(fitted_slices, key=lambda fs: fs.expiry_time)
+    if len(ordered) < 2:
+        raise ValueError("Need at least two fitted slices for a heatmap")
+
+    cloud = _build_point_cloud(ordered)
+    if cloud is None:
+        raise ValueError("Not enough data points to render the heatmap")
+
+    k_vals, T_vals, vol_vals = cloud
+
+    k_min, k_max = -1.5, 1.5
+    T_start = ordered[0].expiry_time
+    T_end = ordered[-1].expiry_time
+
+    k_grid = np.linspace(k_min, k_max, n_k)
+    T_grid = np.linspace(T_start, T_end, n_T)
+    K_grid, T_mesh = np.meshgrid(k_grid, T_grid)
+
+    vol_grid = griddata((k_vals, T_vals), vol_vals,
+                        (K_grid, T_mesh), method="cubic")
+    vol_grid = np.ma.masked_invalid(vol_grid)
+
+    fig = Figure(figsize=(11, 7))
+    ax = fig.add_subplot(111)
+
+    mesh = ax.pcolormesh(T_grid, k_grid, vol_grid.T,
+                          cmap="plasma", shading="auto")
+
+    cb = fig.colorbar(mesh, ax=ax, shrink=0.7, aspect=25, pad=0.02)
     cb.set_label("Implied volatility")
 
-    ax.view_init(elev=28, azim=-55)
-    ax.set_xlabel("Time to expiry (yrs)", labelpad=10)
-    ax.set_ylabel("Log-moneyness k", labelpad=10)
-    ax.set_zlabel("Implied volatility", labelpad=10)
-    ax.set_title("Fitted implied volatility surface")
+    ax.scatter(T_vals, k_vals, c="white", edgecolors="black",
+               s=10, alpha=0.5, zorder=3)
+
+    ax.set_xlabel("Time to expiry (yrs)")
+    ax.set_ylabel("Log-moneyness k")
+    ax.set_title(f"{symbol} implied volatility surface "
+                 f"({len(ordered)} expiries, {source})")
 
     fig.tight_layout()
     return fig

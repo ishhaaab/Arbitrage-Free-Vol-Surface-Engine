@@ -35,3 +35,9 @@ def core(S: float, K: float, T: float, r: float, q: float, sigma: float) -> BSco
     df_q = exp(-q * T)
 
     return BScore(d1=d1, d2=d2, df_r=df_r, df_q=df_q, sqrt_T=sqrt_T)
+
+
+def vega_floats(S: float, K: float, T: float, r: float, q: float, sigma: float) -> float:
+    """Analytic Black-Scholes vega: dPrice/dSigma."""
+    c = core(S, K, T, r, q, sigma)
+    return S * c.df_q * norm_pdf(c.d1) * c.sqrt_T

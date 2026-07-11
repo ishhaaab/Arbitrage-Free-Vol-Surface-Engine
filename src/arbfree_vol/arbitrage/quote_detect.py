@@ -4,7 +4,8 @@ from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
-from math import exp
+from math import exp, log
+import numpy as np
 
 # helper funcs:
 
@@ -113,13 +114,16 @@ def _normalize_to_calls(
 
     calls: list[tuple[float, float]] = [] #create an empty list of tuples
     for strike, sides in by_strike.items(): # iterate over K
-        if OptionType.CALL in sides:    # if a call exists for some K, we'll j use its price
-            call_price = sides[OptionType.CALL]
+        if OptionType.CALL in sides:    # if a call exists for some K, use it
+            call_price= sides[OptionType.CALL]
+            if OptionType.PUT in sides: # also have a put -> average with parity-implied call
+                parity_call= sides[OptionType.PUT] + _forward(surface, s, strike)
+                call_price= (call_price + parity_call) / 2.0
 
-        else:   # if theres no calls then we convert Put's price into a call Price
-            call_price = sides[OptionType.PUT] + _forward(surface, s, strike)
+        else:   # no call exists, convert put to call via put-call parity
+            call_price= sides[OptionType.PUT] + _forward(surface, s, strike)
 
-        calls.append((strike, call_price)) # we do above loop for all Ks and turn into a K, Call pricec tuple
+        calls.append((strike, call_price))
 
     return sorted(calls)
 
@@ -175,45 +179,100 @@ def _check_butterfly(
             ))
 
 
-def _check_calendar(
-    surface: VolSurface,
-    violations: list[ArbitrageViolation],
-)-> None:
-    """Total variance must be non-decreasing with time at every common strike."""
+def _check_calendar(surface: VolSurface,
+                    violations: list[ArbitrageViolation],
+                    n_k: int = 61) -> None:
+    """Total variance must be non-decreasing with time at every log-moneyness k.
+
+    Converts each slice to (k, w) space using its per-slice forward price,
+    then interpolates onto a common k-grid per adjacent pair.  Flags
+    contiguous bands where w_earlier(k) > w_later(k) beyond tolerance.
+    """
+    from arbfree_vol.svi.data import _forward_price
+
     ordered = sorted(surface.slices, key=lambda sl: sl.expiry_time)
+    tolerance = 1e-4
 
-    for i in range(len(ordered)-1):
+    for i in range(len(ordered) - 1):
+        earlier = ordered[i]
+        later = ordered[i + 1]
+        F_e = _forward_price(surface, earlier)
+        F_l = _forward_price(surface, later)
 
-        earlier= ordered[i]
-        later= ordered[i+1]
+        w_e = slice_total_variance(surface, earlier)
+        w_l = slice_total_variance(surface, later)
 
-        total_variance_earlier= slice_total_variance(surface, earlier)
-        total_variance_later= slice_total_variance(surface, later)
+        ew = sorted([(log(K / F_e), w) for K, w in w_e.items()])
+        lw = sorted([(log(K / F_l), w) for K, w in w_l.items()])
 
-        for K in total_variance_earlier.keys() & total_variance_later.keys(): # for all common Ks in i, i+1 check for any discrepancy in total variance as a non decreasing func of expiry time
-                                                                              # later ill interpolate K instead of finding out common ones.
+        ks_e, vs_e = zip(*ew)
+        ks_l, vs_l = zip(*lw)
 
-            diff = total_variance_earlier[K] - total_variance_later[K]
+        if len(ew) < 2 or len(lw) < 2:
+            # if too few points to interpolate then fall back to exact-strike
+            # comparison where the same K exists in both slices.
+            w_e_dict = w_e  # strike -> w
+            w_l_dict = w_l
+            for K in w_e_dict.keys() & w_l_dict.keys():
+                diff = w_e_dict[K] - w_l_dict[K]
+                if diff > tolerance:
+                    violations.append(ArbitrageViolation(
+                        kind=ViolationType.CALENDAR,
+                        detail=f"calendar arb at K={K}: T={earlier.expiry_time:.4f} > T={later.expiry_time:.4f}",
+                        magnitude=float(diff),
+                        offending=(),
+                    ))
+            continue
 
-            threshold= 1e-4
-            if diff > threshold:
-                # Both slices' quotes at this K are offenders.
-                violations.append(ArbitrageViolation(
-                    kind=ViolationType.CALENDAR,
-                    detail=f"calendar arb at K={K}: w={total_variance_earlier[K]:.4f} at T={earlier.expiry_time} exceeds w={total_variance_later[K]:.4f} at T={later.expiry_time}",
-                    magnitude=  float(total_variance_earlier[K] - total_variance_later[K]),
-                    offending=(
-                        OffendingQuote(strike=K, expiry_time=earlier.expiry_time, option_type=OptionType.CALL),
-                        OffendingQuote(strike=K, expiry_time=later.expiry_time, option_type=OptionType.CALL),
-                    ),
-                ))
+        k_min = max(min(ks_e), min(ks_l))
+        k_max = min(max(ks_e), max(ks_l))
+        if k_min >= k_max:
+            continue
+
+        k_grid = np.linspace(k_min, k_max, n_k)
+        w_e_interp = np.interp(k_grid, ks_e, vs_e)
+        w_l_interp = np.interp(k_grid, ks_l, vs_l)
+        gap = w_e_interp - w_l_interp
+
+        # contiguous-run detection
+        in_run = False
+        run_start = 0
+        max_gap = 0.0
+
+        for j in range(len(k_grid)):
+            if gap[j] > tolerance:
+                if not in_run:
+                    run_start = j
+                    max_gap = gap[j]
+                    in_run = True
+                else:
+                    max_gap = max(max_gap, gap[j])
+            else:
+                if in_run:
+                    violations.append(ArbitrageViolation(
+                        kind=ViolationType.CALENDAR,
+                        detail=f"calendar arb: T={earlier.expiry_time:.4f} > T={later.expiry_time:.4f}, "
+                                f"k=[{k_grid[run_start]:.4f}, {k_grid[j-1]:.4f}], "
+                                f"worst gap={max_gap:.6f}",
+                        magnitude=max_gap,
+                        offending=(),
+                    ))
+                    in_run = False
+
+        if in_run:
+            violations.append(ArbitrageViolation(
+                kind=ViolationType.CALENDAR,
+                detail=f"calendar arb: T={earlier.expiry_time:.4f} > T={later.expiry_time:.4f}, "
+                        f"k=[{k_grid[run_start]:.4f}, {k_grid[-1]:.4f}], "
+                        f"worst gap={max_gap:.6f}",
+                magnitude=max_gap,
+                offending=(),
+            ))
 
 
-def _check_wide_spread(
-    s: ExpirySlice,
-    violations: list[ArbitrageViolation],
-    threshold: float= 0.5,
-)-> None:
+def _check_wide_spread(s: ExpirySlice,
+                       violations: list[ArbitrageViolation],
+                       threshold: float= 0.5)-> None:
     """Flag quotes whose relative bid-ask spread exceeds threshold.
 
     Spread is (ask - bid) / mid.  Quotes with no bid/ask data are skipped.
