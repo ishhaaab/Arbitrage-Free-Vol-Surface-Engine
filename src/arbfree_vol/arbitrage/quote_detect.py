@@ -2,7 +2,7 @@ from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, Vi
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote, get_r, get_q
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve
+from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
 from math import exp
 
@@ -270,6 +270,7 @@ def detect_with_forward(surface:VolSurface) -> ArbitrageReport:
     Synthetic / test data can safely use ``detect()``.
     """
     fwd_curve = estimate_forward_curve(surface)
+    populate_per_slice_r(surface, fwd_curve)
 
     violations: list[ArbitrageViolation] = []
     for sl in surface.slices:

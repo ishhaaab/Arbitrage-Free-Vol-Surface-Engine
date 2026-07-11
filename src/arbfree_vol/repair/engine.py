@@ -15,7 +15,7 @@ from arbfree_vol.repair.report import (
     RepairMetrics,
     RepairReport,
 )
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve
+from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
 
 def _build_rejection_set(
@@ -134,10 +134,11 @@ def repair(surface: VolSurface) -> RepairReport:
     # step 3: build cleaned surface
     cleaned_surface = _build_cleaned_surface(surface, reject_set)
 
-    # step 4: estimate forward curve from survivors
+    # step 4: estimate forward curve from survivors and populate per-slice r
     fwd_curve = {}
     if cleaned_surface is not None:
         fwd_curve = estimate_forward_curve(cleaned_surface)
+        populate_per_slice_r(cleaned_surface, fwd_curve)
 
     # step 5: fit SVI on each cleaned slice
     fitted: list[FittedSlice] = []

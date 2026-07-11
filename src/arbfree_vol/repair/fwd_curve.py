@@ -1,4 +1,4 @@
-from math import exp
+from math import exp, log
 from statistics import median
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r
@@ -59,3 +59,21 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
         curve[s.expiry_time] = F
 
     return curve
+
+
+def populate_per_slice_r(surface: VolSurface, fwd_curve: dict[float, float]) -> None:
+    """Compute per-maturity risk-free rates from the forward curve.
+
+    For each slice, solves  ``F(T) = S * exp((r - q) * T)`` for ``r``::
+
+        r(T) = log(F(T) / S) / T + q
+
+    and stores the result on ``sl.risk_free``.  Slices without a valid
+    forward estimate keep their current value (typically ``None``, which
+    falls back to ``surface.risk_free`` via ``get_r()``).
+    """
+    q = surface.div_yield
+    for sl in surface.slices:
+        F = fwd_curve.get(sl.expiry_time)
+        if F is not None and F > 0 and sl.expiry_time > 0:
+            sl.risk_free = log(F / surface.spot) / sl.expiry_time + q
