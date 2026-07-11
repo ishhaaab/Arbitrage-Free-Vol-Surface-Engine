@@ -1,7 +1,7 @@
 from math import exp
 from statistics import median
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
+from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r
 from arbfree_vol.models.option import OptionType
 
 
@@ -48,11 +48,11 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
     expiry_time to forward_price.  Slices with zero pairs fall
     back to F = spot * exp(r * T) due to q = 0 assumption.
     """
-    r = surface.risk_free
     spot = surface.spot
     curve: dict[float, float] = {}
 
     for s in surface.slices:
+        r = get_r(surface, s)
         F = _slice_forward(s, r, spot)
         if F is None:
             F = spot * exp(r * s.expiry_time)  # q = 0 fallback

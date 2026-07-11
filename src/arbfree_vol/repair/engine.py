@@ -47,10 +47,10 @@ def _build_rejection_set(
     return seen, rejected
 
 
-def _build_cleaned_surface(
-    surface: VolSurface,
-    reject_set: set[tuple[float, float, OptionType]],
+def _build_cleaned_surface(surface: VolSurface, 
+                           reject_set: set[tuple[float, float, OptionType]]
 ) -> VolSurface | None:
+   
     """Remove all rejected quotes and drop empty slices."""
     cleaned: list[ExpirySlice] = []
     for sl in surface.slices:
@@ -60,7 +60,10 @@ def _build_cleaned_surface(
             if key not in reject_set:
                 kept.append(q)
         if kept:
-            cleaned.append(ExpirySlice(expiry_time=sl.expiry_time, quotes=kept))
+            cleaned.append(ExpirySlice(
+                expiry_time=sl.expiry_time, quotes=kept,
+                risk_free=sl.risk_free, div_yield=sl.div_yield,
+            ))
 
     if not cleaned:
         return None
@@ -72,11 +75,10 @@ def _build_cleaned_surface(
     )
 
 
-def _fit_slice(
-    sl: ExpirySlice,
-    forward_price: float,
-    surface: VolSurface,
-) -> FittedSlice | None:
+def _fit_slice(sl: ExpirySlice,
+               forward_price: float,
+               surface: VolSurface) -> FittedSlice | None:
+   
     """Fit SVI to one cleaned slice using the estimated forward price.
 
     Returns None if fewer than 5 (k, w) points are available.

@@ -1,4 +1,4 @@
-from arbfree_vol.models.surface import VolSurface
+from arbfree_vol.models.surface import VolSurface, get_r, get_q
 from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.report import FittedSlice
@@ -29,7 +29,9 @@ def plot_smiles(
     by_T: dict[float, list[tuple[float, float]]]= {}
     for sl in surface.slices:
         strike_w= slice_total_variance(surface, sl)
-        F= surface.spot * exp((surface.risk_free - surface.div_yield) * sl.expiry_time)
+        r= get_r(surface, sl)
+        q= get_q(surface, sl)
+        F= surface.spot * exp((r - q) * sl.expiry_time)
         pts= [(log(K / F), w) for K, w in strike_w.items()]
         by_T[sl.expiry_time]= sorted(pts)
 

@@ -18,9 +18,26 @@ class Quote(BaseModel): # one option quote
 class ExpirySlice(BaseModel):  # set of quotes with the same expiry
     expiry_time: float= Field(..., gt=0)
     quotes: list[Quote]= Field(..., min_length=1)
+    risk_free: float | None= None   # per-slice override for surface-level risk_free
+    div_yield: float | None= None   # per-slice override for surface-level div_yield
 
 class VolSurface(BaseModel): # set of slices of different expirations
     spot: float= Field(..., gt=0)
     risk_free: float
     div_yield: float
     slices: list[ExpirySlice]= Field(..., min_length=1)
+
+
+def get_r(surface: VolSurface, sl: ExpirySlice) -> float:
+    """Return the effective risk-free rate for a slice.
+
+    Prefers the per-slice value (if set), falls back to the surface-level
+    default.  This lets us store per-expiry term structure without
+    changing every call site.
+    """
+    return sl.risk_free if sl.risk_free is not None else surface.risk_free
+
+
+def get_q(surface: VolSurface, sl: ExpirySlice) -> float:
+    """Return the effective dividend yield for a slice."""
+    return sl.div_yield if sl.div_yield is not None else surface.div_yield

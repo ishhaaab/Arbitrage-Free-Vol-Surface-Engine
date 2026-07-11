@@ -3,14 +3,14 @@
 from datetime import date
 
 from arbfree_vol.models.option import ImpliedVolInput, OptionContract
-from arbfree_vol.models.surface import ExpirySlice, VolSurface
+from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_r, get_q
 from arbfree_vol.pricing.implied_vol import implied_vol
 
 
 def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, float]:
     """Maps each quoted strike in the slice to its total variance w = sigma**2 * T.
 
-    Quotes whose price admits no implied vol (arbitrage-violating) are dropped.
+    Quotes whose price admits no implied vol (arb-violating) are dropped.
     """
     out: dict[float, float] = {}
 
@@ -24,8 +24,8 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
             ),
             spot=surface.spot,
             expiry_time=s.expiry_time,
-            risk_free=surface.risk_free,
-            div_yield=surface.div_yield,
+            risk_free=get_r(surface, s),
+            div_yield=get_q(surface, s),
             market_price=q.price,
         )
 

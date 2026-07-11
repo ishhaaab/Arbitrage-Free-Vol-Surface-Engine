@@ -1,5 +1,5 @@
 from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
+from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote, get_r, get_q
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve
@@ -11,10 +11,12 @@ from math import exp
 def _forward(
         surface: VolSurface,
         s: ExpirySlice,
-        strike: float) -> float:
-    """Forward price: F = S * e^{-qT} - K * e^{-rT}."""
-    return surface.spot * exp(-surface.div_yield * s.expiry_time) \
-        - strike * exp(-surface.risk_free * s.expiry_time)
+        strike: float) -> float: #returns the fwd price: F = Se^{−qT} − Ke^{−rT}
+
+    r = get_r(surface, s)
+    q = get_q(surface, s)
+    return surface.spot * exp(-q * s.expiry_time) \
+        - strike * exp(-r * s.expiry_time)
 
 
 
@@ -69,8 +71,9 @@ def _check_parity(
         K= strike
         if forward_price is not None:
             # Use the explicit forward:  C - P = e^{-rT}(F - K)
+            r = get_r(surface, s)
             F = forward_price
-            parity_rhs = exp(-surface.risk_free * s.expiry_time) * (F - K)
+            parity_rhs = exp(-r * s.expiry_time) * (F - K)
         else:
             # Fall back to surface-level r/q
             parity_rhs = _forward(surface, s, K)
