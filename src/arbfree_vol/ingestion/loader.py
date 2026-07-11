@@ -57,12 +57,8 @@ def load_chain_csv(path: str | Path,
                    clean: bool=  True) -> tuple[VolSurface, list[RejectionRecord]]:
     """Load a CSV option chain and return a VolSurface + rejection log.
 
-    Returns:
-    
-        VolSurface:
-            Cleaned surface. If clean=False, every quote is kept.
-        list[RejectionRecord]:
-            Quotes that were rejected by cleaning rules.
+    Returns a (VolSurface, list[RejectionRecord]) tuple.  When clean=False,
+    every quote is kept and the rejection list is empty.
     """
     by_T: dict[float, list[Quote]]=  {}
     all_rejected: list[RejectionRecord]=  []

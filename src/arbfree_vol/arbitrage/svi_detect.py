@@ -6,9 +6,11 @@ from scipy.optimize import minimize_scalar
 
 
 def min_total_variance(params: SVIParams)-> float:
-    """Returns the minimum total variance ie the min value of the SVI curve
-    found at dw(k)/dk=0 where w(k)= a + b(rho(k-m) + sqrt((k-m)**2+sigma**2))
-    that gives us w min= a + b* sigma* sqrt(1-rho**2)"""
+    """Minimum total variance of the SVI curve.
+
+    Found by setting dw(k)/dk = 0, giving
+    w_min = a + b * sigma * sqrt(1 - rho^2).
+    """
 
     return params.a + params.b* params.sigma* sqrt(1-params.rho**2)
 

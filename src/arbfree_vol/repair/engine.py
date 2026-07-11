@@ -4,7 +4,7 @@ from statistics import mean
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.arbitrage.report import ArbitrageReport
-from arbfree_vol.arbitrage.quote_detect import detect
+from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 from arbfree_vol.svi.calibration import calibrate
 from arbfree_vol.svi.model import svi_total_variance
@@ -123,7 +123,7 @@ def repair(surface: VolSurface) -> RepairReport:
     n_slices_input = len(surface.slices)
 
     # step 1: detect violations on the raw surface
-    arb_report = detect(surface)
+    arb_report = detect_with_forward(surface)
     n_violations_before = len(arb_report.violations)
 
     # step 2: build rejection set from violation offending fields

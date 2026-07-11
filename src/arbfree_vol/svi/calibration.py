@@ -8,12 +8,11 @@ import numpy as np
 
 
 def calibrate(points: list[tuple[float,float]]) -> SVIParams:
-    """Calc residuals from raw list of (k,w) tuples vs
-     the model (k,p) points to get the best fit 5 params for the model """
+    """Fit the 5-parameter SVI model to a list of (k, w) points."""
     if len(points) < 5: raise ValueError("Min 5 points required")
 
     def residuals(p):
-        """ Returns a list of gaps between (k, 5 param) curve point and actual (k,w) point """
+        """Return (model - market) total variance at each (k, w) point."""
         return [svi_total_variance(k, *p)-w for k,w in points] # *p is the same as using svi_total_variance(k, a, b, ρ, m, σ)
     
     x0= [min(w[1] for w in points), 0.1, -0.5, 0.0, 0.1] 

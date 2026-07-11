@@ -53,9 +53,7 @@ def _check_negative_price(q: Quote) -> RejectionRecord | None:
 
 
 def _check_zero_bid_or_ask(q: Quote) -> RejectionRecord | None:
-    """Reject if bid/ask is zero or missing AND we are checking spread."""
-
-
+    """Reject if bid or ask is exactly zero."""
     if q.bid is None or q.ask is None:
         return None  # missing data is OK if we only check price
     
@@ -108,11 +106,10 @@ def _check_near_expiry(sl: ExpirySlice, q: Quote, min_T: float) -> RejectionReco
 def _check_intrinsic_violation(sl: ExpirySlice, 
                                q: Quote, 
                                spot: float) -> RejectionRecord | None:
-    
-    """Reject if price is below intrinsic value bound.
+    """Reject if price is below intrinsic value.
 
-    For a call: price >= max(0, S - K) * e^(-qT)  (approx using spot directly)
-    For a put:  price >= max(0, K - S) * e^(-rT)
+    For a call: price >= max(0, S - K).
+    For a put:  price >= max(0, K - S).
     """
     intrinsic_call=  max(0.0, spot - q.strike)
     intrinsic_put=  max(0.0, q.strike - spot)
@@ -158,8 +155,8 @@ def clean_quotes(
     
     """Apply all cleaning rules to a slice.
 
-    Returns (kept_quotes, rejected_records). The first rejection
-    encountered for a quote is recorded & subsequent rules are not
+    Returns (kept_quotes, rejected_records).  The first rejection
+    encountered for a quote is recorded and subsequent rules are not
     evaluated for that quote.
     """
     kept: list[Quote]=  []

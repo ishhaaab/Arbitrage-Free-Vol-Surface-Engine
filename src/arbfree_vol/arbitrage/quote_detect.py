@@ -2,6 +2,7 @@ from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, Vi
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.variance import slice_total_variance
+from arbfree_vol.repair.fwd_curve import estimate_forward_curve
 
 from math import exp
 
@@ -10,8 +11,8 @@ from math import exp
 def _forward(
         surface: VolSurface,
         s: ExpirySlice,
-        strike: float) -> float: #returns the fwd price: F = Se^{−qT} − Ke^{−rT}
-
+        strike: float) -> float:
+    """Forward price: F = S * e^{-qT} - K * e^{-rT}."""
     return surface.spot * exp(-surface.div_yield * s.expiry_time) \
         - strike * exp(-surface.risk_free * s.expiry_time)
 
@@ -20,29 +21,78 @@ def _forward(
 def _check_parity(
         surface:VolSurface,
         s:ExpirySlice,
-        violations: list[ArbitrageViolation])-> None: # checks whether there's put call parity over different Ks
+        violations: list[ArbitrageViolation], # checks whether there's put call parity over different Ks
+        forward_price: float | None= None)-> None:
+    """Check put-call parity across strikes in a single expiry slice.
 
+    The parity residual is |C - P - RHS| where RHS depends on whether
+    an explicit forward price is available:
+
+      - If forward_price is given (preferred), parity is evaluated
+        as:
+
+            C - P = e^{-rT} * (F - K)
+
+        where F is the estimated forward from the market (e.g.
+        from put-call parity on a richer slice).  This avoids
+        surface-level r/q approximations.
+
+      - If forward_price is None (fallback), parity is
+        evaluated with the surface-level r and q:
+
+            C - P = S * e^{-qT} - K * e^{-rT}
+
+    Threshold logic:
+      - If both the call and put have bid/ask data, the threshold
+        is the wider half spread (capped at a $0.05 floor).  This
+        treats residuals inside the spread as market noise, not arb.
+      - If bid/ask is missing, a fixed $0.05 threshold is used.
+        This is calibrated for liquid US equities and ETFs (SPY, QQQ,
+        AAPL, NVDA, MSFT) where prices are >= $0.05 and spreads
+        are typically < $0.10.  For index options (SPX, NDX) with
+        $0.10--$0.30 spreads, bump it to $0.10--$0.15; for illiquid
+        names with $0.50+ spreads, use a larger value.
+    """
     by_strike= {}                       # we want to group options by K, ie K is the key and
     for q in s.quotes:                  # {option_type:price} which is another dict is assigned to K whenever
-        by_strike.setdefault(q.strike, {})[q.option_type]= q.price     # theres multiple options with the same K
+                                        # theres multiple options with the same K
+        by_strike.setdefault(q.strike, {})[q.option_type]= q     # this gives access to price, bid, ask
 
     for strike, sides in by_strike.items():
         if OptionType.CALL not in sides or OptionType.PUT not in sides:
-            continue # we dont use return as it exits the entire function, continue skips an iteration
-        C = sides[OptionType.CALL]
-        P = sides[OptionType.PUT]
+            continue
+        C_q = sides[OptionType.CALL]
+        P_q = sides[OptionType.PUT]
+        C = C_q.price
+        P = P_q.price
 
         K= strike
-        F= _forward(surface, s, K)
+        if forward_price is not None:
+            # Use the explicit forward:  C - P = e^{-rT}(F - K)
+            F = forward_price
+            parity_rhs = exp(-surface.risk_free * s.expiry_time) * (F - K)
+        else:
+            # Fall back to surface-level r/q
+            parity_rhs = _forward(surface, s, K)
 
+        # compute a market-aware threshold
+        if C_q.bid is not None and C_q.ask is not None and P_q.bid is not None and P_q.ask is not None:
+            half_spread_C = 0.5 * (C_q.ask - C_q.bid)
+            half_spread_P = 0.5 * (P_q.ask - P_q.bid)
+            threshold = max(half_spread_C, half_spread_P, 0.05)
+        else:
+            # fallback for data without bid/ask — calibrated for
+            # liquid US equities / ETFs (SPY, QQQ, AAPL, NVDA, MSFT).
+            # Adjust to $0.10-$0.15 for index options (SPX, NDX)
+            # or larger for illiquid names.
+            threshold = 0.05
 
-        threshold= 1e-4
-        if abs((C-P)-F) > threshold:
+        if abs((C-P)-parity_rhs) > threshold:
             # Both the call and the put at this strike are potentially bad.
             violations.append(ArbitrageViolation(
                 kind= ViolationType.PARITY,
-                detail=f"put-call parity off at K={K}, T={s.expiry_time}: C-P={C-P:.4f} vs forward={F:.4f}",
-                magnitude= float(abs((C-P)-F)),
+                detail=f"put-call parity off at K={K}, T={s.expiry_time}: C-P={C-P:.4f} vs RHS={parity_rhs:.4f}",
+                magnitude= float(abs((C-P)-parity_rhs)),
                 offending=(
                     OffendingQuote(strike=K, expiry_time=s.expiry_time, option_type=OptionType.CALL),
                     OffendingQuote(strike=K, expiry_time=s.expiry_time, option_type=OptionType.PUT),
@@ -76,7 +126,7 @@ def _check_monotonicity(
     s: ExpirySlice,
     calls: list[tuple[float, float]],
     violations: list[ArbitrageViolation]) -> None:
-    # Call prices must be non increasing in strike. A strict rise leads to arbitrage.
+    """Call prices must be non-increasing in strike.  A strict rise is arbitrage."""
 
     for i in range(len(calls) - 1):
         k1, c1= calls[i]
@@ -99,7 +149,7 @@ def _check_butterfly(
     s: ExpirySlice,
     calls: list[tuple[float, float]],
     violations: list[ArbitrageViolation]) -> None:
-    # Call prices must convex in strike. We check that via line joining two points test
+    """Call prices must be convex in strike.  Violation means the middle call lies above the line joining its neighbours."""
 
     for i in range(len(calls)-2):
         k1, c1= calls[i]
@@ -126,8 +176,8 @@ def _check_calendar(
     surface: VolSurface,
     violations: list[ArbitrageViolation],
 )-> None:
-
-    ordered = sorted(surface.slices, key=lambda sl: sl.expiry_time) # we sort the slices by expiry time
+    """Total variance must be non-decreasing with time at every common strike."""
+    ordered = sorted(surface.slices, key=lambda sl: sl.expiry_time)
 
     for i in range(len(ordered)-1):
 
@@ -185,7 +235,13 @@ def _check_wide_spread(
 
 
 def detect(surface:VolSurface) -> ArbitrageReport:
+    """Detect all no-arbitrage violations on a volatility surface.
 
+    Uses surface-level ``r`` and ``q`` for the parity check.  For
+    real market data where these constants may be inaccurate, use
+    ``detect_with_forward()`` instead — it estimates per-expiry
+    forward prices as a pre-pass and feeds them into the parity check.
+    """
     violations: list[ArbitrageViolation] = []
     for slices in surface.slices:
         _check_parity(surface, slices, violations)
@@ -193,6 +249,33 @@ def detect(surface:VolSurface) -> ArbitrageReport:
         _check_monotonicity(surface, slices, calls, violations)
         _check_butterfly(slices, calls, violations)
         _check_wide_spread(slices, violations)
+
+    _check_calendar(surface, violations)
+
+    return ArbitrageReport(violations=violations)
+
+
+def detect_with_forward(surface:VolSurface) -> ArbitrageReport:
+    """Like detect() but uses an estimated forward curve as a pre-pass.
+
+    Runs ``estimate_forward_curve`` to obtain per-expiry forward
+    prices from put-call parity, then threads them into the parity
+    check.  This prevents systematic false positives when the
+    surface-level risk-free rate or dividend yield are inaccurate.
+
+    Recommended for real market data (yfinance, CBOE, etc.).
+    Synthetic / test data can safely use ``detect()``.
+    """
+    fwd_curve = estimate_forward_curve(surface)
+
+    violations: list[ArbitrageViolation] = []
+    for sl in surface.slices:
+        F = fwd_curve.get(sl.expiry_time)
+        _check_parity(surface, sl, violations, forward_price=F)
+        calls = _normalize_to_calls(surface, sl)
+        _check_monotonicity(surface, sl, calls, violations)
+        _check_butterfly(sl, calls, violations)
+        _check_wide_spread(sl, violations)
 
     _check_calendar(surface, violations)
 

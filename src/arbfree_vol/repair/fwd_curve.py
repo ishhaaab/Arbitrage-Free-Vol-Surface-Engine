@@ -1,4 +1,5 @@
 from math import exp
+from statistics import median
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.models.option import OptionType
@@ -14,8 +15,9 @@ def _slice_forward(s: ExpirySlice, r: float, spot: float) -> float | None:
 
     Rearranged:  F = e^{rT} (C - P) + K
 
-    If no (call, put) pair exists, returns None (caller falls back).
-    If multiple pairs exist, returns the arithmetic mean.
+    Uses the **median** across strikes to prevent a single
+    outlier quote from corrupting the estimate.  If no (call, put) pair
+    exists, returns None (caller falls back).
     """
     by_strike: dict[float, dict[OptionType, float]] = {}
     for q in s.quotes:
@@ -35,7 +37,7 @@ def _slice_forward(s: ExpirySlice, r: float, spot: float) -> float | None:
     if not estimates:
         return None
 
-    return sum(estimates) / len(estimates)
+    return median(estimates)
 
 
 def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
