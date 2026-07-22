@@ -73,15 +73,22 @@ def ssvi_d2w_dk2(k: float, theta: float, rho: float, psi: float) -> float:
 def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     """Sufficient no-arb condition for SSVI (Gatheral & Jacquier 2014).
 
-    Returns the GJ residual g(theta).  The slice is arb-free when g >= 0.
-    This condition is sufficient but not necessary — in practice eSSVI
-    with ``0 <= gamma <= 1, eta > 0`` always satisfies it.
+    The sufficient no-butterfly-arbitrage condition for SSVI is:
+        theta * psi * (1 + |rho|) <= 2
+
+    Returns the residual ``2.0 - theta * psi * (1.0 + abs(rho))``.
+    The slice is arb-free when the residual >= 0.
+    If ``|rho| >= 1.0``, returns ``float('-inf')`` (always a violation).
+
+    Reference
+    ---------
+    Gatheral, J. & Jacquier, A. (2014). Arbitrage-free SVI volatility surfaces.
+    Quantitative Finance, 14(1), 59-71.
     """
-    abs_rho= abs(rho)
+    abs_rho = abs(rho)
     if abs_rho >= 1.0:
         return float("-inf")
-    t= theta * psi
-    return 0.5 * (1.0 - abs_rho) * t * t + 0.5 * (1.0 + abs_rho) - t * abs_rho * 0.5 * 0.0 + 0.0
+    return 2.0 - theta * psi * (1.0 + abs_rho)
 
 
 def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:
