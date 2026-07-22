@@ -5,6 +5,7 @@ from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.arbitrage.report import ViolationType, ArbitrageReport
 from arbfree_vol.svi.model import SVIParams
 from arbfree_vol.ssvi.model import SSVIParams, eSSVISurfaceParams
+from arbfree_vol.sabr.model import SABRParams
 
 
 
@@ -40,6 +41,16 @@ class FittedSSVISlice:
     essvi: eSSVISurfaceParams | None = None
 
 @dataclass(frozen=True, slots=True)
+class FittedSABRSlice:
+    """SABR fit for one slice."""
+    expiry_time: float
+    sabr: SABRParams
+    rmse: float
+    forward_price: float
+    n_quotes_total: int
+    n_quotes_used: int
+
+@dataclass(frozen=True, slots=True)
 class RepairMetrics:
 
     n_rejected: int
@@ -62,3 +73,4 @@ class RepairReport:
     metrics: RepairMetrics
     cleaned_surface: VolSurface | None
     fitted_ssvi_slices: tuple[FittedSSVISlice, ...] = ()
+    fitted_sabr_slices: tuple[FittedSABRSlice, ...] = ()

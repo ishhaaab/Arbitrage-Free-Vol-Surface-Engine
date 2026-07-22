@@ -1,5 +1,6 @@
 """Tests for the repair engine."""
 from datetime import date
+import pytest
 from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
@@ -187,3 +188,67 @@ def test_repair_default_omits_ssvi() -> None:
     report = repair(surface)
 
     assert report.fitted_ssvi_slices == ()
+
+
+def test_repair_with_sabr_populates_fitted_sabr_slices() -> None:
+    surface = _clean_surface(n_strikes=7)
+
+    report = repair(surface, use_sabr=True)
+
+    assert report.metrics.n_slices_fitted == 1
+    assert len(report.fitted_slices) == 1
+    assert len(report.fitted_sabr_slices) == 1
+    # The raw SVI params (mapped from SABR) should be present
+    assert report.fitted_slices[0].params is not None
+    # The native SABR parameters
+    fsabr = report.fitted_sabr_slices[0]
+    assert fsabr.sabr.alpha > 0
+    assert fsabr.sabr.nu > 0
+    assert -1.0 < fsabr.sabr.rho < 1.0
+
+
+def test_repair_with_sabr_and_ssvi_mutually_exclusive() -> None:
+    surface = _clean_surface(n_strikes=7)
+
+    with pytest.raises(ValueError):
+        repair(surface, use_ssvi=True, use_sabr=True)
+
+
+def test_repair_sabr_then_build_fitted_surface_then_iv_at() -> None:
+    """SABR repair -> build_fitted_surface -> iv_at round-trip."""
+    from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
+
+    surface = _clean_surface(n_strikes=7)
+    report = repair(surface, use_sabr=True)
+
+    assert len(report.fitted_sabr_slices) == 1
+    assert report.metrics.n_slices_fitted == 1
+
+    fs = build_fitted_surface(report)
+    assert len(fs.fitted_slices) == 1
+
+    # iv_at at the exact slice expiry should return a plausible vol
+    iv = iv_at(fs, K=SPOT, T=T)
+    assert 0.05 < iv < 1.0
+
+    # T below the single slice should raise
+    with pytest.raises(ValueError):
+        iv_at(fs, K=SPOT, T=0.01)
+
+    # T above the single slice should raise
+    with pytest.raises(ValueError):
+        iv_at(fs, K=SPOT, T=5.0)
+
+
+def test_repair_constrained_calibration_leaves_no_butterfly_violations() -> None:
+    """With constrained SVI calibration, a clean flat-vol surface must
+    produce a fitted surface that is entirely free of arbitrage."""
+    surface = _clean_surface(n_strikes=7)
+
+    report = repair(surface)
+
+    assert report.metrics.n_slices_fitted == 1
+    assert report.remaining_violations.is_arbitrage_free, (
+        "Constrained calibration should produce an arb-free fit "
+        "on clean input data"
+    )

@@ -6,15 +6,18 @@ from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.arbitrage.report import ArbitrageReport
 from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
-from arbfree_vol.svi.calibration import calibrate
+from arbfree_vol.svi.calibration import calibrate_constrained
 from arbfree_vol.svi.model import svi_total_variance, SVIParams
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params
+from arbfree_vol.sabr.calibration import calibrate_sabr
+from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.report import (
     RejectedQuote,
     FittedSlice,
     FittedSSVISlice,
+    FittedSABRSlice,
     RepairMetrics,
     RepairReport,
 )
@@ -98,7 +101,7 @@ def _fit_slice(sl: ExpirySlice,
     ]
     points.sort()
 
-    params= calibrate(points)
+    params= calibrate_constrained(points)
 
     # RMSE in w-space
     errors= [
@@ -170,7 +173,65 @@ def _fit_slice_ssvi(sl: ExpirySlice,
     return fitted_svi, fitted_ssvi
 
 
-def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
+def _fit_slice_sabr(sl: ExpirySlice,
+                    forward_price: float,
+                    surface: VolSurface) -> tuple[FittedSlice, FittedSABRSlice] | None:
+    """Fit SABR to one cleaned slice and map to raw SVI for visualization.
+
+    Returns (FittedSlice, FittedSABRSlice) or None if too few points.
+    """
+    strike_w = slice_total_variance(surface, sl)
+    if len(strike_w) < 5:
+        return None
+
+    points = [
+        (log(strike / forward_price), w)
+        for strike, w in strike_w.items()
+    ]
+    points.sort()
+
+    sabr_params = calibrate_sabr(points, forward=forward_price,
+                                  expiry_time=sl.expiry_time)
+
+    # RMSE in w-space using SABR formula
+    alpha = sabr_params.alpha
+    beta = sabr_params.beta
+    rho = sabr_params.rho
+    nu = sabr_params.nu
+    errors = [
+        (sabr_total_variance(k, forward_price, sl.expiry_time,
+                             alpha, beta, rho, nu) - w) ** 2
+        for k, w in points
+    ]
+    rmse = sqrt(mean(errors))
+
+    # Map to raw SVI params so existing SVI-based pipeline works
+    a, b, r, m, sigma = sabr_to_raw_svi_params(
+        sabr_params, forward_price, sl.expiry_time
+    )
+    raw_svi_params = SVIParams(a=a, b=b, rho=r, m=m, sigma=sigma)
+
+    fitted_svi = FittedSlice(
+        expiry_time=sl.expiry_time,
+        params=raw_svi_params,
+        rmse=rmse,
+        forward_price=forward_price,
+        n_quotes_total=len(sl.quotes),
+        n_quotes_used=len(points),
+        data_points=tuple(points),
+    )
+    fitted_sabr = FittedSABRSlice(
+        expiry_time=sl.expiry_time,
+        sabr=sabr_params,
+        rmse=rmse,
+        forward_price=forward_price,
+        n_quotes_total=len(sl.quotes),
+        n_quotes_used=len(points),
+    )
+    return fitted_svi, fitted_sabr
+
+
+def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) -> RepairReport:
     """Repair a volatility surface by rejecting arb violating quotes,
     re estimating the forward curve, and refitting SVI slices.
 
@@ -180,7 +241,17 @@ def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
     existing SVI-based visualization and detection code continues to
     work.  The native eSSVI parameters are stored in
     ``fitted_ssvi_slices``.
+
+    If ``use_sabr=True``, fits the SABR model (Hagan et al. 2002)
+    instead of raw SVI per slice.  The SABR parameters are mapped to
+    raw SVI via ``to_raw_svi_params`` adapter, and the native SABR
+    parameters are stored in ``fitted_sabr_slices``.
+
+    ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
+    if use_ssvi and use_sabr:
+        raise ValueError("use_ssvi and use_sabr are mutually exclusive")
+
     n_total_quotes= sum(len(sl.quotes) for sl in surface.slices)
     n_slices_input= len(surface.slices)
 
@@ -200,9 +271,10 @@ def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
         fwd_curve= estimate_forward_curve(cleaned_surface)
         populate_per_slice_r(cleaned_surface, fwd_curve)
 
-    # step 5: fit SVI (or eSSVI) on each cleaned slice
+    # step 5: fit SVI (or eSSVI or SABR) on each cleaned slice
     fitted: list[FittedSlice]= []
     fitted_ssvi: list[FittedSSVISlice]= []
+    fitted_sabr: list[FittedSABRSlice]= []
     if cleaned_surface is not None:
         for sl in cleaned_surface.slices:
             F= fwd_curve.get(sl.expiry_time)
@@ -214,6 +286,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
                     fs, fssvi= result
                     fitted.append(fs)
                     fitted_ssvi.append(fssvi)
+            elif use_sabr:
+                result= _fit_slice_sabr(sl, F, cleaned_surface)
+                if result is not None:
+                    fs, fsabr= result
+                    fitted.append(fs)
+                    fitted_sabr.append(fsabr)
             else:
                 fs= _fit_slice(sl, F, cleaned_surface)
                 if fs is not None:
@@ -240,6 +318,7 @@ def repair(surface: VolSurface, use_ssvi: bool= False) -> RepairReport:
         rejected=tuple(rejected),
         fitted_slices=tuple(fitted),
         fitted_ssvi_slices=tuple(fitted_ssvi),
+        fitted_sabr_slices=tuple(fitted_sabr),
         remaining_violations=remaining,
         metrics=metrics,
         cleaned_surface=cleaned_surface,
