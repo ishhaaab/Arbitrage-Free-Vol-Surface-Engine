@@ -1,103 +1,58 @@
 # arbfree-vol-surface
 
-An arbitrage-free implied volatility surface engine built in Python.
+Arbitrage-free implied volatility surface engine. Calibrates SVI, eSSVI, and SABR
+total-variance parameterizations to cleaned option market quotes, detects static
+arbitrage violations, repairs noisy surfaces, and provides a full surface-query
+layer (IV interpolation, portfolio Greeks, scenario risk, Dupire local vol, PCA
+deformations). Built for correctness, numerical stability, and clean architecture.
 
-This project is a production-style quant finance system for pricing options, computing implied volatilities, detecting static arbitrage violations, and eventually fitting and repairing volatility surfaces.
+## Quick start
 
-## Project Goal
+```bash
+pytest tests/ -q                              # 155 tests
+python demo/full_pipeline_demo.py             # end-to-end demo (no network)
+python examples/yfinance_demo.py              # live SPY demo (needs network)
+```
 
-Raw option market data is noisy. Bid/ask spreads, stale quotes, illiquid contracts, crossed markets, and sparse expiries can all create implied volatility surfaces that violate no-arbitrage conditions.
+## What's built
 
-The goal of this project is to build a clean, tested Python engine that can:
+| Layer | Module | Capabilities |
+|---|---|---|
+| Pricing | `pricing/` | Black-Scholes, analytic Greeks (δ/γ/ν/θ/ρ), IV solver (Newton + Brent) |
+| Models | `models/` | `OptionContract`, `Quote`, `ExpirySlice`, `VolSurface` (Pydantic boundary types) |
+| Ingestion | `ingestion/` | Yahoo Finance fetcher, CSV loader, 8 cleaning rules with audit records |
+| Arbitrage | `arbitrage/` | Quote-level (parity, monotonicity, butterfly, calendar, wide-spread); curve-level (min-variance, `g(k)` butterfly, calendar) |
+| Smile calibration | `svi/` `ssvi/` `sabr/` | Raw SVI (5-param), eSSVI (Gatheral-Jacquier), SABR (Hagan 2002 asymptotic). **All** map to raw SVI for downstream compatibility. Constrained SVI calibration penalises butterfly-arb during fitting. |
+| Repair | `repair/` | Reject violating quotes, estimate forward curve (median), refit slices, re-detect. Pluggable: `repair(use_ssvi=True)` or `repair(use_sabr=True)`. |
+| Surface interpolation | `surface/` | `FittedSurface`, `iv_at(K,T)` (linear-in-T total-variance, per-slice forwards). `PortfolioGreeks`, `bucketed_greeks`. `spot_bump_analysis`, `vol_bump_analysis`, `parallel_vega_pnl`. |
+| Dupire local vol | `pricing/local_vol.py` | Gatheral SSVI-compatible strip-out via finite differences, flat-vol benchmark, calendar-arb guard. |
+| Surface dynamics | `dynamics.py` | `SurfaceSeries`, SVD-based PCA on parameter matrix, dominant deformation modes (Level/Tilt/Curvature). |
 
-- Represent option contracts with typed models
-- Price European calls and puts using Black-Scholes
-- Compute Greeks
-- Solve implied volatility from market prices
-- Detect static arbitrage violations
-- Fit SVI-style volatility smiles and surfaces
-- Repair noisy surfaces under no-arbitrage constraints
+## Running the demo
 
-The dashboard and API will come later. The first priority is correctness, numerical stability, and clean architecture.
+All modules exercise on synthetic data with no network dependency:
 
-## Current Scope
+```bash
+python demo/full_pipeline_demo.py
+```
 
-The project currently focuses on the Python-only quant core:
+This runs: repair comparison (SVI / eSSVI / SABR) → `iv_at` query grid → portfolio Greeks + spot bumps → Dupire flat-vol benchmark → PCA on a synthetic time series. Full output in ~2 seconds.
 
-- Typed option models
-- Black-Scholes pricing
-- Greeks
-- Implied volatility solver
-- Unit tests
+## Key design conventions
 
-## Planned Features
+- **Boundary vs compute**: Pydantic `BaseModel` at I/O boundaries; frozen `@dataclass(slots=True)` everywhere else (Greeks, violations, fitted slices, scenarios, PCA output).
+- **Report, not raises**: Detection enumerates all violations in one pass.
+- **Median, not mean**: Forward curve uses median across parity pairs.
+- **Pluggable smile models**: `repair(use_ssvi=False, use_sabr=False)` with mutual exclusivity. `to_raw_svi_params()` adapters keep downstream pipeline unchanged.
+- **Constrained calibration**: `calibrate_constrained(points, arb_penalty=100.0)` augments the residual with a butterfly-arb penalty `√penalty·√max(−g(k),0)` on a k-grid.
 
-### Core Pricing
+## Roadmap
 
-- European call and put pricing
-- Continuous dividend yield support
-- Delta, gamma, vega, theta, and rho
-- Numerical tests against known Black-Scholes values
+See `docs/roadmap.md`. Milestones 3 (PCA dynamics), 5 (SABR), and 7 (Dupire)
+are complete. Planned next: backtesting (cross-sectional mispricing signal).
 
-### Implied Volatility
+## Tech stack
 
-- Robust implied volatility solver
-- Brent-style root finding
-- Invalid price handling
-- Round-trip pricing tests
+Python 3.12+, NumPy, SciPy, Pydantic, Pytest.
 
-### Static Arbitrage Detection
-
-- Strike monotonicity checks
-- Butterfly convexity checks
-- Calendar arbitrage checks
-- Put-call parity checks
-- Negative density diagnostics
-
-### SVI Surface Fitting
-
-- SVI total variance parameterization
-- Per-expiry smile fitting
-- Calibration diagnostics
-- Parameter constraints
-
-### Repair Engine
-
-- Quote rejection and filtering
-- Arbitrage-aware surface repair
-- Clean implied volatility grid generation
-- Repair diagnostics and quality metrics
-
-## Tech Stack
-
-- Python
-- NumPy
-- SciPy
-- Pydantic
-- Pytest
-- Pylance (Pyright-based type checking)
-
-Future additions may include:
-
-- FastAPI
-- DuckDB
-- Plotly
-- A TypeScript dashboard
-
-## Project Structure
-
-```text
-arbfree-vol-surface/
-  pyproject.toml
-  README.md
-  src/
-    arbfree_vol/
-      models/
-        option.py
-      pricing/
-        black_scholes.py
-        greeks.py
-        implied_vol.py
-  tests/
-    test_black_scholes.py
-    test_implied_vol.py
+No sklearn — PCA uses `numpy.linalg.svd`. No FastAPI/Streamlit yet.
