@@ -1,4 +1,6 @@
 Project.MD
+/roadmap.md
+
 .vscode/
 .pytest_cache/
 __pycache__/
