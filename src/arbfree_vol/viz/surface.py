@@ -9,6 +9,7 @@ from scipy.interpolate import griddata
 
 from arbfree_vol.repair.report import FittedSlice
 from arbfree_vol.svi.model import svi_total_variance
+from arbfree_vol.surface.interpolate import FittedSurface, iv_at
 
 
 def plot_surface(
@@ -133,6 +134,70 @@ def plot_heatmap_2d(
     ax.set_ylabel("Log-moneyness k")
     ax.set_title(f"{symbol} implied volatility surface "
                  f"({len(ordered)} expiries, {source})")
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_iv_heatmap(
+    fs: FittedSurface,
+    n_strikes: int = 50,
+    n_maturities: int = 50,
+    symbol: str = "SPY",
+) -> Figure:
+    """2-D heatmap of implied volatility over a dense (strike, maturity) grid.
+
+    Uses ``iv_at`` to query the fitted surface at every cell.  Cells
+    outside the surface range (or where ``iv_at`` raises ``ValueError``)
+    are masked as *nan*.
+
+    Parameters
+    ----------
+    fs:
+        Fitted volatility surface.
+    n_strikes:
+        Number of strike grid points.
+    n_maturities:
+        Number of maturity grid points.
+    symbol:
+        Ticker symbol for the plot title.
+
+    Returns
+    -------
+    Figure
+    """
+    if not fs.fitted_slices:
+        raise ValueError("FittedSurface has no slices; cannot render heatmap")
+
+    T_min = fs.fitted_slices[0].expiry_time
+    T_max = fs.fitted_slices[-1].expiry_time
+    maturities = np.linspace(T_min, T_max, n_maturities)
+
+    strikes = np.linspace(fs.spot * 0.8, fs.spot * 1.2, n_strikes)
+
+    # Build iv grid
+    iv_grid = np.full((n_maturities, n_strikes), np.nan)
+    for i_T, T in enumerate(maturities):
+        for i_K, K in enumerate(strikes):
+            try:
+                iv_grid[i_T, i_K] = iv_at(fs, K, T)
+            except ValueError:
+                pass  # leave as nan
+
+    iv_grid = np.ma.masked_invalid(iv_grid)
+
+    fig = Figure(figsize=(11, 7))
+    ax = fig.add_subplot(111)
+
+    mesh = ax.pcolormesh(strikes, maturities, iv_grid,
+                         cmap="plasma", shading="auto")
+
+    cb = fig.colorbar(mesh, ax=ax, shrink=0.7, aspect=25, pad=0.02)
+    cb.set_label("Implied volatility")
+
+    ax.set_xlabel("Strike")
+    ax.set_ylabel("Time to expiry (yrs)")
+    ax.set_title(f"{symbol} implied volatility surface (iv_at)")
 
     fig.tight_layout()
     return fig

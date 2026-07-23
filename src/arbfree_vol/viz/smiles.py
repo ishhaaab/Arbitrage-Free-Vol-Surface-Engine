@@ -1,7 +1,7 @@
 from arbfree_vol.models.surface import VolSurface, get_r, get_q
 from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.repair.report import FittedSlice
+from arbfree_vol.repair.report import FittedSlice, RepairReport
 
 from math import log, exp
 
@@ -120,5 +120,92 @@ def plot_smiles_heatmap(
     ax.set_ylabel("Time to expiry T")
     ax.set_title(f"{symbol} per-slice smiles ({len(T_vals)} expiries)")
 
+    fig.tight_layout()
+    return fig
+
+
+def plot_smile_model_comparison(
+    surface: VolSurface,
+    reports: dict[str, RepairReport],
+    n_k: int = 100,
+    symbol: str = "SPY",
+) -> Figure:
+    """Compare fitted smiles across models for each expiry.
+
+    One subplot per expiry: raw market data as grey scatter, each model's
+    fitted raw-SVI smile as a colored line.  All three models funnel
+    through ``FittedSlice`` (raw SVI params), so the same ``svi_total_variance``
+    evaluation works for every model.
+
+    Parameters
+    ----------
+    surface:
+        Raw ``VolSurface`` containing market quotes.
+    reports:
+        Mapping of model name → ``RepairReport``.
+    n_k:
+        Number of k-grid points for the fitted curves.
+    symbol:
+        Ticker symbol (used in the suptitle).
+
+    Returns
+    -------
+    Figure
+    """
+    # Build per-T raw data from surface
+    raw_by_T: dict[float, list[tuple[float, float]]] = {}
+    for sl in surface.slices:
+        strike_w = slice_total_variance(surface, sl)
+        r = get_r(surface, sl)
+        q = get_q(surface, sl)
+        F = surface.spot * exp((r - q) * sl.expiry_time)
+        pts = [(log(K / F), w) for K, w in strike_w.items()]
+        raw_by_T[sl.expiry_time] = sorted(pts)
+
+    # Build per-model per-T fitted slices lookup
+    model_fits: dict[str, dict[float, FittedSlice]] = {}
+    for name, report in reports.items():
+        model_fits[name] = {fs.expiry_time: fs for fs in report.fitted_slices}
+
+    # Union of all T values
+    all_T: set[float] = set()
+    all_T.update(raw_by_T.keys())
+    for fits in model_fits.values():
+        all_T.update(fits.keys())
+    T_vals = sorted(all_T)
+
+    if not T_vals:
+        raise ValueError("No data to plot")
+
+    model_colors = ["crimson", "royalblue", "forestgreen"]
+
+    n = len(T_vals)
+    fig = Figure(figsize=(12, 4 * n))
+    k_wide = np.linspace(-1.5, 1.5, n_k)
+
+    for idx, T in enumerate(T_vals):
+        ax = fig.add_subplot(n, 1, idx + 1)
+
+        # Raw data scatter
+        if T in raw_by_T:
+            ks_raw, ws_raw = zip(*raw_by_T[T])
+            ax.scatter(ks_raw, ws_raw, color="grey", s=20, alpha=0.7, label="Observed")
+
+        # Model curves
+        for i, (name, fits) in enumerate(model_fits.items()):
+            if T in fits:
+                fs = fits[T]
+                p = fs.params
+                ws = [svi_total_variance(k, p.a, p.b, p.rho, p.m, p.sigma) for k in k_wide]
+                color = model_colors[i % len(model_colors)]
+                ax.plot(k_wide, ws, color=color, linewidth=1.5, label=name)
+
+        ax.set_xlabel("Log-moneyness k")
+        ax.set_ylabel("Total variance w")
+        ax.set_title(f"T= {T:.2f} yr")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    fig.suptitle(f"{symbol} smile model comparison", fontsize=13)
     fig.tight_layout()
     return fig

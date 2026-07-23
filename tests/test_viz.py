@@ -86,3 +86,73 @@ def test_smiles_heatmap_returns_figure() -> None:
     _, r = _two_expiry_surface()
     fig = plot_smiles_heatmap(list(r.fitted_slices))
     assert fig.axes is not None
+
+
+def test_model_comparison_returns_figure() -> None:
+    from arbfree_vol.viz.comparison import plot_model_comparison
+
+    _, r = _two_expiry_surface()
+    fig = plot_model_comparison({"SVI": r, "eSSVI": r})
+    assert fig.axes is not None
+
+
+def test_smile_model_comparison_returns_figure() -> None:
+    from arbfree_vol.viz.smiles import plot_smile_model_comparison
+
+    s, r = _two_expiry_surface()
+    fig = plot_smile_model_comparison(s, {"SVI": r, "eSSVI": r})
+    assert fig.axes is not None
+
+
+def test_iv_heatmap_returns_figure() -> None:
+    from arbfree_vol.viz.surface import plot_iv_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+    fig = plot_iv_heatmap(fs)
+    assert fig.axes is not None
+
+
+def test_dupire_heatmap_returns_figure() -> None:
+    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
+    from arbfree_vol.pricing.local_vol import LocalVolSurface
+
+    lv = LocalVolSurface(
+        strikes=(90, 95, 100, 105, 110),
+        maturities=(0.5, 1.0),
+        grid=((0.2, 0.2, 0.2, 0.2, 0.2),
+              (0.2, 0.2, 0.2, 0.2, 0.2)),
+    )
+    fig = plot_dupire_heatmap(lv)
+    assert fig.axes is not None
+
+
+def test_greeks_heatmap_returns_figure() -> None:
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+    fig = plot_greeks_heatmap(fs, [90, 100, 110], [0.5, 1.0])
+    assert fig.axes is not None
+
+
+def test_scenario_payoff_returns_figure() -> None:
+    from arbfree_vol.viz.risk import plot_scenario_payoff
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.surface.risk import spot_bump_analysis
+    from arbfree_vol.models.option import OptionContract
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+    T = fs.fitted_slices[-1].expiry_time
+    spot = fs.spot
+    positions = [
+        (OptionContract(symbol="X", option_type=OptionType.CALL,
+                        strike=round(spot), expiry_date=_DUMMY),
+         T, 1.0),
+    ]
+    scenarios = spot_bump_analysis(fs, positions, bumps=[-0.05, 0.0, 0.05])
+    fig = plot_scenario_payoff(scenarios)
+    assert fig.axes is not None
