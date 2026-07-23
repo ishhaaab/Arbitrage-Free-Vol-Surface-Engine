@@ -9,10 +9,49 @@ deformations). Built for correctness, numerical stability, and clean architectur
 ## Quick start
 
 ```bash
-pytest tests/ -q                              # 155 tests
+pytest tests/ -q                              # 161 tests
 python demo/full_pipeline_demo.py             # end-to-end demo (no network)
 python examples/yfinance_demo.py              # live SPY demo (needs network)
 ```
+
+## Live Showcase (SPY options)
+
+Run `python examples/yfinance_demo.py` to fetch live SPY options, repair with all
+three smile models (SVI / eSSVI / SABR), interpolate the fitted surface, extract
+Dupire local volatility, compute portfolio Greeks, run spot-bump scenarios, and
+produce 8 plots.
+
+### 3D implied volatility surface
+
+![SPY 3D surface](examples/yfinance_demo_surface.png)
+
+### Smile model comparison (SVI / eSSVI / SABR)
+
+![Smile model comparison](examples/yfinance_demo_smiles_comparison.png)
+
+### Model fit quality comparison
+
+![Model fit comparison](examples/yfinance_demo_model_comparison.png)
+
+### Implied vol heatmap (via iv_at)
+
+![IV heatmap](examples/yfinance_demo_iv_heatmap.png)
+
+### Dupire local volatility
+
+![Dupire local vol](examples/yfinance_demo_dupire.png)
+
+### Portfolio Greeks (delta / gamma / vega)
+
+![Greeks heatmap](examples/yfinance_demo_greeks.png)
+
+### Spot-bump scenario P&L
+
+![Scenario P&L](examples/yfinance_demo_scenario.png)
+
+### Repair comparison (before vs after)
+
+![Repair comparison](examples/yfinance_demo_repair.png)
 
 ## What's built
 
