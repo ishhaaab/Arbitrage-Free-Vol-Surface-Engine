@@ -268,8 +268,7 @@ def dupire(fs: FittedSurface,
     Raises
     ------
     ValueError
-        If grid dimensions are too small, or if calendar arbitrage is
-        detected in any cell (propagated from ``dupire_at``).
+        If grid dimensions are too small.
     """
     if len(strikes) < 3:
         raise ValueError(
@@ -284,7 +283,10 @@ def dupire(fs: FittedSurface,
     for T in maturities:
         row: list[float] = []
         for K in strikes:
-            val = dupire_at(fs, K, T, dT)
+            try:
+                val = dupire_at(fs, K, T, dT)
+            except ValueError:
+                val = nan  # calendar-arb cell; mark undefined, don't abort
             row.append(val)
         grid.append(tuple(row))
 
