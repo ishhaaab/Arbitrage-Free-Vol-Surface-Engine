@@ -73,15 +73,19 @@ def realize_trade_pnl(
     r = trade.risk_free
     q = trade.div_yield
 
-    # ---- filter and validate price path ----
-    trading_dates = sorted(
-        d for d in price_path if entry_date <= d <= expiry_date
-    )
-    if not trading_dates or trading_dates[0] != entry_date:
+    # ---- find the effective entry date (most recent close <= entry_date) ----
+    prior_dates = sorted(d for d in price_path if d <= entry_date)
+    if not prior_dates:
         raise ValueError(
-            f"price_path must include entry_date={entry_date}; "
-            f"got dates {list(price_path)}"
+            f"price_path has no date on or before entry_date={entry_date}; "
+            f"earliest available: {min(price_path) if price_path else 'none'}"
         )
+    effective_entry = prior_dates[-1]
+
+    # ---- build trading dates ----
+    trading_dates = [effective_entry] + sorted(
+        d for d in price_path if effective_entry < d <= expiry_date
+    )
 
     # settlement date = last available date <= expiry_date
     settlement_date = trading_dates[-1]

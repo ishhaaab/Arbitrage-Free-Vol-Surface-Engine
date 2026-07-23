@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+_LOOKBACK_DAYS: int = 5
+"""Number of extra calendar days to look back when fetching prices,
+so that the price path includes a close even when ``start`` (today)
+has no yfinance data yet (before market close)."""
+
 
 def fetch_underlying_path(
     symbol: str, start: date, end: date
@@ -42,7 +47,10 @@ def fetch_underlying_path(
 
     ticker = yf.Ticker(symbol)
     # yfinance end is exclusive; add a day to include the final date
-    df = ticker.history(start=start, end=end + timedelta(days=1))
+    df = ticker.history(
+        start=start - timedelta(days=_LOOKBACK_DAYS),
+        end=end + timedelta(days=1),
+    )
 
     if df.empty:
         raise ValueError(

@@ -365,18 +365,39 @@ class TestRealizeTradePnL:
     def test_empty_path_raises(self) -> None:
         """Empty price_path → ValueError."""
         trade = self._make_trade()
-        with pytest.raises(ValueError, match="price_path must include entry_date"):
+        with pytest.raises(ValueError, match="price_path has no date on or before entry_date"):
             realize_trade_pnl(trade, {})
 
     # ------------------------------------------------------------------
-    def test_missing_entry_date_raises(self) -> None:
-        """Path missing entry_date → ValueError."""
+    def test_no_prior_date_raises(self) -> None:
+        """Path with only dates after entry_date → ValueError (no prior date)."""
         trade = self._make_trade()
         # Path with only dates after entry_date
         later = _DUMMY_DATE + timedelta(days=1)
         path = {later: 100.0}
-        with pytest.raises(ValueError, match="price_path must include entry_date"):
+        with pytest.raises(ValueError, match="price_path has no date on or before entry_date"):
             realize_trade_pnl(trade, path)
+
+    # ------------------------------------------------------------------
+    def test_entry_date_missing_uses_prior_close(self) -> None:
+        """Path lacks entry_date but has prior date → uses prior close as effective start."""
+        trade = self._make_trade(entry_price=5.0)
+        expiry_date = trade.signal.expiry_date
+        one_day_before = _DUMMY_DATE - timedelta(days=1)
+        # Path: starts one day before entry_date, goes to expiry
+        path: dict[date, float] = {}
+        d = one_day_before
+        while d <= expiry_date:
+            path[d] = 100.0
+            d += timedelta(days=1)
+        # entry_date is NOT in the path
+        del path[_DUMMY_DATE]
+
+        pnl = realize_trade_pnl(trade, path)
+        # Should not raise; uses one_day_before as effective entry
+        assert math.isfinite(pnl.realized_pnl)
+        assert pnl.realized_pnl == approx(pnl.option_pnl + pnl.hedge_pnl)
+        assert pnl.hold_days == expiry_date.toordinal() - _DUMMY_DATE.toordinal()
 
     # ------------------------------------------------------------------
     def test_hedge_sign_convention(self) -> None:
@@ -578,7 +599,7 @@ class TestFetchUnderlyingPath:
         assert path[date(2030, 6, 20)] == approx(97.0)
         # Verify history was called with the correct arguments
         call_kwargs = mock_ticker.history.call_args[1]
-        assert call_kwargs["start"] == start
+        assert call_kwargs["start"] == start - timedelta(days=5)
         # end should be bumped by 1 day (inclusive)
         assert call_kwargs["end"] == end + timedelta(days=1)
 
