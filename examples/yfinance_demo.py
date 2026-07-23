@@ -15,6 +15,7 @@ except ImportError:
     print("yfinance is required.  Install with:  pip install yfinance")
     raise SystemExit(1)
 
+from collections import Counter
 from datetime import date
 
 import numpy as np
@@ -43,8 +44,10 @@ print(f"  Expiries: {T_count}")
 print(f"  Spot={surface.spot:.2f}, r={surface.risk_free:.4f}, "
       f"q={surface.div_yield:.4f}")
 if rejected:
-    rules = {r.rule.value for r in rejected}
-    print(f"  Rejection reasons: {rules}")
+    rule_counts = Counter(r.rule.value for r in rejected)
+    print(f"  Rejection breakdown (first rule hit per quote):")
+    for rule, count in rule_counts.most_common():
+        print(f"    {rule}: {count} ({count / len(rejected) * 100:.1f}%)")
 
 # ##########################################################################
 # 2. Repair with all 3 models
