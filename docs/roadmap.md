@@ -92,26 +92,24 @@ Study how the volatility surface evolves through time.
 
 ## Milestone 4 — Interactive Dashboard
 
-**Status:** Not started (deprioritized; in favor of CLI/SABR/Dupire/PCA work in milestones 3/5/7)
+**Status:** Not started
 
-Replace static Matplotlib figures with an interactive interface.
+Refreshed plan: Streamlit-based single-page app.
 
 ### Features
 
-- Upload CSV or fetch data from `yfinance`
-- Interactive 3D volatility surface
-- 2D heatmap
-- Hover inspection showing:
-  - log-moneyness (`k`)
-  - maturity (`T`)
-  - implied volatility
-- Toggle between SVI and eSSVI
-- Interactive cleaning threshold sliders
+- Fetch SPY options from yfinance with a click, or upload CSV
+- Toggle between SVI / eSSVI / SABR with radio buttons
+- Interactive 3D Plotly surface with hover tooltips (k, T, IV, Dupire)
+- 2D heatmap with hover inspection
+- Sliders for spot bump scenarios with live P&L bar chart
+- Greeks heatmap with dropdown to select Greek
+- Auto-refresh button to pull fresh market data
 
 ### Files
 
 - `dashboard/app.py`
-- `dashboard/requirements.txt`
+- `dashboard/requirements.txt` (streamlit, plotly)
 
 ---
 
@@ -230,6 +228,51 @@ Write the core project documentation.
 
 ---
 
+## Milestone 10 — Interactive Dashboard (Streamlit)
+
+**Status:** Not started
+
+Replace the static matplotlib PNG output with an interactive web app.
+
+### Features
+
+- Fetch SPY options from yfinance with a click, or upload CSV
+- Toggle between SVI / eSSVI / SABR with radio buttons
+- Interactive 3D Plotly surface with hover tooltips (k, T, IV, Dupire)
+- 2D heatmap with hover inspection
+- Sliders for spot bump scenarios with live P&L bar chart
+- Greeks heatmap with dropdown to select Greek
+- Auto-refresh button to pull fresh market data
+
+### Files
+
+- `dashboard/app.py`
+- `dashboard/requirements.txt` (streamlit, plotly)
+
+---
+
+## Milestone 11 — Snapshot Collector for Real-Data PCA
+
+**Status:** Not started
+
+Build a lightweight data collector to accumulate real option-chain
+snapshots over time for surface-dynamics PCA.
+
+### Goals
+
+- `collect_snapshot(symbol)` — fetch current chain, run repair, save the fitted-slice params + date to a local DuckDB or CSV
+- Run once daily (cron / Task Scheduler) for 30+ days
+- After sufficient snapshots, run `dynamics.pca_deformations` on real data
+- Produce a real-data PCA decomposition plot alongside the synthetic demo
+- Compare explained-variance ratios against the synthetic benchmark
+
+### Files
+
+- `arbfree_vol/collect/snapshot.py`
+- `notebooks/real_pca_demo.ipynb`
+
+---
+
 # Progress Summary
 
 | Milestone | Status |
@@ -237,9 +280,11 @@ Write the core project documentation.
 | CLI + Configuration | Not started |
 | Notebook | Not started |
 | Surface Dynamics (PCA) | Completed |
-| Interactive Dashboard | Not started (deprioritized) |
+| Interactive Dashboard | Not started |
 | SABR | Completed |
 | FastAPI + DuckDB | Not started |
 | Local Volatility (Dupire) | Completed |
 | Documentation | Not started |
 | Mispricing Backtest | Not started |
+| Interactive Dashboard (Streamlit) | Not started |
+| Snapshot Collector (Real-Data PCA) | Not started |
