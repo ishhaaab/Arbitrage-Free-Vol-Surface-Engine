@@ -9,9 +9,10 @@ deformations). Built for correctness, numerical stability, and clean architectur
 ## Quick start
 
 ```bash
-pytest tests/ -q                              # 161 tests
+pytest tests/ -q                              # 186 tests
 python demo/full_pipeline_demo.py             # end-to-end demo (no network)
 python examples/yfinance_demo.py              # live SPY demo (needs network)
+python examples/backtest_demo.py              # live SPY mispricing backtest
 ```
 
 ## Live Showcase (SPY options)
@@ -66,6 +67,7 @@ produce 8 plots.
 | Surface interpolation | `surface/` | `FittedSurface`, `iv_at(K,T)` (linear-in-T total-variance, per-slice forwards). `PortfolioGreeks`, `bucketed_greeks`. `spot_bump_analysis`, `vol_bump_analysis`, `parallel_vega_pnl`. |
 | Dupire local vol | `pricing/local_vol.py` | Gatheral SSVI-compatible strip-out via finite differences, flat-vol benchmark, calendar-arb guard. |
 | Surface dynamics | `dynamics.py` | `SurfaceSeries`, SVD-based PCA on parameter matrix, dominant deformation modes (Level/Tilt/Curvature). |
+| Backtest | `backtest/` | Cross-sectional mispricing backtest: detect `|market_IV − model_IV| > threshold`, delta-hedged trades (frozen-vol), Sharpe / hit-rate / drawdown / P&L percentiles |
 
 ## Running the demo
 
@@ -87,8 +89,9 @@ This runs: repair comparison (SVI / eSSVI / SABR) → `iv_at` query grid → por
 
 ## Roadmap
 
-See `docs/roadmap.md`. Milestones 3 (PCA dynamics), 5 (SABR), and 7 (Dupire)
-are complete. Planned next: backtesting (cross-sectional mispricing signal).
+See `docs/roadmap.md`. Milestones 3 (PCA dynamics), 5 (SABR), 7 (Dupire),
+and 9 (Backtest — Design B) are complete. Planned next: rolling daily-refit
+backtest (Milestone 12).
 
 ## Tech stack
 

@@ -211,7 +211,7 @@ Write the core project documentation.
 
 ## Milestone 9 — Mispricing Backtest (Cross-Sectional Signal Research)
 
-**Status:** Not started
+**Status:** Completed (Design B — single-snapshot cohort)
 
 ### Goals
 
@@ -224,7 +224,19 @@ Write the core project documentation.
 ### Files
 
 - `arbfree_vol/backtest/`
-- `notebooks/backtest_demo.ipynb`
+- `src/arbfree_vol/viz/backtest.py`
+- `examples/backtest_demo.py`
+
+### Implementation notes
+
+- Single-cohort frozen-vol delta-hedge backtest (`arbfree_vol/backtest/`). Package modules: `types.py` (`MispricingSignal`, `Trade`, `TradePnL`, `BacktestResult`), `signal.py` (`detect_mispricing`), `pnl.py` (`realize_trade_pnl` — frozen-vol daily delta hedge), `prices.py` (`fetch_underlying_path`), `engine.py` (`run_backtest` — orchestration + aggregation).
+- Signal detection: `|market_IV - model_IV| > threshold` (default 1 vol point). Side = +1 (long underpriced), -1 (short overpriced).
+- Metrics: Sharpe (per-trade mean / std), hit rate, max drawdown (peak-to-trough on expiry-ordered cumulative P&L), P5/P50/P95 percentiles.
+- `BacktestResult` is a frozen `@dataclass(slots=True)` with `trades` and `pnls` as tuples.
+- Visualization: `viz/backtest.py` — 4 figures: P&L distribution histogram, cumulative P&L with max-drawdown highlight, mispricing-vs-P&L scatter by side, summary metrics bar chart (2×2 grid).
+- Live SPY demo: `examples/backtest_demo.py` (yfinance → repair → run_backtest → 4 PNGs).
+- All viz functions handle `n_trades == 0` gracefully (render "No trades" text).
+- 5 new smoke tests in `tests/test_viz.py` (4 normal + 1 empty-result).
 
 ---
 
@@ -273,6 +285,27 @@ snapshots over time for surface-dynamics PCA.
 
 ---
 
+## Milestone 12 — Rolling Backtest with Daily Refit
+
+**Status:** Not started
+
+Extend the single-cohort backtest to a true rolling daily-refit design.
+
+### Goals
+
+- True rolling entry backtest with daily surface refit.
+- Requires historical option-chain snapshots (blocked on M11 snapshot collector or a paid data source).
+- Compare frozen-vol hedge vs daily-refit hedge.
+- Multi-cohort Sharpe / drawdown / P&L distribution aggregated across all entry dates.
+- Files: `arbfree_vol/backtest/rolling.py`, `notebooks/rolling_backtest_demo.ipynb`.
+
+### Files
+
+- `arbfree_vol/backtest/rolling.py`
+- `notebooks/rolling_backtest_demo.ipynb`
+
+---
+
 # Progress Summary
 
 | Milestone | Status |
@@ -285,6 +318,7 @@ snapshots over time for surface-dynamics PCA.
 | FastAPI + DuckDB | Not started |
 | Local Volatility (Dupire) | Completed |
 | Documentation | Not started |
-| Mispricing Backtest | Not started |
+| Mispricing Backtest | Completed (Design B) |
 | Interactive Dashboard (Streamlit) | Not started |
 | Snapshot Collector (Real-Data PCA) | Not started |
+| Rolling Backtest (Daily Refit) | Not started |

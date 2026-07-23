@@ -48,6 +48,9 @@ if rejected:
     print(f"  Rejection breakdown (first rule hit per quote):")
     for rule, count in rule_counts.most_common():
         print(f"    {rule}: {count} ({count / len(rejected) * 100:.1f}%)")
+    if "zero_price" in rule_counts:
+        print(f"  (zero_price = yfinance 'no quote' rows with bid=ask=0; "
+              f"not real violations)")
 
 # ##########################################################################
 # 2. Repair with all 3 models
