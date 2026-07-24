@@ -15,9 +15,9 @@ from arbfree_vol.ssvi.model import gatheral_jacquier_condition, ssvi_w
 def _safe_psi(theta: float, rho: float, fraction: float = 0.5) -> float:
     """Return psi safely inside the GJ bound: psi = fraction * psi_max.
 
-    psi_max = 2 / (theta * (1 + |rho|)).
+    psi_max = 4 / (theta * (1 + |rho|)).
     """
-    return fraction * 2.0 / (theta * (1.0 + abs(rho)))
+    return fraction * 4.0 / (theta * (1.0 + abs(rho)))
 
 
 def test_benchmark_ssvi_gj_range() -> None:

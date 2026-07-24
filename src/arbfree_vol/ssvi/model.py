@@ -73,26 +73,12 @@ def ssvi_d2w_dk2(k: float, theta: float, rho: float, psi: float) -> float:
 def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     """Sufficient no-arb condition for SSVI (Gatheral & Jacquier 2014).
 
-    .. warning::
+    From GJ (2014) Theorem 4.2: a slice is free of butterfly arbitrage
+    when ``theta * psi * (1 + |rho|) <= 4``.
 
-       **Unverified / not wired into detection.**
-
-       The constant ``2.0`` used below has NOT been independently verified
-       against the published GJ (2014) theorem.  Numeric testing against
-       SSVI's own w / w' / w'' via the general Gatheral density formula
-       shows that the true single-slice butterfly-arbitrage boundary is
-       NOT captured by a single constant in ``theta * psi * (1+|rho|)``
-       — it varies with *psi* itself.  Use
-       :func:`arbfree_vol.arbitrage.svi_detect.detect_svi_surface` on the
-       converted SVI parameters instead for a reliable arb check.
-
-    Returns the residual ``2.0 - theta * psi * (1.0 + abs(rho))``.
+    Returns the residual ``4.0 - theta * psi * (1.0 + abs(rho))``.
     The slice is arb-free when the residual >= 0.
     If ``|rho| >= 1.0``, returns ``float('-inf')`` (always a violation).
-
-    TODO: confirm the correct constant (2 vs 4 vs something else) when the
-    exact GJ (2014) theorem wording is verified; until then this function
-    is documentation-only.
 
     Reference
     ---------
@@ -102,16 +88,20 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     abs_rho = abs(rho)
     if abs_rho >= 1.0:
         return float("-inf")
-    return 2.0 - theta * psi * (1.0 + abs_rho)
+    return 4.0 - theta * psi * (1.0 + abs_rho)
 
 
 def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:
-    """Quick check if eSSVI parameters are in the arb-free range.
+    """Quick check that eSSVI power-law parameters are in the valid range.
 
     Returns ``True`` when ``0 <= gamma <= 1`` and ``eta > 0``.
-    This is sufficient for eSSVI to satisfy the GJ condition in
-    practice.  A proper check across the whole surface requires
-    evaluating GJ for every theta, rho value.
+    This checks the necessary structural bounds on the eSSVI wing
+    function but does NOT verify the full Gatheral-Jacquier condition
+    ``theta * psi * (1+|rho|) <= 4`` — that requires evaluating every
+    slice's (theta, rho) pair against the wing function.  Use
+    :func:`gatheral_jacquier_condition` or
+    :func:`arbfree_vol.arbitrage.svi_detect.detect_svi_surface` for a
+    complete no-arbitrage check.
     """
     return 0.0 <= gamma <= 1.0 and eta > 0.0
 

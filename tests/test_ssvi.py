@@ -153,22 +153,22 @@ def test_essvi_arb_safe_default_params() -> None:
 
 
 def test_gj_safe_params_positive_residual() -> None:
-    # theta=0.04, rho=0.0, psi=0.5  -> 2 - 0.04*0.5*1 = 1.98
+    # theta=0.04, rho=0.0, psi=0.5  -> 4 - 0.04*0.5*1 = 3.98
     residual = gatheral_jacquier_condition(0.04, 0.0, 0.5)
     assert residual >= 0
-    assert residual == approx(1.98, abs=1e-12)
+    assert residual == approx(3.98, abs=1e-12)
 
 
 def test_gj_boundary_near_zero() -> None:
-    # Safe: theta=0.25, rho=0.5, psi=4 -> 2 - 0.25*4*1.5 = 0.5
+    # Safe:   theta=0.25, rho=0.5, psi=4  -> 4 - 0.25*4*1.5 = 2.5
     r1 = gatheral_jacquier_condition(0.25, 0.5, 4.0)
     assert r1 >= 0
-    assert r1 == approx(0.5, abs=1e-12)
+    assert r1 == approx(2.5, abs=1e-12)
 
-    # Unsafe: theta=0.4, rho=0.5, psi=4 -> 2 - 0.4*4*1.5 = -0.4
-    r2 = gatheral_jacquier_condition(0.4, 0.5, 4.0)
+    # Unsafe: theta=0.25, rho=0.5, psi=12 -> 4 - 0.25*12*1.5 = -0.5
+    r2 = gatheral_jacquier_condition(0.25, 0.5, 12.0)
     assert r2 < 0
-    assert r2 == approx(-0.4, abs=1e-12)
+    assert r2 == approx(-0.5, abs=1e-12)
 
 
 def test_gj_rho_at_boundary_returns_neg_inf() -> None:

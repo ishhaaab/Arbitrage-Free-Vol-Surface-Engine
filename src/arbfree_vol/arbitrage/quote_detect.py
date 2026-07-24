@@ -9,10 +9,15 @@ import numpy as np
 
 # helper funcs:
 
-def _forward(
+def _parity_rhs(
         surface: VolSurface,
         s: ExpirySlice,
-        strike: float) -> float: #returns the fwd price: F = Se^{−qT} − Ke^{−rT}
+        strike: float) -> float:
+    """Present value of (F - K) under put-call parity.
+
+    Returns e^{-rT}(F - K) = S * e^{-qT} - K * e^{-rT},
+    which is the right-hand side of C - P = e^{-rT}(F - K).
+    """
 
     r = get_r(surface, s)
     q = get_q(surface, s)
@@ -77,7 +82,7 @@ def _check_parity(
             parity_rhs = exp(-r * s.expiry_time) * (F - K)
         else:
             # Fall back to surface-level r/q
-            parity_rhs = _forward(surface, s, K)
+            parity_rhs = _parity_rhs(surface, s, K)
 
         # compute a market-aware threshold
         if C_q.bid is not None and C_q.ask is not None and P_q.bid is not None and P_q.ask is not None:
@@ -117,11 +122,11 @@ def _normalize_to_calls(
         if OptionType.CALL in sides:    # if a call exists for some K, use it
             call_price= sides[OptionType.CALL]
             if OptionType.PUT in sides: # also have a put -> average with parity-implied call
-                parity_call= sides[OptionType.PUT] + _forward(surface, s, strike)
+                parity_call= sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
                 call_price= (call_price + parity_call) / 2.0
 
         else:   # no call exists, convert put to call via put-call parity
-            call_price= sides[OptionType.PUT] + _forward(surface, s, strike)
+            call_price= sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
 
         calls.append((strike, call_price))
 
