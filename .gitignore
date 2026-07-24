@@ -1,10 +1,9 @@
-Project.MD
-/roadmap.md
-
-.vscode/
-.pytest_cache/
+/docs
+.*/
 __pycache__/
 *.egg-info/
-.memories/
-*.png
+/plots
+AGENTS.md
 !examples/*.png
+examples/essvi*.png
+!roadmap.md
