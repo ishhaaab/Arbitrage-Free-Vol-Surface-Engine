@@ -73,12 +73,26 @@ def ssvi_d2w_dk2(k: float, theta: float, rho: float, psi: float) -> float:
 def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     """Sufficient no-arb condition for SSVI (Gatheral & Jacquier 2014).
 
-    The sufficient no-butterfly-arbitrage condition for SSVI is:
-        theta * psi * (1 + |rho|) <= 2
+    .. warning::
+
+       **Unverified / not wired into detection.**
+
+       The constant ``2.0`` used below has NOT been independently verified
+       against the published GJ (2014) theorem.  Numeric testing against
+       SSVI's own w / w' / w'' via the general Gatheral density formula
+       shows that the true single-slice butterfly-arbitrage boundary is
+       NOT captured by a single constant in ``theta * psi * (1+|rho|)``
+       — it varies with *psi* itself.  Use
+       :func:`arbfree_vol.arbitrage.svi_detect.detect_svi_surface` on the
+       converted SVI parameters instead for a reliable arb check.
 
     Returns the residual ``2.0 - theta * psi * (1.0 + abs(rho))``.
     The slice is arb-free when the residual >= 0.
     If ``|rho| >= 1.0``, returns ``float('-inf')`` (always a violation).
+
+    TODO: confirm the correct constant (2 vs 4 vs something else) when the
+    exact GJ (2014) theorem wording is verified; until then this function
+    is documentation-only.
 
     Reference
     ---------
@@ -105,19 +119,20 @@ def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:
 def to_raw_svi_params(theta: float, rho: float, psi: float) -> tuple[float, float, float, float, float]:
     """Convert SSVI (theta, rho, psi) into raw SVI (a, b, rho, m, sigma).
 
-    The mapping is exact for m=0::
+    The mapping is exact across all k:
         b   = theta * psi / 2
-        sigma = 1 / psi
-        a   = theta - b * sigma
-        m   = 0
+        m   = -rho / psi
+        sigma = sqrt(1 - rho**2) / psi
+        a   = (theta / 2) * (1 - rho**2)
+        rho passed through unchanged
 
     This lets us reuse the existing SVI pipeline (detection, plots)
     on an SSVI-fitted surface.
     """
-    b= theta * psi / 2.0
+    b = theta * psi / 2.0
     if psi <= 0:
         raise ValueError("psi must be positive")
-    sigma= 1.0 / psi
-    a= theta - b * sigma
-    m= 0.0
+    m = -rho / psi
+    sigma = (1.0 - rho * rho) ** 0.5 / psi
+    a = (theta / 2.0) * (1.0 - rho * rho)
     return a, b, rho, m, sigma

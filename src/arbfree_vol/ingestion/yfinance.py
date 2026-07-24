@@ -4,6 +4,7 @@ Attempts to source real risk-free rates and dividend yields.  Falls
 back to pre-pass forward-curve estimation when rates are unavailable.
 """
 
+import logging
 import math
 from datetime import date
 from typing import Any
@@ -14,6 +15,8 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve
 from arbfree_vol.ingestion.cleaning import clean_quotes, RejectionRecord
+
+_logger = logging.getLogger(__name__)
 
 
 def _get_risk_free_rate() -> float | None:
@@ -28,7 +31,7 @@ def _get_risk_free_rate() -> float | None:
         if rate is not None and isinstance(rate, (int, float)) and rate > 0:
             return rate / 100.0  # convert percent to decimal
     except Exception:
-        pass
+        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
     return None
 
 
@@ -45,12 +48,12 @@ def _get_dividend_yield(ticker: yf.Ticker) -> float | None:
             q = float(q)
             # yfinance sometimes returns percent (1.01 for 1.01%) and
             # sometimes fraction (0.0101).  A yield above 50% is
-            # definitely in percent — divide by 100.
+            # definitely in percent then divide by 100.
             if q > 0.50:
                 q /= 100.0
             return q
     except Exception:
-        pass
+        _logger.warning("Failed to fetch dividend yield", exc_info=True)
     return None
 
 
@@ -115,7 +118,7 @@ def fetch_chain(
     r = _get_risk_free_rate()
     q = _get_dividend_yield(ticker)
     if r is None or q is None:
-        # fallback — detect_with_forward() will correct via pre-pass
+        # fallback: detect_with_forward() will correct via pre-pass
         r = r or 0.05
         q = q or 0.0
 
@@ -125,7 +128,7 @@ def fetch_chain(
         info = ticker.info or {}
         spot = info.get("regularMarketPrice") or info.get("previousClose")
     except Exception:
-        pass
+        _logger.warning(f"Failed to fetch spot price for {symbol!r}", exc_info=True)
     if spot is None or not isinstance(spot, (int, float)):
         raise ValueError(f"Could not fetch spot price for {symbol!r}")
 

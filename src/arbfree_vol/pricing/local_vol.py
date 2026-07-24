@@ -14,7 +14,7 @@ local variance from total variance :math:`w(K,T) = \\sigma_\\text{imp}^2 T`:
     \\sigma_\\text{loc}^2(K,T) =
     \\frac{ \\partial_T w }
          { 1 - \\frac{k}{w}\\partial_k w
-           + \\frac14\\bigl(-\\frac1{\\sqrt{w}} - 1 + \\frac{k^2}{w}\\bigr)
+           + \\frac14\\bigl(-\\frac14 - \\frac1{w} + \\frac{k^2}{w^2}\\bigr)
              (\\partial_k w)^2
            + \\frac12 \\partial_{kk} w }
 
@@ -39,21 +39,20 @@ import numpy as np
 
 from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at
 
-# ---------------------------------------------------------------------------
-# Module-level tolerances (no-hardcoding rule)
-# ---------------------------------------------------------------------------
+
+# Module-level tolerances  
+
 _FD_T_DEFAULT: float = 1e-3       # default finite-difference step in T (years)
 _FD_K_DEFAULT: float = 1e-3       # default absolute strike step (used when
                                   # caller does not pass dK explicitly)
-_DENOM_MIN: float = 1e-10         # denominator values ≤ this → local-vol
+_DENOM_MIN: float = 1e-10         # denominator values ≤ this => local-vol
                                   # undefined (return nan)
-_CAL_ARB_TOL: float = 0.0         # dw/dT ≤ tol → calendar arbitrage → raise
+_CAL_ARB_TOL: float = 0.0         # dw/dT ≤ tol => calendar arbitrage => raise
 _T_MIN: float = 1e-4              # absolute tiny threshold for T near zero
 
 
-# ---------------------------------------------------------------------------
-# LocalVolSurface — compute boundary type (frozen dataclass, no Pydantic)
-# ---------------------------------------------------------------------------
+
+# LocalVolSurface to compute boundary type  
 @dataclass(frozen=True, slots=True)
 class LocalVolSurface:
     """Frozen container for a Dupire local-volatility grid.
@@ -73,9 +72,8 @@ class LocalVolSurface:
     grid: tuple[tuple[float, ...], ...]
 
 
-# ---------------------------------------------------------------------------
-# Forward-curve interpolation (local helper)
-# ---------------------------------------------------------------------------
+
+# Forward-curve interpolation 
 def _forward_at(fs: FittedSurface, T: float) -> float:
     """Interpolate the forward price linearly in *T* from *forward_curve*.
 
@@ -86,9 +84,8 @@ def _forward_at(fs: FittedSurface, T: float) -> float:
     return float(np.interp(T, expiries, forwards))
 
 
-# ---------------------------------------------------------------------------
+
 # Finite-difference helpers
-# ---------------------------------------------------------------------------
 def _dw_dT(fs: FittedSurface, K: float, T: float,
            dT: float = _FD_T_DEFAULT) -> float:
     """First partial derivative of total variance w.r.t. time *T*.
@@ -123,7 +120,7 @@ def _dw_dk(fs: FittedSurface, K: float, T: float, F_T: float,
     Uses central difference in strike space, then converts the step to
     log-moneyness units.
     """
-    # Very low / zero strike — forward difference
+    # Very low / zero strike: forward difference
     K_min = dK  # effective minimum K for central diff
     if K - dK <= 0.0:
         kp = log((K + dK) / F_T)
@@ -166,9 +163,7 @@ def _d2w_dk2(fs: FittedSurface, K: float, T: float, F_T: float,
     return (wp - 2.0 * w0 + wm) / (dk * dk)
 
 
-# ---------------------------------------------------------------------------
-# Dupire local volatility — single point
-# ---------------------------------------------------------------------------
+# Dupire local volatility (single point)
 def dupire_at(fs: FittedSurface, K: float, T: float,
               dT: float = _FD_T_DEFAULT) -> float:
     """Dupire local volatility at a single (strike, time) point.
@@ -212,7 +207,7 @@ def dupire_at(fs: FittedSurface, K: float, T: float,
             "Dupire local volatility undefined."
         )
 
-    # --- moneyness derivatives ---
+    # moneyness derivatives:
     # dK scales with strike at 0.1% relative (K * 1e-3); absolute floor
     # _FD_K_DEFAULT for very small strikes where relative step would underflow.
     dK = max(_FD_K_DEFAULT, K * _FD_K_DEFAULT)
@@ -222,10 +217,9 @@ def dupire_at(fs: FittedSurface, K: float, T: float,
 
     d2wdk2 = _d2w_dk2(fs, K, T, F_T, dK)
 
-    # --- Dupire denominator ---
-    sqrt_w = sqrt(w)
+    # Dupire denominator
     term2 = -(k / w) * dwdk
-    term3 = 0.25 * (-1.0 / sqrt_w - 1.0 + (k * k) / w) * (dwdk * dwdk)
+    term3 = 0.25 * (-0.25 - 1.0 / w + (k * k) / (w * w)) * (dwdk * dwdk)
     term4 = 0.5 * d2wdk2
     denominator = 1.0 + term2 + term3 + term4
 
@@ -239,9 +233,9 @@ def dupire_at(fs: FittedSurface, K: float, T: float,
     return sqrt(sigma_loc_sq)
 
 
-# ---------------------------------------------------------------------------
-# Dupire local volatility — full grid
-# ---------------------------------------------------------------------------
+
+# Dupire local volatility (full grid)
+
 def dupire(fs: FittedSurface,
            strikes: list[float],
            maturities: list[float],

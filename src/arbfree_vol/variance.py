@@ -11,8 +11,15 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
     """Maps each quoted strike in the slice to its total variance w = sigma**2 * T.
 
     Quotes whose price admits no implied vol (arb-violating) are dropped.
+
+    When both a call and a put survive cleaning at the same strike, the
+    per-strike value is the *average* of the two independently-computed
+    total variances — both sides should agree under put-call parity, and
+    averaging reduces quote noise.
     """
-    out: dict[float, float] = {}
+    # accumulate (sum, count) per strike; average at the end so that
+    # both call and put contribute when both are present.
+    acc: dict[float, list[float]] = {}
 
     for q in s.quotes:
         iv_input = ImpliedVolInput(
@@ -31,6 +38,10 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
 
         sigma = implied_vol(iv_input)
         if sigma is not None:
-            out[q.strike] = sigma**2 * s.expiry_time
+            w = sigma ** 2 * s.expiry_time
+            if q.strike not in acc:
+                acc[q.strike] = []
+            acc[q.strike].append(w)
 
-    return out
+    # average call and put when both present
+    return {strike: sum(values) / len(values) for strike, values in acc.items()}

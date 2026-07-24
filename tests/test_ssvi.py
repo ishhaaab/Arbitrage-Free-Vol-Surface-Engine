@@ -115,14 +115,29 @@ def test_ssvi_d2w_dk2_at_atm() -> None:
 
 def test_to_raw_svi_atm_value() -> None:
     # After mapping, the raw SVI formula at k=0 should give theta.
-    a, b, rho, m, sigma = to_raw_svi_params(0.04, -0.4, 0.5)
+    theta, rho_val, psi = 0.04, -0.4, 0.5
+    a, b, rho, m, sigma = to_raw_svi_params(theta, rho_val, psi)
     w0 = svi_total_variance(0.0, a, b, rho, m, sigma)
-    assert w0 == approx(0.04, abs=1e-10)
-    # Also: b = theta*psi/2 and sigma = 1/psi by construction.
-    assert b == approx(0.04 * 0.5 / 2.0, abs=1e-12)
-    assert sigma == approx(1.0 / 0.5, abs=1e-12)
-    assert m == 0.0
-    assert rho == -0.4
+    assert w0 == approx(theta, abs=1e-10)
+    # Exact mapping: b = theta*psi/2, m = -rho/psi,
+    # sigma = sqrt(1-rho^2)/psi, a = (theta/2)*(1-rho^2)
+    assert b == approx(theta * psi / 2.0, abs=1e-12)
+    assert m == approx(-rho_val / psi, abs=1e-12)
+    assert sigma == approx(sqrt(1.0 - rho_val * rho_val) / psi, abs=1e-12)
+    assert a == approx((theta / 2.0) * (1.0 - rho_val * rho_val), abs=1e-12)
+    assert rho == rho_val
+
+
+def test_to_raw_svi_matches_ssvi_across_range() -> None:
+    """SSVI→raw-SVI mapping must match ssvi_w at multiple k, not just k=0."""
+    theta, rho_val, psi = 0.04, -0.4, 0.5
+    a, b, rho, m, sigma = to_raw_svi_params(theta, rho_val, psi)
+    for k in [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0]:
+        w_ssvi = ssvi_w(k, theta, rho_val, psi)
+        w_svi = svi_total_variance(k, a, b, rho, m, sigma)
+        assert w_svi == approx(w_ssvi, abs=1e-12), (
+            f"k={k}: SVI w={w_svi:.10f}, SSVI w={w_ssvi:.10f}"
+        )
 
 
 def test_essvi_arb_safe_default_params() -> None:

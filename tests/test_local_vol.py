@@ -277,3 +277,73 @@ class TestDupireOutOfSurface:
 
         with pytest.raises(ValueError):
             dupire_at(fs, K=100.0, T=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Test: regression — non-flat smile exact values
+# ---------------------------------------------------------------------------
+class TestDupireNonFlatSmileExact:
+    """Regression test: non-flat SVI smile must produce known local vols."""
+
+    def test_dupire_non_flat_exact_values(self) -> None:
+        """dupire_at with nonzero b, rho, m matches independently-
+        computed reference values at interior (K, T) points."""
+        spot = 100.0
+        r = 0.05
+        q = 0.0
+        T_low = 0.5
+        T_high = 2.0
+
+        a_ref, b_ref = 0.04, 0.4
+        rho_ref, m_ref, sigma_ref = -0.4, 0.05, 0.15
+
+        sl_low = FittedSlice(
+            expiry_time=T_low,
+            params=SVIParams(
+                a=a_ref * T_low, b=b_ref * T_low,
+                rho=rho_ref, m=m_ref, sigma=sigma_ref,
+            ),
+            rmse=0.0,
+            forward_price=_forward(T_low, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        sl_high = FittedSlice(
+            expiry_time=T_high,
+            params=SVIParams(
+                a=a_ref * T_high, b=b_ref * T_high,
+                rho=rho_ref, m=m_ref, sigma=sigma_ref,
+            ),
+            rmse=0.0,
+            forward_price=_forward(T_high, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+
+        fs = FittedSurface(
+            spot=spot,
+            risk_free=r,
+            div_yield=q,
+            forward_curve=(
+                (T_low, _forward(T_low, spot, r, q)),
+                (T_high, _forward(T_high, spot, r, q)),
+            ),
+            fitted_slices=(sl_low, sl_high),
+        )
+
+        # Reference values computed independently via direct FD evaluation
+        # of total_variance_at using the corrected Dupire denominator formula.
+        expected = {
+            (90.0, 1.0): 0.5240159030,
+            (90.0, 1.5): 0.5355544481,
+            (100.0, 1.0): 0.3388399231,
+            (100.0, 1.5): 0.3374822475,
+            (110.0, 1.0): 0.2284521863,
+            (110.0, 1.5): 0.2096225592,
+        }
+
+        for (K, T), ref in expected.items():
+            lv = dupire_at(fs, K, T)
+            assert lv == approx(ref, rel=1e-6), (
+                f"K={K}, T={T}: got {lv:.10f}, expected {ref:.10f}"
+            )
