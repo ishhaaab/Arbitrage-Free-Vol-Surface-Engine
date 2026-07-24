@@ -29,6 +29,8 @@ def svi_core(k, a, b, rho, m, sigma) -> SVIcore:
 def svi_g(k, a, b, rho, m, sigma) -> float:
 
     derivative= svi_core(k, a, b, rho, m, sigma)
+    if derivative.w0 <= 0.0:
+        return float("-inf")
     g= (1 - k* derivative.w1/(2* derivative.w0))**2 - (derivative.w1**2 /4)*(1/derivative.w0 + 1/4) + derivative.w2/2
 
     return g

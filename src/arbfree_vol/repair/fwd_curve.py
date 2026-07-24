@@ -31,8 +31,8 @@ def _slice_forward(s: ExpirySlice, r: float, spot: float) -> float | None:
             C = sides[OptionType.CALL]
             P = sides[OptionType.PUT]
             F_est = exp(r * s.expiry_time) * (C - P) + K
-            estimates.append(F_est)
-            Ks_used.append(K)
+            if F_est > 0:
+                estimates.append(F_est)
 
     if not estimates:
         return None

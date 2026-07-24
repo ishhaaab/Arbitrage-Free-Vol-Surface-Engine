@@ -28,6 +28,8 @@ def calibrate(points: list[tuple[float,float]]) -> SVIParams:
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
     result = least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"SVI calibration failed: {result.message}")
     a, b, rho, m, sigma = result.x
 
     return SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)
@@ -81,6 +83,8 @@ def calibrate_constrained(
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
     result = least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"SVI constrained calibration failed: {result.message}")
     a, b, rho, m, sigma = result.x
     return SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)
 

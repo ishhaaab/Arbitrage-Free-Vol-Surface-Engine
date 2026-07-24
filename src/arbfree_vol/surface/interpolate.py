@@ -9,6 +9,8 @@ volatility at arbitrary strikes and expiries.
 from dataclasses import dataclass
 from math import log, sqrt
 
+import numpy as np
+
 from arbfree_vol.repair.report import FittedSlice, RepairReport
 from arbfree_vol.svi.model import svi_total_variance
 
@@ -93,18 +95,15 @@ def build_fitted_surface(report: RepairReport) -> FittedSurface:
 # Interpolation helpers
 # ---------------------------------------------------------------------------
 def _forward_at(fs: FittedSurface, T: float) -> float:
-    """Look up the forward price for a given expiry from the forward curve.
+    """Interpolate the forward price linearly in *T* from *forward_curve*.
 
-    Raises ValueError if *T* is not found (within tolerance) in the
-    forward curve.
+    Uses ``numpy.interp`` (linear interpolation, flat extrapolation).
+    Callers must validate *T* against the surface range before calling
+    (done by ``total_variance_at``).
     """
-    for expiry_time, forward_price in fs.forward_curve:
-        if abs(expiry_time - T) < _EXACT_EXPIRY_TOL:
-            return forward_price
-    raise ValueError(
-        f"T={T} not found in forward_curve; "
-        f"available expiries: {[e for e, _ in fs.forward_curve]}"
-    )
+    expiries = np.array([p[0] for p in fs.forward_curve])
+    forwards = np.array([p[1] for p in fs.forward_curve])
+    return float(np.interp(T, expiries, forwards))
 
 
 def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:

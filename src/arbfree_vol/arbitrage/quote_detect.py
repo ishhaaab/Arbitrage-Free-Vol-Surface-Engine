@@ -84,11 +84,14 @@ def _check_parity(
             # Fall back to surface-level r/q
             parity_rhs = _parity_rhs(surface, s, K)
 
-        # compute a market-aware threshold
+        # compute a market-aware threshold.  Both spreads must be
+        # crossed to execute a parity arbitrage (buy one side at ask,
+        # sell the other at bid), so the combined execution cost is the
+        # sum of the half-spreads, not the wider of the two.
         if C_q.bid is not None and C_q.ask is not None and P_q.bid is not None and P_q.ask is not None:
             half_spread_C = 0.5 * (C_q.ask - C_q.bid)
             half_spread_P = 0.5 * (P_q.ask - P_q.bid)
-            threshold = max(half_spread_C, half_spread_P, 0.05)
+            threshold = max(half_spread_C + half_spread_P, 0.05)
         else:
             # fallback for data without bid/ask — calibrated for
             # liquid US equities / ETFs (SPY, QQQ, AAPL, NVDA, MSFT).
@@ -109,24 +112,43 @@ def _check_parity(
 
 
 def _normalize_to_calls(
-        surface:VolSurface,
-        s:ExpirySlice)-> list[tuple[float, float]]:
+        surface: VolSurface,
+        s: ExpirySlice,
+        forward_price: float | None = None) -> list[tuple[float, float]]:
+    """Convert all quotes in a slice to synthetic call prices.
 
-    by_strike= {} # again we sort by strike price, K
+    When no call exists at a strike, a put is converted via put-call
+    parity.  When both exist, the call price is averaged with the
+    parity-implied call from the put.
+
+    If *forward_price* is provided (preferred for real market data),
+    parity-implied calls use ``P + e^{-rT}(F - K)`` — the estimated
+    market forward from put-call parity.  Otherwise falls back to the
+    surface-level ``r``/``q`` via ``_parity_rhs``.
+    """
+
+    by_strike: dict[float, dict[OptionType, float]] = {}  # again we sort by strike price, K
     for q in s.quotes:
-        by_strike.setdefault(q.strike, {})[q.option_type]= q.price
+        by_strike.setdefault(q.strike, {})[q.option_type] = q.price
 
+    r = get_r(surface, s)
 
-    calls: list[tuple[float, float]] = [] #create an empty list of tuples
+    calls: list[tuple[float, float]] = [] # creates an empty list of tuples
     for strike, sides in by_strike.items(): # iterate over K
-        if OptionType.CALL in sides:    # if a call exists for some K, use it
-            call_price= sides[OptionType.CALL]
-            if OptionType.PUT in sides: # also have a put -> average with parity-implied call
-                parity_call= sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
-                call_price= (call_price + parity_call) / 2.0
+        if OptionType.CALL in sides: # if a call exists for some K, use it
+            call_price = sides[OptionType.CALL]
+            if OptionType.PUT in sides: # also have a put then average with parity-implied call
+                if forward_price is not None:
+                    parity_call = sides[OptionType.PUT] + exp(-r * s.expiry_time) * (forward_price - strike)
+                else:
+                    parity_call = sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
+                call_price = (call_price + parity_call) / 2.0
 
-        else:   # no call exists, convert put to call via put-call parity
-            call_price= sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
+        else:
+            if forward_price is not None:
+                call_price = sides[OptionType.PUT] + exp(-r * s.expiry_time) * (forward_price - strike)
+            else:
+                call_price = sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
 
         calls.append((strike, call_price))
 
@@ -214,19 +236,6 @@ def _check_calendar(surface: VolSurface,
         ks_l, vs_l = zip(*lw)
 
         if len(ew) < 2 or len(lw) < 2:
-            # if too few points to interpolate then fall back to exact-strike
-            # comparison where the same K exists in both slices.
-            w_e_dict = w_e  # strike -> w
-            w_l_dict = w_l
-            for K in w_e_dict.keys() & w_l_dict.keys():
-                diff = w_e_dict[K] - w_l_dict[K]
-                if diff > tolerance:
-                    violations.append(ArbitrageViolation(
-                        kind=ViolationType.CALENDAR,
-                        detail=f"calendar arb at K={K}: T={earlier.expiry_time:.4f} > T={later.expiry_time:.4f}",
-                        magnitude=float(diff),
-                        offending=(),
-                    ))
             continue
 
         k_min = max(min(ks_e), min(ks_l))
@@ -340,7 +349,7 @@ def detect_with_forward(surface:VolSurface) -> ArbitrageReport:
     for sl in surface.slices:
         F = fwd_curve.get(sl.expiry_time)
         _check_parity(surface, sl, violations, forward_price=F)
-        calls = _normalize_to_calls(surface, sl)
+        calls = _normalize_to_calls(surface, sl, forward_price=F)
         _check_monotonicity(surface, sl, calls, violations)
         _check_butterfly(sl, calls, violations)
         _check_wide_spread(sl, violations)

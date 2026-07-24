@@ -43,6 +43,8 @@ def fit_ssvi_slice(points: list[tuple[float, float]]) -> SSVIParams:
         return [ssvi_w(float(k), theta, rho, psi) - float(w) for k, w in points]
 
     result= least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"SSVI calibration failed: {result.message}")
     theta, rho, psi= result.x
     return SSVIParams(theta=float(theta), rho=float(rho), psi=float(psi))
 
@@ -82,6 +84,8 @@ def fit_essvi_slice(
         ]
 
     result= least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"eSSVI calibration failed: {result.message}")
     theta, rho, eta, gamma= result.x
     return (
         SSVIParams(theta=float(theta), rho=float(rho), psi=essvi_psi(theta, eta, gamma)),

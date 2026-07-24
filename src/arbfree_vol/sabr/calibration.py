@@ -64,6 +64,8 @@ def calibrate_sabr(points: list[tuple[float, float]],
         ]
 
     result = least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"SABR calibration failed: {result.message}")
     alpha, rho, nu = result.x
 
     return SABRParams(alpha=float(alpha), beta=beta_hint,

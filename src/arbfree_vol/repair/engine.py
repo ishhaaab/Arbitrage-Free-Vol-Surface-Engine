@@ -1,5 +1,6 @@
 from math import log, sqrt
 from statistics import mean
+import logging
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType, OffendingQuote
@@ -21,6 +22,8 @@ from arbfree_vol.repair.report import (
     RepairMetrics,
     RepairReport,
 )
+
+_logger = logging.getLogger(__name__)
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
 
@@ -92,6 +95,10 @@ def _fit_slice(sl: ExpirySlice,
     # total variance uses the surface r/q for IV solving (independent of forward)
     strike_w= slice_total_variance(surface, sl)
     if len(strike_w) < 5:
+        _logger.warning(
+            "slice T=%.4f has %d (k,w) points after IV solving — need >= 5; skipping",
+            sl.expiry_time, len(strike_w),
+        )
         return None
 
     # build (k, w) points using the estimated forward, not surface r/q
@@ -101,7 +108,14 @@ def _fit_slice(sl: ExpirySlice,
     ]
     points.sort()
 
-    params= calibrate_constrained(points)
+    try:
+        params= calibrate_constrained(points)
+    except RuntimeError:
+        _logger.warning(
+            "SVI constrained calibration failed for slice T=%.4f; skipping",
+            sl.expiry_time, exc_info=True,
+        )
+        return None
 
     # RMSE in w-space
     errors= [
@@ -130,6 +144,10 @@ def _fit_slice_ssvi(sl: ExpirySlice,
     """
     strike_w= slice_total_variance(surface, sl)
     if len(strike_w) < 5:
+        _logger.warning(
+            "slice T=%.4f has %d (k,w) points — need >= 5; skipping SSVI fit",
+            sl.expiry_time, len(strike_w),
+        )
         return None
 
     points= [
@@ -138,7 +156,14 @@ def _fit_slice_ssvi(sl: ExpirySlice,
     ]
     points.sort()
 
-    ssvi_params= fit_ssvi_slice(points)
+    try:
+        ssvi_params= fit_ssvi_slice(points)
+    except RuntimeError:
+        _logger.warning(
+            "SSVI calibration failed for slice T=%.4f; skipping",
+            sl.expiry_time, exc_info=True,
+        )
+        return None
 
     # RMSE in w-space using SSVI formula
     errors= [
@@ -182,6 +207,10 @@ def _fit_slice_sabr(sl: ExpirySlice,
     """
     strike_w = slice_total_variance(surface, sl)
     if len(strike_w) < 5:
+        _logger.warning(
+            "slice T=%.4f has %d (k,w) points — need >= 5; skipping SABR fit",
+            sl.expiry_time, len(strike_w),
+        )
         return None
 
     points = [
@@ -190,8 +219,15 @@ def _fit_slice_sabr(sl: ExpirySlice,
     ]
     points.sort()
 
-    sabr_params = calibrate_sabr(points, forward=forward_price,
-                                  expiry_time=sl.expiry_time)
+    try:
+        sabr_params = calibrate_sabr(points, forward=forward_price,
+                                      expiry_time=sl.expiry_time)
+    except RuntimeError:
+        _logger.warning(
+            "SABR calibration failed for slice T=%.4f; skipping",
+            sl.expiry_time, exc_info=True,
+        )
+        return None
 
     # RMSE in w-space using SABR formula
     alpha = sabr_params.alpha

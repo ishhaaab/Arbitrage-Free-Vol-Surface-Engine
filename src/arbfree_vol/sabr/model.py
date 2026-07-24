@@ -172,4 +172,6 @@ def to_raw_svi_params(sabr_params: SABRParams,
                 for k, w in zip(k_grid, w_target)]
 
     result = least_squares(residuals, x0, bounds=bounds)
+    if not result.success:
+        raise RuntimeError(f"SABR-to-SVI mapping failed: {result.message}")
     return tuple(result.x)  # type: ignore[return-value]

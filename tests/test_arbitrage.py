@@ -171,14 +171,22 @@ def _call_quote(strike: float, sigma: float, t: float) -> Quote:
 
 
 def _two_expiry_surface(t1: float, sig1: float, t2: float, sig2: float) -> VolSurface:
-    # Same strike (100) at two maturities, each priced at its own vol.
+    # Two strikes at two maturities, each priced at its own vol, so the
+    # calendar check has enough points for k-space interpolation (the old
+    # invalid single-strike fallback was removed).
     return VolSurface(
         spot=SPOT,
         risk_free=RISK_FREE,
         div_yield=DIV_YIELD,
         slices=[
-            ExpirySlice(expiry_time=t1, quotes=[_call_quote(100.0, sig1, t1)]),
-            ExpirySlice(expiry_time=t2, quotes=[_call_quote(100.0, sig2, t2)]),
+            ExpirySlice(expiry_time=t1, quotes=[
+                _call_quote(95.0, sig1, t1),
+                _call_quote(100.0, sig1, t1),
+            ]),
+            ExpirySlice(expiry_time=t2, quotes=[
+                _call_quote(95.0, sig2, t2),
+                _call_quote(100.0, sig2, t2),
+            ]),
         ],
     )
 

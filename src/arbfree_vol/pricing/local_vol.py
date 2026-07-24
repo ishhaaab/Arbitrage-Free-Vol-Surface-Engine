@@ -37,7 +37,7 @@ from math import log, nan, sqrt, isnan
 
 import numpy as np
 
-from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at
+from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at, _forward_at
 
 
 # Module-level tolerances  
@@ -70,18 +70,6 @@ class LocalVolSurface:
     strikes: tuple[float, ...]
     maturities: tuple[float, ...]
     grid: tuple[tuple[float, ...], ...]
-
-
-
-# Forward-curve interpolation 
-def _forward_at(fs: FittedSurface, T: float) -> float:
-    """Interpolate the forward price linearly in *T* from *forward_curve*.
-
-    Uses ``numpy.interp`` (linear interpolation, flat extrapolation).
-    """
-    expiries = np.array([p[0] for p in fs.forward_curve])
-    forwards = np.array([p[1] for p in fs.forward_curve])
-    return float(np.interp(T, expiries, forwards))
 
 
 
@@ -279,7 +267,10 @@ def dupire(fs: FittedSurface,
         for K in strikes:
             try:
                 val = dupire_at(fs, K, T, dT)
-            except ValueError:
+            except ValueError as e:
+                msg = str(e)
+                if "not found" in msg or "no slices" in msg or "below" in msg or "above" in msg:
+                    raise
                 val = nan  # calendar-arb cell; mark undefined, don't abort
             row.append(val)
         grid.append(tuple(row))
