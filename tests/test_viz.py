@@ -140,25 +140,6 @@ def test_greeks_heatmap_returns_figure() -> None:
     assert fig.axes is not None
 
 
-def test_scenario_payoff_returns_figure() -> None:
-    from arbfree_vol.viz.risk import plot_scenario_payoff
-    from arbfree_vol.surface.interpolate import build_fitted_surface
-    from arbfree_vol.surface.risk import spot_bump_analysis
-    from arbfree_vol.models.option import OptionContract
-
-    _, r = _two_expiry_surface()
-    fs = build_fitted_surface(r)
-    T = fs.fitted_slices[-1].expiry_time
-    spot = fs.spot
-    positions = [
-        (OptionContract(symbol="X", option_type=OptionType.CALL,
-                        strike=round(spot), expiry_date=_DUMMY),
-         T, 1.0),
-    ]
-    scenarios = spot_bump_analysis(fs, positions, bumps=[-0.05, 0.0, 0.05])
-    fig = plot_scenario_payoff(scenarios)
-    assert fig.axes is not None
-
 
 # ---------------------------------------------------------------------------
 # Backtest viz smoke tests

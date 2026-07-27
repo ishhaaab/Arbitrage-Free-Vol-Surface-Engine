@@ -1,4 +1,4 @@
-"""Portfolio Greeks heatmaps and scenario P&L visualizations."""
+"""Portfolio Greeks heatmaps."""
 
 import numpy as np
 from matplotlib.figure import Figure
@@ -6,7 +6,6 @@ from matplotlib.figure import Figure
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.surface.greeks import bucketed_greeks
 from arbfree_vol.surface.interpolate import FittedSurface
-from arbfree_vol.surface.risk import ScenarioResult
 
 
 def plot_greeks_heatmap(
@@ -61,46 +60,3 @@ def plot_greeks_heatmap(
     fig.tight_layout()
     return fig
 
-
-def plot_scenario_payoff(
-    scenarios: list[ScenarioResult],
-    symbol: str = "SPY",
-) -> Figure:
-    """Bar chart of P&L under spot-bump scenarios with delta overlay.
-
-    Parameters
-    ----------
-    scenarios:
-        List of ``ScenarioResult`` from ``spot_bump_analysis``.
-    symbol:
-        Ticker symbol for the plot title.
-
-    Returns
-    -------
-    Figure
-    """
-    bumps = [s.spot_bump for s in scenarios]
-    pnls = [s.pnl for s in scenarios]
-    delta_pnls = [s.delta_pnl for s in scenarios]
-
-    fig = Figure(figsize=(10, 6))
-    ax = fig.add_subplot(111)
-
-    # Colour bars by sign
-    bar_colors = ["crimson" if p < 0 else "seagreen" for p in pnls]
-    labels = [f"{b:+.0%}" for b in bumps]
-    bars = ax.bar(labels, pnls, color=bar_colors, alpha=0.8, label="P&L")
-
-    # Delta approximation overlay
-    ax.plot(labels, delta_pnls, "b--", linewidth=1.5, marker="o",
-            label="Delta approx")
-
-    ax.axhline(0, color="black", linewidth=0.5)
-    ax.set_xlabel("Spot bump")
-    ax.set_ylabel("P&L")
-    ax.set_title(f"{symbol} spot-bump scenario P&L")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    fig.tight_layout()
-    return fig

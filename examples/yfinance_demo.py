@@ -1,4 +1,4 @@
-"""Demo: yfinance -> repair with SVI/eSSVI/SABR -> fitted surface -> Greeks -> Dupire -> 8 plots.
+"""Demo: yfinance -> repair with SVI/eSSVI/SABR -> fitted surface -> Greeks -> Dupire -> 7 plots.
 
 Uses the ``ingestion.yfinance`` module which sources real risk-free
 rates (^IRX) and dividend yields, fetches mid prices, and applies
@@ -24,7 +24,6 @@ from arbfree_vol.ingestion.yfinance import fetch_chain
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface
 from arbfree_vol.pricing.local_vol import dupire
-from arbfree_vol.surface.risk import spot_bump_analysis
 from arbfree_vol.models.option import OptionContract, OptionType
 
 # ##########################################################################
@@ -129,15 +128,10 @@ positions = [
                     strike=float(rounded_spot * 0.95), expiry_date=date.today()),
      T_nearest, -0.5),
 ]
-scenarios = spot_bump_analysis(
-    fs, positions,
-    bumps=[-0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10],
-)
-
 # ##########################################################################
-# 6. Save 8 PNGs
+# 6. Save 7 PNGs
 # ##########################################################################
-print("Saving 8 plots...")
+print("Saving 7 plots...")
 
 # 1. 3D surface ribbons
 from arbfree_vol.viz.surface import plot_surface
@@ -175,17 +169,11 @@ fig = plot_greeks_heatmap(fs, strikes, maturities, symbol=symbol)
 fig.savefig("examples/yfinance_demo_greeks.png", dpi=150)
 print("  saved: yfinance_demo_greeks.png")
 
-# 7. Scenario payoff bar chart (new)
-from arbfree_vol.viz.risk import plot_scenario_payoff
-fig = plot_scenario_payoff(scenarios, symbol=symbol)
-fig.savefig("examples/yfinance_demo_scenario.png", dpi=150)
-print("  saved: yfinance_demo_scenario.png")
-
-# 8. Repair comparison (existing)
+# 7. Repair comparison (existing)
 from arbfree_vol.viz.comparison import plot_comparison
 fig = plot_comparison(reports["SVI"], reports["SVI"])
 fig.savefig("examples/yfinance_demo_repair.png", dpi=150)
 print("  saved: yfinance_demo_repair.png")
 
-print("Done. 8 plots saved to examples/yfinance_demo_*.png")
+print("Done. 7 plots saved to examples/yfinance_demo_*.png")
 print("Run with:  python examples/yfinance_demo.py")
