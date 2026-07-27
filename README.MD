@@ -34,9 +34,8 @@ The pipeline runs in five stages:
    a forward price per expiry from the median of put-call parity pairs,
    then refits a smile model with a penalty term that actively
    discourages arbitrage during calibration.
-4. **Query it.** The fitted surface answers `iv_at(strike, expiry)`,
-   aggregates portfolio Greeks (delta, gamma, vega, theta, rho), and
-   runs spot- and vol-bump scenario analysis.
+4. **Query it.** The fitted surface answers `iv_at(strike, expiry)` and
+   aggregates portfolio Greeks (delta, gamma, vega, theta, rho).
 5. **Build on it.** Downstream modules strip out Dupire local
    volatility, run PCA on a time-series of surfaces to find the dominant
    ways the surface moves, and backtest a cross-sectional mispricing
@@ -50,9 +49,9 @@ no matter which you pick.
 ## Quick start
 
 ```bash
-pytest tests/ -q                              # 191 tests across 24 files
+pytest tests/ -q                              # 177 tests across 23 files
 python demo/full_pipeline_demo.py             # full pipeline on synthetic data (no network)
-python examples/yfinance_demo.py              # live SPY demo, 8 plots (needs network)
+python examples/yfinance_demo.py              # live SPY demo, 7 plots (needs network)
 python examples/backtest_demo.py              # live SPY mispricing backtest
 ```
 
@@ -60,8 +59,7 @@ python examples/backtest_demo.py              # live SPY mispricing backtest
 
 Run `python examples/yfinance_demo.py` to pull live SPY options, repair
 them with all three smile models, interpolate the fitted surface,
-extract Dupire local vol, compute portfolio Greeks, run spot-bump
-scenarios, and produce the eight plots below.
+extract Dupire local vol, compute portfolio Greeks and produce the seven plots below.
 
 ### 3D implied volatility surface
 
@@ -87,10 +85,6 @@ scenarios, and produce the eight plots below.
 
 ![Greeks heatmap](examples/yfinance_demo_greeks.png)
 
-### Spot-bump scenario P&L
-
-![Scenario P&L](examples/yfinance_demo_scenario.png)
-
 ### Repair comparison (before vs after)
 
 ![Repair comparison](examples/yfinance_demo_repair.png)
@@ -110,8 +104,8 @@ scenarios, and produce the eight plots below.
   calibrators.
 - **`repair/`** — the orchestrator that cleans, detects, fits, and
   re-validates.
-- **`surface/`** — the fitted-surface query layer: `iv_at`, portfolio
-  Greeks, scenarios.
+- **`surface/`** — the fitted-surface query layer: `iv_at` and
+   portfolio Greeks.
 - **`dynamics.py`** — SVD-based PCA on a time-series of surfaces (no
   sklearn).
 - **`backtest/`** — the cross-sectional mispricing backtest.

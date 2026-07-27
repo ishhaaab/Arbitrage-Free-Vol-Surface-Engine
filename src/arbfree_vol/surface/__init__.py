@@ -1,4 +1,4 @@
-"""Interpolation, Greeks, and scenario risk for fitted volatility surfaces."""
+"""Interpolation and Greeks for fitted volatility surfaces."""
 
 from arbfree_vol.surface.interpolate import (
     FittedSurface,
@@ -13,14 +13,6 @@ from arbfree_vol.surface.greeks import (
     bucketed_greeks,
 )
 
-from arbfree_vol.surface.risk import (
-    ScenarioResult,
-    portfolio_pnl,
-    spot_bump_analysis,
-    vol_bump_analysis,
-    parallel_vega_pnl,
-)
-
 __all__ = [
     "FittedSurface",
     "build_fitted_surface",
@@ -29,9 +21,4 @@ __all__ = [
     "PortfolioGreeks",
     "portfolio_greeks",
     "bucketed_greeks",
-    "ScenarioResult",
-    "portfolio_pnl",
-    "spot_bump_analysis",
-    "vol_bump_analysis",
-    "parallel_vega_pnl",
 ]

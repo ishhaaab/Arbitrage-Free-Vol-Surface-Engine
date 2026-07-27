@@ -5,7 +5,7 @@ Showcases every major module on synthetic data (no network required):
   1.  Build a 2-slice clean VolSurface from known SVI smiles.
   2.  Repair with SVI, eSSVI, and SABR — compare fit quality.
   3.  Build a FittedSurface, query iv_at on a (K,T) grid.
-  4.  Portfolio Greeks and spot-bump scenario.
+  4.  Portfolio Greeks.
   5.  Dupire local volatility on the fitted surface.
   6.  Surface-dynamics PCA on a synthetic time series.
 
@@ -27,7 +27,6 @@ from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
 from arbfree_vol.surface.greeks import portfolio_greeks
-from arbfree_vol.surface.risk import spot_bump_analysis, parallel_vega_pnl
 from arbfree_vol.pricing.local_vol import dupire
 from arbfree_vol.dynamics import (
     SurfaceSnapshot, SurfaceSeries, parameter_matrix, pca_deformations,
@@ -212,11 +211,11 @@ def run_iv_at_grid(demo: DemoSurface) -> None:
 
 
 # ===================================================================
-# 4.  Portfolio Greeks + scenario analysis
+# 4.  Portfolio Greeks
 # ===================================================================
 
 def run_portfolio_risk(demo: DemoSurface) -> None:
-    _sep("Portfolio Greeks and spot-bump scenario")
+    _sep("Portfolio Greeks")
 
     report = repair(demo.surface)
     fs = build_fitted_surface(report)
@@ -242,17 +241,6 @@ def run_portfolio_risk(demo: DemoSurface) -> None:
     print(f"    Theta: {greeks.total_theta:>10.4f}")
     print(f"    Rho:   {greeks.total_rho:>10.4f}")
 
-    # Spot-bump scenarios
-    bumps = [-0.10, -0.05, -0.02, 0.0, 0.02, 0.05, 0.10]
-    scenarios = spot_bump_analysis(fs, positions, bumps)
-    print(f"\n  Spot bump scenarios:")
-    print(f"    {'Bump':>8} {'PnL':>10}")
-    for sc in scenarios:
-        print(f"    {sc.spot_bump:>+7.0%} {sc.pnl:>+10.4f}")
-
-    # Vega parallel shift
-    pnl = parallel_vega_pnl(fs, positions, vega_shift=0.01)
-    print(f"\n  Parallel vega P&L for +1 vol point: {pnl:>+.4f}")
 
 
 # ===================================================================
