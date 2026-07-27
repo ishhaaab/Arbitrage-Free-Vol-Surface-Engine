@@ -6,8 +6,8 @@ the cleaning layer before building the surface.
 
 Usage::
 
-    python examples/yfinance_demo.py                # default: SPY
-    python examples/yfinance_demo.py --symbol QQQ   # any US equity/ETF
+    python demo/yfinance/yfinance_demo.py                # default: SPY
+    python demo/yfinance/yfinance_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import matplotlib
@@ -23,6 +23,7 @@ except ImportError:
 import argparse
 from collections import Counter
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 
@@ -41,6 +42,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
 args = parser.parse_args()
 symbol = args.symbol
+_OUT = Path(__file__).parent
 
 # ##########################################################################
 # 1. Fetch + clean
@@ -151,44 +153,44 @@ print("Saving 7 plots...")
 # 1. 3D surface ribbons
 from arbfree_vol.viz.surface import plot_surface
 fig = plot_surface(list(reports["SVI"].fitted_slices))
-fig.savefig("examples/yfinance_demo_surface.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_surface.png"), dpi=150)
 print("  saved: yfinance_demo_surface.png")
 
 # 2. Smile model comparison (new)
 from arbfree_vol.viz.smiles import plot_smile_model_comparison
 fig = plot_smile_model_comparison(surface, reports, symbol=symbol)
-fig.savefig("examples/yfinance_demo_smiles_comparison.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_smiles_comparison.png"), dpi=150)
 print("  saved: yfinance_demo_smiles_comparison.png")
 
 # 3. Model fit comparison bar chart (new)
 from arbfree_vol.viz.comparison import plot_model_comparison
 fig = plot_model_comparison(reports, symbol=symbol)
-fig.savefig("examples/yfinance_demo_model_comparison.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_model_comparison.png"), dpi=150)
 print("  saved: yfinance_demo_model_comparison.png")
 
 # 4. IV heatmap from FittedSurface (new)
 from arbfree_vol.viz.surface import plot_iv_heatmap
 fig = plot_iv_heatmap(fs, symbol=symbol)
-fig.savefig("examples/yfinance_demo_iv_heatmap.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_iv_heatmap.png"), dpi=150)
 print("  saved: yfinance_demo_iv_heatmap.png")
 
 # 5. Dupire heatmap (new)
 from arbfree_vol.viz.local_vol import plot_dupire_heatmap
 fig = plot_dupire_heatmap(lv, symbol=symbol)
-fig.savefig("examples/yfinance_demo_dupire.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_dupire.png"), dpi=150)
 print("  saved: yfinance_demo_dupire.png")
 
 # 6. Greeks heatmap (new)
 from arbfree_vol.viz.risk import plot_greeks_heatmap
 fig = plot_greeks_heatmap(fs, strikes, maturities, symbol=symbol)
-fig.savefig("examples/yfinance_demo_greeks.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_greeks.png"), dpi=150)
 print("  saved: yfinance_demo_greeks.png")
 
 # 7. Repair comparison (existing)
 from arbfree_vol.viz.comparison import plot_comparison
 fig = plot_comparison(reports["SVI"], reports["SVI"])
-fig.savefig("examples/yfinance_demo_repair.png", dpi=150)
+fig.savefig(str(_OUT / "yfinance_demo_repair.png"), dpi=150)
 print("  saved: yfinance_demo_repair.png")
 
-print("Done. 7 plots saved to examples/yfinance_demo_*.png")
-print("Run with:  python examples/yfinance_demo.py")
+print(f"Done. 7 plots saved to {_OUT / 'yfinance_demo_*.png'}")
+print(f"Run with:  python {Path(__file__).name}")

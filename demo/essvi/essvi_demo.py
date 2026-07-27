@@ -6,12 +6,13 @@ surface from ``yfinance_demo.py``.
 
 Usage::
 
-    python examples/essvi_demo.py                # default: SPY
-    python examples/essvi_demo.py --symbol QQQ   # any US equity/ETF
+    python demo/essvi/essvi_demo.py                # default: SPY
+    python demo/essvi/essvi_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import sys; sys.path.insert(0, "src")
 import matplotlib; matplotlib.use("Agg")
+from pathlib import Path
 import argparse
 
 from arbfree_vol.ingestion.yfinance import fetch_chain
@@ -25,6 +26,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
 args = parser.parse_args()
 symbol = args.symbol
+_OUT = Path(__file__).parent
 print(f"Fetching {symbol} long-dated chains (T > 60 days)")
 
 surface, _ = fetch_chain(symbol, max_expiries=12, min_T_years=60.0 / 365.0)
@@ -44,16 +46,16 @@ print(f"  Remaining: {r_essvi.metrics.n_violations_after} violations")
 
 # Save surface plots side by side
 fig_svi = plot_surface(list(r_svi.fitted_slices))
-fig_svi.savefig("examples/essvi_demo_raw_svi_surface.png", dpi=150)
-print("Saved examples/essvi_demo_raw_svi_surface.png")
+fig_svi.savefig(str(_OUT / "essvi_demo_raw_svi_surface.png"), dpi=150)
+print(f"Saved {_OUT / 'essvi_demo_raw_svi_surface.png'}")
 
 fig_essvi = plot_surface(list(r_essvi.fitted_slices))
-fig_essvi.savefig("examples/essvi_demo_essvi_surface.png", dpi=150)
-print("Saved examples/essvi_demo_essvi_surface.png")
+fig_essvi.savefig(str(_OUT / "essvi_demo_essvi_surface.png"), dpi=150)
+print(f"Saved {_OUT / 'essvi_demo_essvi_surface.png'}")
 
 fig_smiles_svi = plot_smiles(surface, list(r_svi.fitted_slices))
-fig_smiles_svi.savefig("examples/essvi_demo_raw_svi_smiles.png", dpi=150)
+fig_smiles_svi.savefig(str(_OUT / "essvi_demo_raw_svi_smiles.png"), dpi=150)
 
 fig_smiles_essvi = plot_smiles(surface, list(r_essvi.fitted_slices))
-fig_smiles_essvi.savefig("examples/essvi_demo_essvi_smiles.png", dpi=150)
+fig_smiles_essvi.savefig(str(_OUT / "essvi_demo_essvi_smiles.png"), dpi=150)
 print("Saved smiles for both fits")

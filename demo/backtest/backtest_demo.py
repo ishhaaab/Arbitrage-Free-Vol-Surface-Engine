@@ -9,13 +9,13 @@ backtest — it is a cross-sectional signal-research tool.
 
 Output
 ------
-4 PNGs saved to ``examples/backtest_demo_*.png``:
+4 PNGs saved to ``demo/backtest/backtest_demo_*.png``:
   - pnl_dist, cumulative, mispricing_scatter, metrics
 
 Usage::
 
-    python examples/backtest_demo.py                # default: SPY
-    python examples/backtest_demo.py --symbol QQQ   # any US equity/ETF
+    python demo/backtest/backtest_demo.py                # default: SPY
+    python demo/backtest/backtest_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import matplotlib
@@ -31,6 +31,7 @@ except ImportError:
 
 import argparse
 from datetime import date
+from pathlib import Path
 
 from arbfree_vol.ingestion.yfinance import fetch_chain
 from arbfree_vol.repair.engine import repair
@@ -46,6 +47,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
 args = parser.parse_args()
 symbol = args.symbol
+_OUT = Path(__file__).parent
 
 # ##########################################################################
 # 1. Fetch + clean
@@ -127,22 +129,22 @@ from arbfree_vol.viz.backtest import (
 )
 
 fig = plot_pnl_distribution(result, symbol=symbol)
-fig.savefig("examples/backtest_demo_pnl_dist.png", dpi=150)
+fig.savefig(str(_OUT / "backtest_demo_pnl_dist.png"), dpi=150)
 print("  saved: backtest_demo_pnl_dist.png")
 
 fig = plot_cumulative_pnl(result, symbol=symbol)
-fig.savefig("examples/backtest_demo_cumulative.png", dpi=150)
+fig.savefig(str(_OUT / "backtest_demo_cumulative.png"), dpi=150)
 print("  saved: backtest_demo_cumulative.png")
 
 fig = plot_mispricing_vs_pnl(result, symbol=symbol)
-fig.savefig("examples/backtest_demo_mispricing_scatter.png", dpi=150)
+fig.savefig(str(_OUT / "backtest_demo_mispricing_scatter.png"), dpi=150)
 print("  saved: backtest_demo_mispricing_scatter.png")
 
 fig = plot_backtest_metrics(result, symbol=symbol)
-fig.savefig("examples/backtest_demo_metrics.png", dpi=150)
+fig.savefig(str(_OUT / "backtest_demo_metrics.png"), dpi=150)
 print("  saved: backtest_demo_metrics.png")
 
-print("Done. 4 plots saved to examples/backtest_demo_*.png")
+print(f"Done. 4 plots saved to {_OUT / 'backtest_demo_*.png'}")
 print()
 print("Note: This is a single-snapshot / frozen-vol-hedge backtest — not a rolling")
 print("daily-refit backtest. All trades share the same entry date and surface fit.")
