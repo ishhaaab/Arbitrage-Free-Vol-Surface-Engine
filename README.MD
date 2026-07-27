@@ -25,13 +25,13 @@ Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacqu
 ```bash
 pytest tests/ -q                              # 177 tests across 23 files
 python demo/full_pipeline_demo.py             # full pipeline on synthetic data (no network)
-python examples/yfinance_demo.py              # live SPY demo, 7 plots (needs network)
-python examples/backtest_demo.py              # live SPY mispricing backtest
+python examples/yfinance_demo.py              # live demo, 7 plots (needs network; use --symbol TICKER for others)
+python examples/backtest_demo.py              # live mispricing backtest (use --symbol TICKER)
 ```
 
 ## Live showcase (SPY options)
 
-Run `python examples/yfinance_demo.py` to pull live SPY options, repair them with all three smile models, interpolate the fitted surface, extract Dupire local vol, compute portfolio Greeks, and produce the seven plots below.
+Run `python examples/yfinance_demo.py --symbol SPY` to pull live SPY options, repair them with all three smile models, interpolate the fitted surface, extract Dupire local vol, compute portfolio Greeks, and produce the seven plots below.
 
 ### 3D implied volatility surface
 
@@ -88,7 +88,7 @@ A few decisions are baked into the code, worth knowing up front:
 
 The core engine is built and tested: ingestion, cleaning, all four arbitrage checks, three smile models, the repair loop, the query layer, Dupire, PCA, and a single-snapshot mispricing backtest. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery.
 
-This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The backtest is single-snapshot with a frozen-vol hedge, not a rolling daily refit (that would need a historical snapshot collector that doesn't exist yet). SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. And it's only demonstrated on SPY so far, with European options only.
+This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The backtest is single-snapshot with a frozen-vol hedge, not a rolling daily refit (that would need a historical snapshot collector that doesn't exist yet). SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`); European options only.
 
 ## Roadmap
 

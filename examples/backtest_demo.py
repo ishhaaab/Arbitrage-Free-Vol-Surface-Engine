@@ -11,6 +11,11 @@ Output
 ------
 4 PNGs saved to ``examples/backtest_demo_*.png``:
   - pnl_dist, cumulative, mispricing_scatter, metrics
+
+Usage::
+
+    python examples/backtest_demo.py                # default: SPY
+    python examples/backtest_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import matplotlib
@@ -24,6 +29,7 @@ except ImportError:
     print("yfinance is required.  Install with:  pip install yfinance")
     raise SystemExit(1)
 
+import argparse
 from datetime import date
 
 from arbfree_vol.ingestion.yfinance import fetch_chain
@@ -32,9 +38,18 @@ from arbfree_vol.surface.interpolate import build_fitted_surface
 from arbfree_vol.backtest.engine import run_backtest
 
 # ##########################################################################
+# 0. Parse CLI args
+# ##########################################################################
+parser = argparse.ArgumentParser(
+    description="yfinance -> repair -> mispricing backtest (single-cohort, frozen-vol hedge)",
+)
+parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
+args = parser.parse_args()
+symbol = args.symbol
+
+# ##########################################################################
 # 1. Fetch + clean
 # ##########################################################################
-symbol = "SPY"
 snapshot = date.today()
 print(f"[{snapshot}] Fetching {symbol} chain for backtest...")
 surface, rejected = fetch_chain(symbol, max_expiries=20, min_T_years=14.0 / 365.0)

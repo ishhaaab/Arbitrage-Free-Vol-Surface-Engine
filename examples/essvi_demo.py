@@ -1,19 +1,30 @@
 """eSSVI surface demo — where eSSVI shines: long-dated, less skewed data.
 
-Fits an eSSVI surface to long-dated SPY options (T > 60 days) and
+Fits an eSSVI surface to long-dated options (T > 60 days) and
 saves the smoothed surface plot for comparison against the raw SVI
 surface from ``yfinance_demo.py``.
+
+Usage::
+
+    python examples/essvi_demo.py                # default: SPY
+    python examples/essvi_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import sys; sys.path.insert(0, "src")
 import matplotlib; matplotlib.use("Agg")
+import argparse
 
 from arbfree_vol.ingestion.yfinance import fetch_chain
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.viz.surface import plot_surface
 from arbfree_vol.viz.smiles import plot_smiles
 
-symbol = "SPY"
+parser = argparse.ArgumentParser(
+    description="eSSVI surface demo — long-dated options",
+)
+parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
+args = parser.parse_args()
+symbol = args.symbol
 print(f"Fetching {symbol} long-dated chains (T > 60 days)")
 
 surface, _ = fetch_chain(symbol, max_expiries=12, min_T_years=60.0 / 365.0)

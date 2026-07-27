@@ -3,6 +3,11 @@
 Uses the ``ingestion.yfinance`` module which sources real risk-free
 rates (^IRX) and dividend yields, fetches mid prices, and applies
 the cleaning layer before building the surface.
+
+Usage::
+
+    python examples/yfinance_demo.py                # default: SPY
+    python examples/yfinance_demo.py --symbol QQQ   # any US equity/ETF
 """
 
 import matplotlib
@@ -15,6 +20,7 @@ except ImportError:
     print("yfinance is required.  Install with:  pip install yfinance")
     raise SystemExit(1)
 
+import argparse
 from collections import Counter
 from datetime import date
 
@@ -27,9 +33,18 @@ from arbfree_vol.pricing.local_vol import dupire
 from arbfree_vol.models.option import OptionContract, OptionType
 
 # ##########################################################################
+# 0. Parse CLI args
+# ##########################################################################
+parser = argparse.ArgumentParser(
+    description="yfinance -> repair with SVI/eSSVI/SABR -> fitted surface -> Greeks -> Dupire -> plots",
+)
+parser.add_argument("--symbol", default="SPY", help="Ticker symbol, e.g. SPY, QQQ, AAPL, MSFT")
+args = parser.parse_args()
+symbol = args.symbol
+
+# ##########################################################################
 # 1. Fetch + clean
 # ##########################################################################
-symbol = "SPY"
 print(f"Fetching {symbol} chain (mid prices, real r/q, with cleaning)...")
 surface, rejected = fetch_chain(symbol, max_expiries=20, min_T_years=7.0 / 365.0)
 
