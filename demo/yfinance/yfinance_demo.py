@@ -104,7 +104,7 @@ spot = surface.spot
 strikes = list(np.linspace(spot * 0.85, spot * 1.15, 20))
 
 # Maturities: base from surface, then pad to >= 3 points.
-mat_base = sorted(sl.expiry_time for sl in surface.slices)
+mat_base = sorted(sl.expiry_time for sl in fs.fitted_slices)
 if len(mat_base) < 3:
     # Interleave mid-points to get a dense enough grid for dupire()
     maturities = []
@@ -132,7 +132,7 @@ lv = dupire(fs, strikes, maturities)
 # ##########################################################################
 # 5. Portfolio Greeks + scenarios
 # ##########################################################################
-T_nearest = max(sl.expiry_time for sl in surface.slices)
+T_nearest = max(sl.expiry_time for sl in fs.fitted_slices)
 
 # Round spot to nearest 5 for a sensible strike
 rounded_spot = int(round(spot / 5.0) * 5.0)
