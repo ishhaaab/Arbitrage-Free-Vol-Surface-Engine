@@ -3,7 +3,5 @@
 __pycache__/
 *.egg-info/
 /plots
-AGENTS.md
-!examples/*.png
-examples/essvi*.png
 !roadmap.md
+!issues.md
