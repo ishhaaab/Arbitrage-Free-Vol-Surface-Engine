@@ -82,7 +82,7 @@ Raw SVI is expressive but not arbitrage-free by construction. For near-expiry da
 **Possible mitigations (none yet implemented):**
 1. **Fit with a butterfly penalty** — add `g(k) < 0` as a soft constraint in the `least_squares` objective.
 2. **Parameter constraints** — restrict `b * (1 + |rho|) < 2 * a / sigma` (Gatheral & Jacquier condition for SSVI).
-3. **Upgrade to SSVI/eSSVI** — the surface parameterization that is arbitrage-free by construction (deferred, listed in Project.md).
+3. **Upgrade to SSVI/eSSVI** — the surface parameterization is theoretically arbitrage-free with a joint fit (Gatheral & Jacquier 2014), but the current implementation fits independently per expiry (see issue #14). For the SVI path, the calendar penalty in commit 8b3e149 partially addresses this.
 4. **Increase minimum time-to-expiry** for data fed into the SVI calibrator (pragmatic — skip T < 14d).
 
 **Status:** Known, documented. Not yet mitigated. The repair engine reports these honestly as remaining violations.
@@ -214,3 +214,25 @@ Linear interpolation in T at a fixed absolute strike K means the two endpoints a
 `run_backtest` constructs `Trade` objects with `risk_free=surface.risk_free` and `div_yield=surface.div_yield`. However `detect_mispricing` uses per-slice rates via `get_r(surface, sl)` / `get_q(surface, sl)` — which may differ from surface-level defaults after `populate_per_slice_r`. The signal detection and trade realization thus use different discount/forward rates, producing internally inconsistent P&L.
 
 **Status:** Known, not yet fixed. Mitigation: surface-level r/q are reasonable approximations for liquid equities; the `detect_with_forward` pre-pass corrects the worst cases. Fix would require threading per-slice rates through `MispricingSignal` and `Trade`.
+
+---
+
+## 14. eSSVI and SABR are fit per-slice independently — same calendar-arbitrage risk as pre-fix SVI
+
+**Files:**
+- `src/arbfree_vol/repair/engine.py:_fit_slice_ssvi`
+- `src/arbfree_vol/repair/engine.py:_fit_slice_sabr`
+- `src/arbfree_vol/ssvi/calibration.py:fit_ssvi_slice`
+- `src/arbfree_vol/sabr/calibration.py:calibrate_sabr`
+
+**Problem:**
+Both `_fit_slice_ssvi()` and `_fit_slice_sabr()` fit one expiry slice at a time independently — no shared parameters, no neighboring-slice information, no joint fit anywhere in the call chain. This means both paths carry exactly the same cross-slice calendar-arbitrage risk that the plain SVI path had before the fix in commit 8b3e149.
+
+The `repair()` docstring was corrected in commit 9ee58ee to document this honestly. The theoretical eSSVI construction (Gatheral & Jacquier 2014) achieves arbitrage-freedom only when `psi(theta)` is a single shared power-law function fit jointly across the whole surface and `theta(T)` is monotonic — neither condition is enforced by `fit_ssvi_slice`.
+
+**Current state:**
+- **SVI path:** calendar-arbitrage is mitigated by the penalty in `calibrate_constrained(prev_slice=...)` (commit 8b3e149). 178/178 tests pass; real-data SPY violations dropped from 494 to 9.
+- **eSSVI path:** `_fit_slice_ssvi` still fits each slice independently. No calendar penalty applied. `detect_svi_surface` will catch violations honestly after fit, and the count is reported in `n_violations_after`, but nothing refits them.
+- **SABR path:** `_fit_slice_sabr` same pattern. Independent per-slice fit with no cross-slice information. Same vulnerability as eSSVI.
+
+**Status:** Known, not yet addressed for eSSVI or SABR. The SVI path is partially addressed (commit 8b3e149). A future fix could either apply the same `prev_slice` penalty to the eSSVI/SABR calibration functions, or implement true joint fits that satisfy the Gatheral-Jacquier conditions.
