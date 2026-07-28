@@ -41,6 +41,7 @@ def calibrate_constrained(
     k_min: float = -3.0,
     k_max: float = 3.0,
     n_k: int = 121,
+    prev_slice: SVIParams | None = None,
 ) -> SVIParams:
     r"""Fit raw SVI with a smooth penalty on butterfly arbitrage (g(k) < 0).
 
@@ -55,6 +56,14 @@ def calibrate_constrained(
     When all constraints are satisfied the penalty residuals are zero
     and the fit reduces to the standard ``calibrate()`` (modulo
     optimizer path).
+
+    * ``sqrt(arb_penalty) * sqrt(max(w_prev(k_j) - w(k_j), 0))`` for each
+      point on the same k-grid — this penalises calendar arbitrage.  It
+      activates only when *prev_slice* is provided (i.e. a shorter-dated
+      slice has already been fitted).  The condition ``w(k) >= w_prev(k)``
+      is the calendar no-arbitrage condition (total variance non-decreasing
+      in maturity T).  Uses the same *arb_penalty* weight as the other
+      penalty terms.
     """
     if len(points) < 5:
         raise ValueError("need at least 5 points to fit SVI")
@@ -77,12 +86,30 @@ def calibrate_constrained(
         w_min = _min_total_variance(a, b, rho, sigma)
         min_var_res = [sqrt_pen * sqrt(max(-w_min, 0.0))]
 
-        return data_res + arb_res + min_var_res
+        # ----- calendar penalty: w(k) >= w_prev(k) for all k on grid -----
+        # Only added when a previous fitted slice is supplied.  Penalises
+        # the current slice's total variance dipping below the previous
+        # (shorter-T) slice's at any k, which is calendar arbitrage.
+        if prev_slice is not None:
+            cal_res = [
+                sqrt_pen * sqrt(max(
+                    svi_total_variance(k, prev_slice.a, prev_slice.b,
+                                       prev_slice.rho, prev_slice.m,
+                                       prev_slice.sigma)
+                    - svi_total_variance(k, a, b, rho, m, sigma),
+                    0.0,
+                ))
+                for k in k_grid
+            ]
+        else:
+            cal_res = []
+
+        return data_res + arb_res + min_var_res + cal_res
 
     x0 = [min(w[1] for w in points), 0.1, -0.5, 0.0, 0.1]
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
-    result = least_squares(residuals, x0, bounds=bounds)
+    result = least_squares(residuals, x0, bounds=bounds, max_nfev=5000)
     if not result.success:
         raise RuntimeError(f"SVI constrained calibration failed: {result.message}")
     a, b, rho, m, sigma = result.x

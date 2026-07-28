@@ -252,3 +252,96 @@ def test_repair_constrained_calibration_leaves_no_butterfly_violations() -> None
         "Constrained calibration should produce an arb-free fit "
         "on clean input data"
     )
+
+
+def test_repair_svi_path_fixes_calendar_violation() -> None:
+    """The SVI repair path must prevent cross-slice calendar arbitrage.
+
+    Build a synthetic surface from two SVI truth parameter sets chosen
+    so the short-dated slice's wings exceed the long-dated slice's
+    wings (provably non-calendar per detect_svi_surface). Then run
+    repair() and assert the fitted surface is calendar-consistent.
+
+    Pre-fix: the per-slice SVI fits ignore cross-slice ordering, so
+    the post-repair detect_svi_surface reports a CALENDAR violation.
+    Post-fix: the calendar penalty in calibrate_constrained forces
+    w_current(k) >= w_prev(k) on the k-grid, and the post-repair
+    detect_svi_surface is clean.
+    """
+    from math import exp, sqrt as _sqrt
+    from arbfree_vol.svi.model import SVIParams, svi_total_variance
+    from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
+
+    # NOTE: these truth params are synthetic and chosen purely so the
+    # short-dated slice's wings exceed the long-dated slice's wings
+    # (calendar arbitrage). The implied short-dated ATM vol is far
+    # above any real equity. This is a regression test for the
+    # repair path's calendar penalty, not a realistic data scenario.
+    long_params = SVIParams(a=0.04, b=0.08, rho=-0.3, m=0.0, sigma=0.4)
+    short_params = SVIParams(a=0.01, b=0.30, rho=-0.5, m=0.0, sigma=0.3)
+
+    # ---- Meta-check: the truth params themselves must be non-calendar.
+    # If this fails, retune the params above. ----
+    truth_report = detect_svi_surface([
+        (1.0, long_params),
+        (0.02, short_params),
+    ])
+    cal_violations = [
+        v for v in truth_report.violations
+        if v.kind.value == "calendar"
+    ]
+    assert cal_violations, (
+        "Test setup error: truth params do not produce a calendar "
+        "violation on detect_svi_surface. Re-tune short_params so the "
+        "short-dated slice's wings exceed the long-dated slice's wings "
+        "for some k in [-1.5, 1.5]."
+    )
+
+    # ---- Generate quotes from the truth SVI total variances. ----
+    ks = [-1.5 + 3.0 * i / 20.0 for i in range(21)]
+    F = 100.0
+    T_long, T_short = 1.0, 0.02
+
+    def make_slice(T, params):
+        quotes: list[Quote] = []
+        for k in ks:
+            K = F * exp(k)
+            w = svi_total_variance(k, params.a, params.b,
+                                   params.rho, params.m, params.sigma)
+            sigma = _sqrt(w / T)
+            quotes.append(Quote(strike=K, option_type=OptionType.CALL,
+                                price=_bs_price(OptionType.CALL, K, sigma=sigma, tt=T)))
+            quotes.append(Quote(strike=K, option_type=OptionType.PUT,
+                                price=_bs_price(OptionType.PUT, K, sigma=sigma, tt=T)))
+        return ExpirySlice(expiry_time=T, quotes=quotes)
+
+    surface = VolSurface(
+        spot=SPOT, risk_free=R, div_yield=Q,
+        slices=[
+            make_slice(T_long, long_params),
+            make_slice(T_short, short_params),
+        ],
+    )
+
+    report = repair(surface)
+
+    assert report.metrics.n_slices_fitted == 2, (
+        f"expected 2 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+
+    # ---- The post-fit surface must be calendar-consistent. ----
+    svi_pairs = [(fs.expiry_time, fs.params) for fs in report.fitted_slices]
+    fitted_report = detect_svi_surface(svi_pairs)
+    fitted_cal = [
+        v for v in fitted_report.violations
+        if v.kind.value == "calendar"
+    ]
+    assert not fitted_cal, (
+        f"SVI repair path left {len(fitted_cal)} calendar violation(s) "
+        f"after fix; expected zero. Violations: "
+        f"{[v.detail for v in fitted_cal]}"
+    )
+    assert fitted_report.is_arbitrage_free, (
+        f"SVI repair path produced non-arb-free surface. All violations: "
+        f"{[v.kind.value for v in fitted_report.violations]}"
+    )

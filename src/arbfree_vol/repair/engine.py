@@ -86,7 +86,8 @@ def _build_cleaned_surface(surface: VolSurface,
 
 def _fit_slice(sl: ExpirySlice,
                forward_price: float,
-               surface: VolSurface) -> FittedSlice | None:
+               surface: VolSurface,
+               prev_slice: SVIParams | None = None) -> FittedSlice | None:
 
     """Fit SVI to one cleaned slice using the estimated forward price.
 
@@ -109,7 +110,7 @@ def _fit_slice(sl: ExpirySlice,
     points.sort()
 
     try:
-        params= calibrate_constrained(points)
+        params= calibrate_constrained(points, prev_slice=prev_slice)
     except RuntimeError:
         _logger.warning(
             "SVI constrained calibration failed for slice T=%.4f; skipping",
@@ -312,7 +313,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     fitted_ssvi: list[FittedSSVISlice]= []
     fitted_sabr: list[FittedSABRSlice]= []
     if cleaned_surface is not None:
-        for sl in cleaned_surface.slices:
+        # SVI path threads prev_slice across calls (calendar consistency).
+        # eSSVI / SABR fit each slice independently (different models,
+        # different fit functions, prev_slice not applicable).
+        sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
+        prev_svi: SVIParams | None = None
+        for sl in sorted_slices:
             F= fwd_curve.get(sl.expiry_time)
             if F is None:
                 continue
@@ -329,9 +335,10 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                     fitted.append(fs)
                     fitted_sabr.append(fsabr)
             else:
-                fs= _fit_slice(sl, F, cleaned_surface)
+                fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
                 if fs is not None:
                     fitted.append(fs)
+                    prev_svi = fs.params
 
     # step 6: detect remaining violations on the fitted surface
     if fitted:
