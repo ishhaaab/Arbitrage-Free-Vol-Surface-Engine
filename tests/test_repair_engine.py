@@ -409,3 +409,62 @@ def test_repair_essvi_sequential_is_calendar_arb_free() -> None:
         assert chis[i + 1] > chis[i], (
             f"chi not strictly increasing: {chis}"
         )
+
+
+def test_repair_sabr_term_structure_reduces_violations() -> None:
+    """SABR term-structure path produces valid params on a 3-slice surface.
+
+    Build a 3-slice surface (expiries 0.25, 0.5, 1.0) priced with flat
+    BS vol 0.2.  Run repair(use_sabr=True).  Assert:
+    - 3 slices fitted
+    - 3 fitted_sabr_slices
+    - Every SABRParams has alpha > 0, nu > 0, rho in (-1,1), beta == 0.5
+    - Calendar violation count is small (<= 5)
+    """
+    from arbfree_vol.sabr.term_structure import EPS_FLOOR
+    from arbfree_vol.arbitrage.report import ViolationType
+
+    expiries = [0.25, 0.5, 1.0]
+    n_strikes = 7
+    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
+
+    slices: list[ExpirySlice] = []
+    for T_val in expiries:
+        quotes: list[Quote] = []
+        for K in strikes:
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.CALL,
+                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
+            )
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.PUT,
+                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
+            )
+        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
+
+    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+    report = repair(surface, use_sabr=True)
+
+    assert report.metrics.n_slices_fitted == 3, (
+        f"expected 3 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+    assert len(report.fitted_sabr_slices) == 3, (
+        f"expected 3 fitted_sabr_slices, got {len(report.fitted_sabr_slices)}"
+    )
+
+    # Every SABR param must be in valid range
+    for fsabr in report.fitted_sabr_slices:
+        p = fsabr.sabr
+        assert p.alpha > EPS_FLOOR, f"alpha={p.alpha} not > EPS_FLOOR"
+        assert p.nu > 0, f"nu={p.nu} not > 0"
+        assert -1.0 < p.rho < 1.0, f"rho={p.rho} out of range"
+        assert p.beta == 0.5
+
+    # Calendar violations should be small (empirical path)
+    cal_violations = [
+        v for v in report.remaining_violations.violations
+        if v.kind == ViolationType.CALENDAR
+    ]
+    assert len(cal_violations) <= 5, (
+        f"too many calendar violations: {len(cal_violations)}"
+    )

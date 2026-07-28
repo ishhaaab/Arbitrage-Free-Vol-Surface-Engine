@@ -17,6 +17,7 @@ from arbfree_vol.ssvi.term_structure import (
 )
 from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
+from arbfree_vol.sabr.term_structure import fit_sabr_term_structure
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.report import (
     RejectedQuote,
@@ -296,11 +297,18 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     regression assertion.
 
     If ``use_sabr=True``, fits the SABR model (Hagan et al. 2002)
-    instead of raw SVI per slice.  Also fit independently per expiry
-    (``calibrate_sabr``, no cross-slice information) — same calendar-
-    arbitrage risk as eSSVI above; not yet addressed.  The SABR
-    parameters are mapped to raw SVI via ``to_raw_svi_params`` adapter,
-    and the native SABR parameters are stored in ``fitted_sabr_slices``.
+    as a COMPARISON parametrisation alongside the arbitrage-certified
+    eSSVI primary surface.  The SABR parameters alpha(t), nu(t) and
+    rho(t) are modelled as cubic B-spline curves across expiries with
+    coefficient-level reparametrisation (tanh for rho, exp+floor for
+    alpha/nu) keeping curves in-range between knots via the convex-hull
+    property — no runtime clamping needed.  A cross-slice calendar-arb
+    SOFT penalty is included in the objective.  Verification is EMPIRICAL
+    and grid-based via ``detect_svi_surface`` — NOT a closed-form /
+    by-construction guarantee.  The SABR parameters are mapped to raw SVI
+    via ``to_raw_svi_params``, and the native SABR parameters are stored
+    in ``fitted_sabr_slices``.  Dynamic SABR is a not-implemented research
+    extension.
 
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
@@ -406,16 +414,73 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 repair_infeasible = not verify_hm_condition(params_list)
 
         elif use_sabr:
-            prev_svi: SVIParams | None = None
+            # ── SABR B-spline term-structure path ───────────────────
+            # Build slices_data for joint fit across expiries
+            sabr_slices_data: list[tuple[float, float, list[tuple[float, float]]]] = []
+            sabr_meta: list[tuple[ExpirySlice, float, int]] = []  # (sl, F, n_total)
+
             for sl in sorted_slices:
-                F= fwd_curve.get(sl.expiry_time)
+                F = fwd_curve.get(sl.expiry_time)
                 if F is None:
                     continue
-                result= _fit_slice_sabr(sl, F, cleaned_surface)
-                if result is not None:
-                    fs, fsabr= result
-                    fitted.append(fs)
-                    fitted_sabr.append(fsabr)
+                strike_w = slice_total_variance(cleaned_surface, sl)
+                if len(strike_w) < 5:
+                    _logger.warning(
+                        "SABR term-structure: slice T=%.4f has %d (k,w) points — "
+                        "need >= 5; skipping",
+                        sl.expiry_time, len(strike_w),
+                    )
+                    continue
+                pts = [
+                    (log(strike / F), w)
+                    for strike, w in strike_w.items()
+                ]
+                pts.sort()
+                sabr_slices_data.append((sl.expiry_time, F, pts))
+                sabr_meta.append((sl, F, len(sl.quotes)))
+
+            if sabr_slices_data:
+                sabr_params_list = fit_sabr_term_structure(sabr_slices_data)
+
+                for (sl, F, n_total), sabr_params, (T_i, _F_i, pts) in zip(
+                    sabr_meta, sabr_params_list, sabr_slices_data,
+                ):
+                    # Per-slice RMSE in w-space
+                    a = sabr_params.alpha
+                    b = sabr_params.beta
+                    r = sabr_params.rho
+                    n = sabr_params.nu
+                    errors = [
+                        (sabr_total_variance(k, F, T_i, a, b, r, n) - w) ** 2
+                        for k, w in pts
+                    ]
+                    rmse = sqrt(mean(errors))
+
+                    # Map to raw SVI params for the SVI-based pipeline
+                    a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
+                        sabr_params, F, T_i,
+                    )
+                    raw_svi_params = SVIParams(
+                        a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi,
+                    )
+
+                    fitted.append(FittedSlice(
+                        expiry_time=sl.expiry_time,
+                        params=raw_svi_params,
+                        rmse=rmse,
+                        forward_price=F,
+                        n_quotes_total=n_total,
+                        n_quotes_used=len(pts),
+                        data_points=tuple(pts),
+                    ))
+                    fitted_sabr.append(FittedSABRSlice(
+                        expiry_time=sl.expiry_time,
+                        sabr=sabr_params,
+                        rmse=rmse,
+                        forward_price=F,
+                        n_quotes_total=n_total,
+                        n_quotes_used=len(pts),
+                    ))
         else:
             prev_svi: SVIParams | None = None
             for sl in sorted_slices:
