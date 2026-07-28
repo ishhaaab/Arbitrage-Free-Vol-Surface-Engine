@@ -15,6 +15,7 @@ from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, to_raw_svi_params
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
+    SequentialFitResult,
 )
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 
@@ -51,7 +52,7 @@ def test_theta_and_chi_non_decreasing() -> None:
     conditions (a) and (b))."""
     slices_data = _make_slices_data()
     result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result]
+    params = [p for _, p in result.fitted_slices]
 
     assert len(params) == 3
 
@@ -78,7 +79,7 @@ def test_pairwise_inequality_holds() -> None:
     """
     slices_data = _make_slices_data()
     result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result]
+    params = [p for _, p in result.fitted_slices]
 
     chis = [p.theta * p.psi for p in params]
     tol = 1e-8
@@ -100,7 +101,7 @@ def test_grid_calendar_detector_reports_zero() -> None:
     a calibrated eSSVI surface (redundant regression check)."""
     slices_data = _make_slices_data()
     result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result]
+    params = [p for _, p in result.fitted_slices]
 
     svi_pairs: list[tuple[float, object]] = []
     for T, p in zip(_EXPIRIES, params):
@@ -134,16 +135,16 @@ def test_near_equal_chi_no_divide_by_zero() -> None:
     ]
 
     params = fit_ssvi_surface_sequential(slices_data)
-    assert len(params) == 2
+    assert len(params.fitted_slices) == 2
 
     # All params must be finite
-    for _T, p in params:
+    for _T, p in params.fitted_slices:
         assert np.isfinite(p.theta), f"theta is not finite: {p.theta}"
         assert np.isfinite(p.rho), f"rho is not finite: {p.rho}"
         assert np.isfinite(p.psi), f"psi is not finite: {p.psi}"
 
     # verify_hm_condition must pass (the eps_chi floor handles denom → 0)
-    assert verify_hm_condition([p for _, p in params]), (
+    assert verify_hm_condition([p for _, p in params.fitted_slices]), (
         "verify_hm_condition returned False on near-equal-chi slices"
     )
 
@@ -197,18 +198,107 @@ def test_sequential_fit_falls_back_on_infeasible_slice(monkeypatch) -> None:
     result = fit_ssvi_surface_sequential(slices_data)
 
     # All 3 slices must be present (hard or fallback)
-    assert len(result) == 3, (
-        f"expected 3 entries, got {len(result)}"
+    assert len(result.fitted_slices) == 3, (
+        f"expected 3 entries, got {len(result.fitted_slices)}"
     )
 
-    # The middle slice should have fallen back to unconstrained
-    print(f"  result expiries: {[T for T, _ in result]}")
-    for i, (T, p) in enumerate(result):
+    # The middle slice (T=0.50) should have fallen back to unconstrained
+    assert 0.50 in result.fallback_slices, (
+        f"expected T=0.50 in fallback_slices, got {result.fallback_slices}"
+    )
+    # No slices should have failed entirely
+    assert len(result.failed_slices) == 0, (
+        f"expected 0 failed slices, got {result.failed_slices}"
+    )
+
+    print(f"  result expiries: {[T for T, _ in result.fitted_slices]}")
+    print(f"  fallback_slices: {result.fallback_slices}")
+    print(f"  failed_slices: {result.failed_slices}")
+    for i, (T, p) in enumerate(result.fitted_slices):
         print(f"  slice {i} (T={T}): theta={p.theta:.6f}, rho={p.rho:.4f}, psi={p.psi:.4f}")
 
     # verify_hm_condition may be False because of the fallback
-    params_only = [p for _, p in result]
+    params_only = [p for _, p in result.fitted_slices]
     hm_ok = verify_hm_condition(params_only)
     print(f"  verify_hm_condition: {hm_ok}")
     # We don't assert True or False — just that the function returns
     # without raising.
+
+
+# ── Test 6: failed slice when both fits fail ─────────────────────────
+def test_sequential_fit_reports_failed_slice_when_both_fits_fail(monkeypatch) -> None:
+    """When both the hard-constrained fit AND the unconstrained fallback
+    fail for a slice, the expiry must appear in ``failed_slices`` and
+    NOT in ``fitted_slices``.
+
+    We monkeypatch ``_fit_slice`` to raise on the 2nd call and
+    ``fit_ssvi_slice`` to always raise, so the middle slice fails
+    entirely.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
+    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
+    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
+    ks = np.linspace(-1.0, 1.0, 9).tolist()
+
+    def _pts(truth):
+        return [
+            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
+            for k in ks
+        ]
+
+    slices_data = [
+        (0.25, _pts(truth1)),
+        (0.50, _pts(truth2)),
+        (1.00, _pts(truth3)),
+    ]
+
+    # Monkeypatch _fit_slice to fail on the 2nd call
+    call_count = {"n": 0}
+    _real_fit_slice = ts._fit_slice
+
+    def _failing_fit_slice(points, prev=None, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated infeasible H&M constraints")
+        return _real_fit_slice(points, prev=prev, **kwargs)
+
+    # Monkeypatch fit_ssvi_slice to always raise
+    def _always_fail_ssvi_slice(points):
+        raise RuntimeError("simulated unconstrained fit failure")
+
+    monkeypatch.setattr(ts, "_fit_slice", _failing_fit_slice)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _always_fail_ssvi_slice)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    # Only 2 slices should have fitted (the 1st and 3rd)
+    assert len(result.fitted_slices) == 2, (
+        f"expected 2 fitted slices, got {len(result.fitted_slices)}"
+    )
+
+    # T=0.50 should be in failed_slices
+    assert 0.50 in result.failed_slices, (
+        f"expected T=0.50 in failed_slices, got {result.failed_slices}"
+    )
+
+    # T=0.50 should NOT be in fallback_slices
+    assert 0.50 not in result.fallback_slices, (
+        f"T=0.50 should not be in fallback_slices, got {result.fallback_slices}"
+    )
+
+    # T=0.50 should NOT be in fitted_slices
+    fitted_Ts = [T for T, _ in result.fitted_slices]
+    assert 0.50 not in fitted_Ts, (
+        f"T=0.50 should not be in fitted_slices, got {fitted_Ts}"
+    )
+
+    # The other two slices should be present
+    assert 0.25 in fitted_Ts
+    assert 1.00 in fitted_Ts
+
+    # No fallback slices at all
+    assert len(result.fallback_slices) == 0, (
+        f"expected 0 fallback slices, got {result.fallback_slices}"
+    )

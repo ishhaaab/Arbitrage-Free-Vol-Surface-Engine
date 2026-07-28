@@ -42,6 +42,8 @@ References
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize, NonlinearConstraint, Bounds
@@ -50,6 +52,30 @@ from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SequentialFitResult:
+    """Result of a sequential eSSVI term-structure fit.
+
+    Attributes
+    ----------
+    fitted_slices : list of (expiry_time, SSVIParams)
+        Successful fits — either hard-constrained (H&M Prop 3.1) or
+        unconstrained fallback.  Slices where *both* fits failed are
+        absent.
+    fallback_slices : list of float
+        Expiry times where the hard-constrained fit failed but the
+        unconstrained per-slice fallback succeeded.  These slices are
+        NOT arbitrage-free by construction.
+    failed_slices : list of float
+        Expiry times where both the hard-constrained and the
+        unconstrained fit failed.  These slices are omitted from
+        ``fitted_slices`` entirely.
+    """
+    fitted_slices: list[tuple[float, SSVIParams]]
+    fallback_slices: list[float]
+    failed_slices: list[float]
 
 
 def _butterfly_constraints(
@@ -262,7 +288,7 @@ def _fit_slice(
 
 def fit_ssvi_surface_sequential(
     slices_data: list[tuple[float, list[tuple[float, float]]]],
-) -> list[tuple[float, SSVIParams]]:
+) -> SequentialFitResult:
     """Fit a sequence of SSVI slices with calendar-arb-free constraints.
 
     Slices are sorted by ascending maturity and fitted one at a time.
@@ -288,9 +314,11 @@ def fit_ssvi_surface_sequential(
 
     Returns
     -------
-    list of (expiry_time, SSVIParams)
-        One entry per slice in ascending maturity order.  Slices where
-        both the hard-constrained fit and the fallback fail are omitted.
+    SequentialFitResult
+        Contains ``fitted_slices`` (successful fits, hard-constrained
+        or fallback), ``fallback_slices`` (T values where only the
+        unconstrained fallback succeeded), and ``failed_slices``
+        (T values where both fits failed).
 
     Reference
     ----------
@@ -298,14 +326,16 @@ def fit_ssvi_surface_sequential(
     """
     ordered = sorted(slices_data, key=lambda sd: sd[0])
 
-    result: list[tuple[float, SSVIParams]] = []
+    fitted: list[tuple[float, SSVIParams]] = []
+    fallback: list[float] = []
+    failed: list[float] = []
     last_valid_prev: SSVIParams | None = None
 
     for expiry, pts in ordered:
         try:
             params = _fit_slice(pts, prev=last_valid_prev)
             last_valid_prev = params  # update only on hard-constrained success
-            result.append((expiry, params))
+            fitted.append((expiry, params))
         except RuntimeError as e:
             _logger.warning(
                 "eSSVI hard-constrained fit failed for T=%.4f (%s); "
@@ -313,18 +343,20 @@ def fit_ssvi_surface_sequential(
                 expiry, e,
             )
             try:
-                fallback = fit_ssvi_slice(pts)
-                result.append((expiry, fallback))
-                # do NOT update last_valid_prev
+                params = fit_ssvi_slice(pts)
+                fitted.append((expiry, params))
+                fallback.append(expiry)
+                # do NOT update last_valid_prev — fallback slices aren't arb-free
             except (RuntimeError, ValueError) as e2:
                 _logger.error(
                     "eSSVI fallback fit also failed for T=%.4f (%s); "
                     "skipping this slice",
                     expiry, e2,
                 )
+                failed.append(expiry)
 
-    if len(result) >= 2:
-        params_only = [p for _, p in result]
+    if len(fitted) >= 2:
+        params_only = [p for _, p in fitted]
         if not verify_hm_condition(params_only):
             _logger.warning(
                 "verify_hm_condition reports violation after fit; "
@@ -332,7 +364,11 @@ def fit_ssvi_surface_sequential(
                 "These are reported as remaining violations."
             )
 
-    return result
+    return SequentialFitResult(
+        fitted_slices=fitted,
+        fallback_slices=fallback,
+        failed_slices=failed,
+    )
 
 
 def verify_hm_condition(

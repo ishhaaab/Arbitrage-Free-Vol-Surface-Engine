@@ -14,6 +14,7 @@ from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
+    SequentialFitResult,
 )
 from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
@@ -339,6 +340,8 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     fitted_ssvi: list[FittedSSVISlice]= []
     fitted_sabr: list[FittedSABRSlice]= []
     repair_infeasible= False
+    fallback_slices: list[float] = []
+    failed_slices: list[float] = []
     if cleaned_surface is not None:
         sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
 
@@ -367,7 +370,10 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 slice_meta.append((sl, F))
 
             if slices_data:
-                params_list = fit_ssvi_surface_sequential(slices_data)
+                seq_result = fit_ssvi_surface_sequential(slices_data)
+                params_list = seq_result.fitted_slices
+                fallback_slices = seq_result.fallback_slices
+                failed_slices = seq_result.failed_slices
                 fitted_by_T: dict[float, SSVIParams] = {T: p for T, p in params_list}
 
                 for (sl, F), (T, pts) in zip(slice_meta, slices_data):
@@ -528,4 +534,6 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         metrics=metrics,
         cleaned_surface=cleaned_surface,
         repair_infeasible=repair_infeasible,
+        fallback_slices=fallback_slices,
+        failed_slices=failed_slices,
     )

@@ -92,6 +92,23 @@ for label, kw in model_configs:
           f"rejected={n_rej}, fitted={len(r.fitted_slices)}, "
           f"avg_RMSE={avg_rmse:.4f}")
 
+    # Print eSSVI-specific fallback/failed slice info
+    if label == "eSSVI":
+        fb = r.fallback_slices
+        fl = r.failed_slices
+        if fb:
+            print(f"  Fallback slices (hard-constrained failed, "
+                  f"unconstrained succeeded): {len(fb)}")
+            print(f"    T = {fb}")
+            print(f"  Note: these slices do not satisfy the "
+                  f"H&M Prop 3.1 arb-free condition.")
+        else:
+            print(f"  No fallback slices — all expiries "
+                  f"arb-free-by-construction.")
+        print(f"  Failed slices (both fits failed): {len(fl)}")
+        if fl:
+            print(f"    T = {fl}")
+
 # ##########################################################################
 # 3. Build FittedSurface (use SVI report)
 # ##########################################################################

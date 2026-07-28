@@ -529,3 +529,12 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
     assert report.repair_infeasible is True, (
         "repair_infeasible should be True when a slice fell back"
     )
+
+    # The middle slice (T=0.5) should be in fallback_slices
+    assert 0.5 in report.fallback_slices, (
+        f"expected T=0.5 in fallback_slices, got {report.fallback_slices}"
+    )
+    # No slices should have failed entirely
+    assert report.failed_slices == [], (
+        f"expected empty failed_slices, got {report.failed_slices}"
+    )

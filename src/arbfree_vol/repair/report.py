@@ -1,5 +1,5 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.arbitrage.report import ViolationType, ArbitrageReport
@@ -75,3 +75,5 @@ class RepairReport:
     fitted_ssvi_slices: tuple[FittedSSVISlice, ...] = ()
     fitted_sabr_slices: tuple[FittedSABRSlice, ...] = ()
     repair_infeasible: bool = False
+    fallback_slices: list[float] = field(default_factory=list)
+    failed_slices: list[float] = field(default_factory=list)
