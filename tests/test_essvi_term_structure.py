@@ -50,7 +50,8 @@ def test_theta_and_chi_non_decreasing() -> None:
     non-decreasing across slices (Hendriks & Martini 2019, Prop 3.1,
     conditions (a) and (b))."""
     slices_data = _make_slices_data()
-    params = fit_ssvi_surface_sequential(slices_data)
+    result = fit_ssvi_surface_sequential(slices_data)
+    params = [p for _, p in result]
 
     assert len(params) == 3
 
@@ -76,7 +77,8 @@ def test_pairwise_inequality_holds() -> None:
     (Hendriks & Martini 2019, Prop 3.1, condition (c)).
     """
     slices_data = _make_slices_data()
-    params = fit_ssvi_surface_sequential(slices_data)
+    result = fit_ssvi_surface_sequential(slices_data)
+    params = [p for _, p in result]
 
     chis = [p.theta * p.psi for p in params]
     tol = 1e-8
@@ -97,7 +99,8 @@ def test_grid_calendar_detector_reports_zero() -> None:
     """The grid-based detect_svi_surface must report zero violations on
     a calibrated eSSVI surface (redundant regression check)."""
     slices_data = _make_slices_data()
-    params = fit_ssvi_surface_sequential(slices_data)
+    result = fit_ssvi_surface_sequential(slices_data)
+    params = [p for _, p in result]
 
     svi_pairs: list[tuple[float, object]] = []
     for T, p in zip(_EXPIRIES, params):
@@ -134,12 +137,78 @@ def test_near_equal_chi_no_divide_by_zero() -> None:
     assert len(params) == 2
 
     # All params must be finite
-    for p in params:
+    for _T, p in params:
         assert np.isfinite(p.theta), f"theta is not finite: {p.theta}"
         assert np.isfinite(p.rho), f"rho is not finite: {p.rho}"
         assert np.isfinite(p.psi), f"psi is not finite: {p.psi}"
 
     # verify_hm_condition must pass (the eps_chi floor handles denom → 0)
-    assert verify_hm_condition(params), (
+    assert verify_hm_condition([p for _, p in params]), (
         "verify_hm_condition returned False on near-equal-chi slices"
     )
+
+
+# ── Test 5: fallback on infeasible slice ────────────────────────────
+def test_sequential_fit_falls_back_on_infeasible_slice(monkeypatch) -> None:
+    """When a slice's data makes the H&M constraints infeasible against
+    the predecessor, the fitter must fall back to the unconstrained
+    per-slice fit rather than raising.
+
+    We build a 3-slice surface with normal data and monkeypatch
+    ``_fit_slice`` to raise ``RuntimeError`` on the second call (the
+    middle slice), simulating an infeasible H&M constraint.  The
+    sequential fitter must fall back to ``fit_ssvi_slice``.
+
+    The result must contain all 3 slices.  The fallback slice is NOT
+    arb-free by construction, so verify_hm_condition may report a
+    violation — that's expected and honest.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
+    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
+    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
+    ks = np.linspace(-1.0, 1.0, 9).tolist()
+
+    def _pts(truth):
+        return [
+            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
+            for k in ks
+        ]
+
+    slices_data = [
+        (0.25, _pts(truth1)),
+        (0.50, _pts(truth2)),
+        (1.00, _pts(truth3)),
+    ]
+
+    # Monkeypatch _fit_slice to fail on the 2nd call
+    call_count = {"n": 0}
+    _real_fit_slice = ts._fit_slice
+
+    def _failing_fit_slice(points, prev=None, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated infeasible H&M constraints")
+        return _real_fit_slice(points, prev=prev, **kwargs)
+
+    monkeypatch.setattr(ts, "_fit_slice", _failing_fit_slice)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    # All 3 slices must be present (hard or fallback)
+    assert len(result) == 3, (
+        f"expected 3 entries, got {len(result)}"
+    )
+
+    # The middle slice should have fallen back to unconstrained
+    print(f"  result expiries: {[T for T, _ in result]}")
+    for i, (T, p) in enumerate(result):
+        print(f"  slice {i} (T={T}): theta={p.theta:.6f}, rho={p.rho:.4f}, psi={p.psi:.4f}")
+
+    # verify_hm_condition may be False because of the fallback
+    params_only = [p for _, p in result]
+    hm_ok = verify_hm_condition(params_only)
+    print(f"  verify_hm_condition: {hm_ok}")
+    # We don't assert True or False — just that the function returns
+    # without raising.

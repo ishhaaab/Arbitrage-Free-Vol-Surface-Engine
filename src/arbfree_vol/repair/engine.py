@@ -368,11 +368,17 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
 
             if slices_data:
                 params_list = fit_ssvi_surface_sequential(slices_data)
+                fitted_by_T: dict[float, SSVIParams] = {T: p for T, p in params_list}
 
-                for (sl, F), ssvi_params, pts in zip(
-                    slice_meta, params_list,
-                    [sd[1] for sd in slices_data],
-                ):
+                for (sl, F), (T, pts) in zip(slice_meta, slices_data):
+                    ssvi_params = fitted_by_T.get(T)
+                    if ssvi_params is None:
+                        _logger.warning(
+                            "eSSVI: no fit for T=%.4f; skipping in fitted output",
+                            T,
+                        )
+                        continue
+
                     errors = [
                         (ssvi_w(k, ssvi_params.theta,
                                 ssvi_params.rho, ssvi_params.psi) - w) ** 2
@@ -411,7 +417,11 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                     ))
 
                 # Check calendar-arb feasibility of the fit
-                repair_infeasible = not verify_hm_condition(params_list)
+                if len(params_list) >= 2:
+                    params_only_sorted = [p for _, p in sorted(params_list, key=lambda x: x[0])]
+                    repair_infeasible = not verify_hm_condition(params_only_sorted)
+                else:
+                    repair_infeasible = False
 
         elif use_sabr:
             # ── SABR B-spline term-structure path ───────────────────

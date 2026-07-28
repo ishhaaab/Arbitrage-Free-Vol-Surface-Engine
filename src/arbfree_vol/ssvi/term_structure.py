@@ -47,6 +47,7 @@ from numpy.typing import NDArray
 from scipy.optimize import minimize, NonlinearConstraint, Bounds
 
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 _logger = logging.getLogger(__name__)
 
@@ -261,13 +262,23 @@ def _fit_slice(
 
 def fit_ssvi_surface_sequential(
     slices_data: list[tuple[float, list[tuple[float, float]]]],
-) -> list[SSVIParams]:
+) -> list[tuple[float, SSVIParams]]:
     """Fit a sequence of SSVI slices with calendar-arb-free constraints.
 
     Slices are sorted by ascending maturity and fitted one at a time.
     Each slice inherits the Hendriks-Martini Prop 3.1 constraints from
     its predecessor.  Per-slice rho is fully free (tanh-reparametrised,
     no cross-slice functional form).
+
+    When the hard-constrained fit fails for a slice (the optimizer
+    cannot satisfy the H&M Prop 3.1 constraints given the data), the
+    function falls back to the unconstrained per-slice
+    :func:`fit_ssvi_slice`.  The fallback slice is NOT arb-free by
+    construction, but the engine reports this honestly via
+    ``verify_hm_condition`` and the ``repair_infeasible`` flag.  The
+    fallback result is NOT used as ``prev`` for the next slice's
+    constraints — ``prev`` remains the last *hard-constrained*
+    successful fit.
 
     Parameters
     ----------
@@ -277,8 +288,9 @@ def fit_ssvi_surface_sequential(
 
     Returns
     -------
-    list of SSVIParams
-        One entry per slice in ascending maturity order.
+    list of (expiry_time, SSVIParams)
+        One entry per slice in ascending maturity order.  Slices where
+        both the hard-constrained fit and the fallback fail are omitted.
 
     Reference
     ----------
@@ -286,18 +298,39 @@ def fit_ssvi_surface_sequential(
     """
     ordered = sorted(slices_data, key=lambda sd: sd[0])
 
-    result: list[SSVIParams] = []
-    for _i, (_expiry, pts) in enumerate(ordered):
-        prev = result[-1] if result else None
-        params = _fit_slice(pts, prev=prev)
-        result.append(params)
+    result: list[tuple[float, SSVIParams]] = []
+    last_valid_prev: SSVIParams | None = None
 
-    # Redundant post-fit assertion (hard constraints already enforced)
-    if len(result) >= 2 and not verify_hm_condition(result):
-        _logger.warning(
-            "verify_hm_condition failed despite hard constraints — "
-            "numeric tolerance may be too tight; review eps_chi / solver tol."
-        )
+    for expiry, pts in ordered:
+        try:
+            params = _fit_slice(pts, prev=last_valid_prev)
+            last_valid_prev = params  # update only on hard-constrained success
+            result.append((expiry, params))
+        except RuntimeError as e:
+            _logger.warning(
+                "eSSVI hard-constrained fit failed for T=%.4f (%s); "
+                "falling back to unconstrained per-slice fit",
+                expiry, e,
+            )
+            try:
+                fallback = fit_ssvi_slice(pts)
+                result.append((expiry, fallback))
+                # do NOT update last_valid_prev
+            except (RuntimeError, ValueError) as e2:
+                _logger.error(
+                    "eSSVI fallback fit also failed for T=%.4f (%s); "
+                    "skipping this slice",
+                    expiry, e2,
+                )
+
+    if len(result) >= 2:
+        params_only = [p for _, p in result]
+        if not verify_hm_condition(params_only):
+            _logger.warning(
+                "verify_hm_condition reports violation after fit; "
+                "likely one or more slices fell back to unconstrained. "
+                "These are reported as remaining violations."
+            )
 
     return result
 

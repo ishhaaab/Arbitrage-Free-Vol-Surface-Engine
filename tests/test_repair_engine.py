@@ -468,3 +468,64 @@ def test_repair_sabr_term_structure_reduces_violations() -> None:
     assert len(cal_violations) <= 5, (
         f"too many calendar violations: {len(cal_violations)}"
     )
+
+
+def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
+    """eSSVI repair must not crash when a slice's data makes the H&M
+    hard constraints infeasible.  The fitter should fall back to the
+    unconstrained per-slice fit for that slice, and the repair report
+    should honestly flag ``repair_infeasible=True``.
+
+    Build a 3-slice surface (flat vol 0.2) and monkeypatch
+    ``_fit_slice`` in ``term_structure`` to raise ``RuntimeError`` on
+    the second call, simulating an infeasible H&M constraint for the
+    middle slice.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    expiries = [0.25, 0.5, 1.0]
+    n_strikes = 7
+    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
+
+    slices: list[ExpirySlice] = []
+    for T in expiries:
+        quotes: list[Quote] = []
+        for K in strikes:
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.CALL,
+                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T))
+            )
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.PUT,
+                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T))
+            )
+        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
+
+    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+    # Monkeypatch _fit_slice to fail on the 2nd call
+    call_count = {"n": 0}
+    _real_fit_slice = ts._fit_slice
+
+    def _failing_fit_slice(points, prev=None, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated infeasible H&M constraints")
+        return _real_fit_slice(points, prev=prev, **kwargs)
+
+    monkeypatch.setattr(ts, "_fit_slice", _failing_fit_slice)
+
+    # Must not raise
+    report = repair(surface, use_ssvi=True)
+
+    # All 3 slices must have a fit (hard-constrained or fallback)
+    assert len(report.fitted_ssvi_slices) == 3, (
+        f"expected 3 fitted_ssvi_slices, got {len(report.fitted_ssvi_slices)}"
+    )
+    assert report.metrics.n_slices_fitted == 3, (
+        f"expected 3 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+    # The fallback slice violates H&M, so repair_infeasible must be True
+    assert report.repair_infeasible is True, (
+        "repair_infeasible should be True when a slice fell back"
+    )
