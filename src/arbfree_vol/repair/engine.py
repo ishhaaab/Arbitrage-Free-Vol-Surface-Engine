@@ -272,17 +272,25 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     """Repair a volatility surface by rejecting arb violating quotes,
     re estimating the forward curve, and refitting SVI slices.
 
-    If ``use_ssvi=True``, fits eSSVI which is arb free by construction
-    instead of raw SVI per slice.  The fitted eSSVI parameters are
-    mapped back to raw SVI for the ``fitted_slices`` field, so the
-    existing SVI-based visualization and detection code continues to
-    work.  The native eSSVI parameters are stored in
-    ``fitted_ssvi_slices``.
+    If ``use_ssvi=True``, fits eSSVI instead of raw SVI per slice.
+    The theoretical eSSVI construction (Gatheral & Jacquier 2014) is
+    arbitrage-free when psi(theta) is a single shared power-law
+    function fit jointly across the whole surface and theta(T) is
+    monotonic.  This implementation fits (theta, rho, psi)
+    independently per expiry via ``fit_ssvi_slice`` — it does **not**
+    enforce that joint structure, so it carries the same cross-slice
+    calendar-arbitrage risk as the plain SVI path did before the fix
+    in 8b3e149.  The fitted eSSVI parameters are mapped back to raw
+    SVI for the ``fitted_slices`` field, so the existing SVI-based
+    visualization and detection code continues to work.  The native
+    eSSVI parameters are stored in ``fitted_ssvi_slices``.
 
     If ``use_sabr=True``, fits the SABR model (Hagan et al. 2002)
-    instead of raw SVI per slice.  The SABR parameters are mapped to
-    raw SVI via ``to_raw_svi_params`` adapter, and the native SABR
-    parameters are stored in ``fitted_sabr_slices``.
+    instead of raw SVI per slice.  Also fit independently per expiry
+    (``calibrate_sabr``, no cross-slice information) — same calendar-
+    arbitrage risk as eSSVI above; not yet addressed.  The SABR
+    parameters are mapped to raw SVI via ``to_raw_svi_params`` adapter,
+    and the native SABR parameters are stored in ``fitted_sabr_slices``.
 
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
