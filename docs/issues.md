@@ -256,3 +256,112 @@ butterfly bounds per slice.  It is arbitrage-free by construction
 **Status:** eSSVI -- resolved (arb-free by construction, commit 582d1cf).
 SABR -- known limitation, documented and empirical; dynamic SABR is a
 future research extension.
+
+---
+
+## 15. eSSVI sequential fit fallback on SPY short-end: non-monotonic ATM variance
+
+**Files:**
+- `src/arbfree_vol/ssvi/term_structure.py:fit_ssvi_surface_sequential` (fallback logic)
+- `src/arbfree_vol/ssvi/term_structure.py:_fit_slice` (hard-constrained H&M fit)
+
+**Problem:**
+On live SPY data, 4-5 of 20 eSSVI slices consistently fall back to the
+unconstrained per-slice fit because the hard-constrained H&M Prop 3.1
+fit fails with "Positive directional derivative for linesearch".  The
+fallback slices are typically at T ~ 0.08-0.35y and T ~ 0.65y.  The
+fallback itself works (unconstrained fit succeeds), but these slices
+are NOT arbitrage-free by construction.
+
+**Root cause:**
+SPY has a **non-monotonic ATM total variance (theta) term structure**
+in the short end.  Specifically, theta dips between consecutive
+maturities:
+
+```
+T=0.0658  theta=0.003609  (predecessor)
+T=0.0849  theta=0.002563  (FALLBACK -- theta DIPS by 29%)
+T=0.0932  theta=0.003632  (hard-constrained fit succeeds)
+
+T=0.1425  theta=0.006787  (predecessor)
+T=0.1753  theta=0.005467  (FALLBACK -- theta DIPS by 19%)
+T=0.2192  theta=0.007120  (hard-constrained fit succeeds)
+
+T=0.2192  theta=0.007120  (predecessor)
+T=0.2575  theta=0.005866  (FALLBACK -- theta DIPS by 18%)
+T=0.3151  theta=0.009965  (hard-constrained fit succeeds)
+
+T=0.6411  theta=0.028660  (predecessor)
+T=0.6740  theta=0.012665  (FALLBACK -- theta DIPS by 56%)
+T=0.8877  theta=0.036431  (hard-constrained fit succeeds)
+```
+
+The H&M Prop 3.1 condition (a) requires theta to be **non-decreasing**
+across maturities.  When the data wants theta to *decrease*, the
+constrained optimizer cannot find a solution that both fits the data
+and satisfies the constraint.  The optimizer reports "Positive
+directional derivative for linesearch" -- it found a stationary point
+that's not a minimum (the constraint surface pushes it to a saddle
+point or boundary).
+
+**Why warm-start doesn't help:**
+Diagnostic analysis (`scripts/diagnose_fallback_slices.py`) confirms:
+- The unconstrained fit's theta is ALWAYS lower than the predecessor's
+  theta for fallback slices (theta_delta is negative).
+- Warm-starting the hard-constrained optimizer from the unconstrained
+  solution's parameters fails 100% of the time (0/4 slices fixed)
+  because the starting point itself violates condition (a).
+- Random restarts (5 per slice) occasionally converge (0-3 out of 5),
+  but the converged solutions are degenerate: they simply copy the
+  predecessor's exact parameters, giving 1.1-3.6x worse RMSE than
+  the unconstrained fit.
+
+**Why this is a fundamental limitation, not a convergence issue:**
+The data genuinely wants lower theta at these maturities.  The
+non-monotonic theta pattern is a real feature of SPY options driven by:
+1. **Event risk concentration** in near-term expiries (earnings, FOMC)
+   that inflates ATM vol for specific tenors.
+2. **Market microstructure**: bid-ask spreads widen for certain
+   maturities, creating noisy theta estimates.
+3. **The SSVI parametrization's theta is total variance** (sigma^2 * T),
+   which amplifies any ATM vol noise by the T factor.
+
+The H&M Prop 3.1 condition is **sufficient** but not **necessary** for
+no-calendar-spread arbitrage.  A surface with non-monotonic theta can
+still be arbitrage-free if the theta decrease is small enough and the
+skew/wing parameters adjust appropriately.  But H&M's formulation
+cannot represent this.
+
+**Impact:**
+- Fallback slices are NOT arbitrage-free by construction.
+- `verify_hm_condition()` correctly reports violations on the fitted
+  surface.
+- The grid-based `detect_svi_surface()` empirically checks for
+  remaining calendar violations; in practice, the violations are
+  usually small (the unconstrained fit is close to arb-free).
+- The fallback is honest: `RepairReport.repair_infeasible` is True,
+  and `RepairReport.fallback_slices` lists the affected expiries.
+
+**Possible mitigations (none yet implemented):**
+1. **Relax condition (a)** to allow small theta decreases with a soft
+   penalty instead of a hard constraint.  This would let the optimizer
+   find a near-arb-free solution that fits the data better.
+2. **Smooth the theta term structure** before fitting: fit a smooth
+   curve to the ATM total variance across expiries, then use the
+   smoothed theta as a hard lower bound.  This would remove the dips
+   while preserving the overall shape.
+3. **Use a different parametrization** for the short end (< 0.5y):
+   raw SVI with a soft calendar penalty (the non-eSSVI path) handles
+   non-monotonic theta naturally.
+4. **Group nearby expiries**: merge slices at T=0.0658 and T=0.0849
+   into a single slice, avoiding the theta dip entirely.
+
+**Status:** Known limitation, documented. The fallback behavior
+(unconstrained fit + honest H&M violation reporting) is the correct
+approach until one of the mitigations above is implemented.
+
+**Diagnostic scripts:**
+- `scripts/diagnose_fallback_slices.py`: full diagnostic with
+  warm-start and random-restart analysis.
+- `scripts/deep_dive_fallback.py`: theta term structure analysis and
+  RMSE comparison.
