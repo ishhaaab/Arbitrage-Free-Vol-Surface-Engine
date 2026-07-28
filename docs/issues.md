@@ -82,7 +82,7 @@ Raw SVI is expressive but not arbitrage-free by construction. For near-expiry da
 **Possible mitigations (none yet implemented):**
 1. **Fit with a butterfly penalty** — add `g(k) < 0` as a soft constraint in the `least_squares` objective.
 2. **Parameter constraints** — restrict `b * (1 + |rho|) < 2 * a / sigma` (Gatheral & Jacquier condition for SSVI).
-3. **Upgrade to SSVI/eSSVI** — the surface parameterization is theoretically arbitrage-free with a joint fit (Gatheral & Jacquier 2014), but the current implementation fits independently per expiry (see issue #14). For the SVI path, the calendar penalty in commit 8b3e149 partially addresses this.
+3. **Upgrade to SSVI/eSSVI** — the eSSVI path is now arbitrage-free by construction via the Hendriks & Martini (2019) Prop 3.1 sequential hard-constraint fit (commit 582d1cf, see `src/arbfree_vol/ssvi/term_structure.py`); for the raw SVI path the calendar penalty in commit 8b3e149 mitigates it.
 4. **Increase minimum time-to-expiry** for data fed into the SVI calibrator (pragmatic — skip T < 14d).
 
 **Status:** Known, documented. Not yet mitigated. The repair engine reports these honestly as remaining violations.
@@ -217,22 +217,42 @@ Linear interpolation in T at a fixed absolute strike K means the two endpoints a
 
 ---
 
-## 14. eSSVI and SABR are fit per-slice independently — same calendar-arbitrage risk as pre-fix SVI
+## 14. SABR is an empirical comparison parametrisation -- not arb-free by construction
 
 **Files:**
-- `src/arbfree_vol/repair/engine.py:_fit_slice_ssvi`
-- `src/arbfree_vol/repair/engine.py:_fit_slice_sabr`
-- `src/arbfree_vol/ssvi/calibration.py:fit_ssvi_slice`
+- `src/arbfree_vol/repair/engine.py` (use_sabr branch)
+- `src/arbfree_vol/sabr/term_structure.py:fit_sabr_term_structure`
 - `src/arbfree_vol/sabr/calibration.py:calibrate_sabr`
 
-**Problem:**
-Both `_fit_slice_ssvi()` and `_fit_slice_sabr()` fit one expiry slice at a time independently — no shared parameters, no neighboring-slice information, no joint fit anywhere in the call chain. This means both paths carry exactly the same cross-slice calendar-arbitrage risk that the plain SVI path had before the fix in commit 8b3e149.
+**Problem / scope:**
+The classical Hagan SABR model (Hagan et al. 2002) has no closed-form
+arbitrage-free construction for a full term structure.  The SABR path
+in `repair(use_sabr=True)` therefore fits B-spline term structures on
+alpha(t), nu(t), rho(t) across expiries with a cross-slice calendar-arb
+SOFT penalty (`src/arbfree_vol/sabr/term_structure.py`).  Calendar-arb
+verification is EMPIRICAL and grid-based via `detect_svi_surface` --
+it is NOT a closed-form / by-construction guarantee.  SABR is offered
+as a COMPARISON parametrisation alongside the arbitrage-certified eSSVI
+primary surface (which is now arb-free by construction -- see issue
+note below).  Dynamic SABR (Hagan-Patrick-Sulem et al.) is a
+not-implemented research extension.
 
-The `repair()` docstring was corrected in commit 9ee58ee to document this honestly. The theoretical eSSVI construction (Gatheral & Jacquier 2014) achieves arbitrage-freedom only when `psi(theta)` is a single shared power-law function fit jointly across the whole surface and `theta(T)` is monotonic — neither condition is enforced by `fit_ssvi_slice`.
+B-spline coefficients are reparametrised at the coefficient level
+(scaled tanh for rho keeping |rho| < 0.999; exp + floor for alpha/nu
+keeping them positive), so the curve stays in-range between knots by
+the B-spline convex-hull property, with no runtime clamping.  Despite
+this, residual calendar-arb violations can remain on adversarial or
+very sparse data; they are reported honestly in `n_violations_after`.
 
-**Current state:**
-- **SVI path:** calendar-arbitrage is mitigated by the penalty in `calibrate_constrained(prev_slice=...)` (commit 8b3e149). 178/178 tests pass; real-data SPY violations dropped from 494 to 9.
-- **eSSVI path:** `_fit_slice_ssvi` still fits each slice independently. No calendar penalty applied. `detect_svi_surface` will catch violations honestly after fit, and the count is reported in `n_violations_after`, but nothing refits them.
-- **SABR path:** `_fit_slice_sabr` same pattern. Independent per-slice fit with no cross-slice information. Same vulnerability as eSSVI.
+**Historical note:** This issue previously (commits 9ee58ee / 8b3e149
+era) also covered the eSSVI path, which had the same per-slice
+independent-fit calendar risk.  That is now RESOLVED -- the eSSVI path
+fits slices sequentially by increasing maturity with the
+Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition enforced
+as a HARD optimizer constraint, plus both Gatheral-Jacquier (2014)
+butterfly bounds per slice.  It is arbitrage-free by construction
+(commit 582d1cf).  See `src/arbfree_vol/ssvi/term_structure.py`.
 
-**Status:** Known, not yet addressed for eSSVI or SABR. The SVI path is partially addressed (commit 8b3e149). A future fix could either apply the same `prev_slice` penalty to the eSSVI/SABR calibration functions, or implement true joint fits that satisfy the Gatheral-Jacquier conditions.
+**Status:** eSSVI -- resolved (arb-free by construction, commit 582d1cf).
+SABR -- known limitation, documented and empirical; dynamic SABR is a
+future research extension.
