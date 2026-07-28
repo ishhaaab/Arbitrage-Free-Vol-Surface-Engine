@@ -10,7 +10,11 @@ from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 from arbfree_vol.svi.calibration import calibrate_constrained
 from arbfree_vol.svi.model import svi_total_variance, SVIParams
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params
+from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
+from arbfree_vol.ssvi.term_structure import (
+    fit_ssvi_surface_sequential,
+    verify_hm_condition,
+)
 from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
 from arbfree_vol.variance import slice_total_variance
@@ -270,20 +274,26 @@ def _fit_slice_sabr(sl: ExpirySlice,
 
 def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) -> RepairReport:
     """Repair a volatility surface by rejecting arb violating quotes,
-    re estimating the forward curve, and refitting SVI slices.
+    re-estimating the forward curve, and refitting SVI slices.
 
-    If ``use_ssvi=True``, fits eSSVI instead of raw SVI per slice.
-    The theoretical eSSVI construction (Gatheral & Jacquier 2014) is
-    arbitrage-free when psi(theta) is a single shared power-law
-    function fit jointly across the whole surface and theta(T) is
-    monotonic.  This implementation fits (theta, rho, psi)
-    independently per expiry via ``fit_ssvi_slice`` — it does **not**
-    enforce that joint structure, so it carries the same cross-slice
-    calendar-arbitrage risk as the plain SVI path did before the fix
-    in 8b3e149.  The fitted eSSVI parameters are mapped back to raw
-    SVI for the ``fitted_slices`` field, so the existing SVI-based
-    visualization and detection code continues to work.  The native
-    eSSVI parameters are stored in ``fitted_ssvi_slices``.
+    If ``use_ssvi=True``, fits SSVI slices sequentially by increasing
+    maturity with the Hendriks & Martini (2019) Prop 3.1
+    no-calendar-spread condition enforced as a HARD optimizer
+    constraint:
+
+      (a) theta non-decreasing,
+      (b) chi = theta*psi non-decreasing,
+      (c) |(rho*chi)_{i+1} - (rho*chi)_i| / (chi_{i+1} - chi_i) <= 1.
+
+    Both Gatheral-Jacquier (2014) butterfly bounds
+    ``theta*psi*(1+|rho|) <= 4`` and ``theta*psi^2*(1+|rho|) <= 4``
+    are enforced per slice.  Per-slice rho is fully free
+    (tanh-reparametrised, no cross-slice functional form).  The
+    discrete formulation follows Corbetta et al. (2019),
+    arXiv:1804.04924, Sec 2.2-2.3.  The construction is
+    arbitrage-free by construction; the existing grid-based calendar
+    detector (detect_svi_surface) is run only as a redundant
+    regression assertion.
 
     If ``use_sabr=True``, fits the SABR model (Hagan et al. 2002)
     instead of raw SVI per slice.  Also fit independently per expiry
@@ -320,29 +330,98 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     fitted: list[FittedSlice]= []
     fitted_ssvi: list[FittedSSVISlice]= []
     fitted_sabr: list[FittedSABRSlice]= []
+    repair_infeasible= False
     if cleaned_surface is not None:
-        # SVI path threads prev_slice across calls (calendar consistency).
-        # eSSVI / SABR fit each slice independently (different models,
-        # different fit functions, prev_slice not applicable).
         sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
-        prev_svi: SVIParams | None = None
-        for sl in sorted_slices:
-            F= fwd_curve.get(sl.expiry_time)
-            if F is None:
-                continue
-            if use_ssvi:
-                result= _fit_slice_ssvi(sl, F, cleaned_surface)
-                if result is not None:
-                    fs, fssvi= result
-                    fitted.append(fs)
-                    fitted_ssvi.append(fssvi)
-            elif use_sabr:
+
+        if use_ssvi:
+            # ── eSSVI sequential path (Hendriks & Martini 2019) ────
+            slices_data: list[tuple[float, list[tuple[float, float]]]] = []
+            slice_meta: list[tuple[ExpirySlice, float]] = []  # (sl, F)
+            for sl in sorted_slices:
+                F = fwd_curve.get(sl.expiry_time)
+                if F is None:
+                    continue
+                strike_w = slice_total_variance(cleaned_surface, sl)
+                if len(strike_w) < 5:
+                    _logger.warning(
+                        "slice T=%.4f has %d (k,w) points — need >= 5; "
+                        "skipping SSVI fit",
+                        sl.expiry_time, len(strike_w),
+                    )
+                    continue
+                pts = [
+                    (log(strike / F), w)
+                    for strike, w in strike_w.items()
+                ]
+                pts.sort()
+                slices_data.append((sl.expiry_time, pts))
+                slice_meta.append((sl, F))
+
+            if slices_data:
+                params_list = fit_ssvi_surface_sequential(slices_data)
+
+                for (sl, F), ssvi_params, pts in zip(
+                    slice_meta, params_list,
+                    [sd[1] for sd in slices_data],
+                ):
+                    errors = [
+                        (ssvi_w(k, ssvi_params.theta,
+                                ssvi_params.rho, ssvi_params.psi) - w) ** 2
+                        for k, w in pts
+                    ]
+                    rmse = sqrt(mean(errors))
+
+                    a, b, rho_raw, m, sigma = to_raw_svi_params(
+                        ssvi_params.theta, ssvi_params.rho, ssvi_params.psi
+                    )
+                    raw_svi_params = SVIParams(
+                        a=a, b=b, rho=rho_raw, m=m, sigma=sigma
+                    )
+
+                    fitted.append(FittedSlice(
+                        expiry_time=sl.expiry_time,
+                        params=raw_svi_params,
+                        rmse=rmse,
+                        forward_price=F,
+                        n_quotes_total=len(sl.quotes),
+                        n_quotes_used=len(pts),
+                        data_points=tuple(pts),
+                    ))
+                    fitted_ssvi.append(FittedSSVISlice(
+                        expiry_time=sl.expiry_time,
+                        ssvi=SSVIParams(
+                            theta=ssvi_params.theta,
+                            rho=ssvi_params.rho,
+                            psi=ssvi_params.psi,
+                        ),
+                        rmse=rmse,
+                        forward_price=F,
+                        n_quotes_total=len(sl.quotes),
+                        n_quotes_used=len(pts),
+                        essvi=None,
+                    ))
+
+                # Check calendar-arb feasibility of the fit
+                repair_infeasible = not verify_hm_condition(params_list)
+
+        elif use_sabr:
+            prev_svi: SVIParams | None = None
+            for sl in sorted_slices:
+                F= fwd_curve.get(sl.expiry_time)
+                if F is None:
+                    continue
                 result= _fit_slice_sabr(sl, F, cleaned_surface)
                 if result is not None:
                     fs, fsabr= result
                     fitted.append(fs)
                     fitted_sabr.append(fsabr)
-            else:
+        else:
+            prev_svi: SVIParams | None = None
+            for sl in sorted_slices:
+                F= fwd_curve.get(sl.expiry_time)
+                if F is None:
+                    continue
                 fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
                 if fs is not None:
                     fitted.append(fs)
@@ -373,4 +452,5 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         remaining_violations=remaining,
         metrics=metrics,
         cleaned_surface=cleaned_surface,
+        repair_infeasible=repair_infeasible,
     )

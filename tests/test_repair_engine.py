@@ -345,3 +345,67 @@ def test_repair_svi_path_fixes_calendar_violation() -> None:
         f"SVI repair path produced non-arb-free surface. All violations: "
         f"{[v.kind.value for v in fitted_report.violations]}"
     )
+
+
+def test_repair_essvi_sequential_is_calendar_arb_free() -> None:
+    """The eSSVI sequential fit must produce a calendar-arb-free surface.
+
+    Build a 3-slice surface from flat BS vol 0.2 at expiries
+    0.25, 0.5, 1.0.  Run repair(use_ssvi=True).  Assert:
+    - 3 slices fitted
+    - 3 fitted_ssvi_slices
+    - 0 violations after
+    - repair_infeasible is False
+    - theta strictly increasing
+    - chi = theta*psi strictly increasing
+    """
+    from math import exp
+
+    expiries = [0.25, 0.5, 1.0]
+    n_strikes = 7
+    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
+
+    slices: list[ExpirySlice] = []
+    for T in expiries:
+        quotes: list[Quote] = []
+        for K in strikes:
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.CALL,
+                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T))
+            )
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.PUT,
+                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T))
+            )
+        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
+
+    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+    report = repair(surface, use_ssvi=True)
+
+    assert report.metrics.n_slices_fitted == 3, (
+        f"expected 3 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+    assert len(report.fitted_ssvi_slices) == 3, (
+        f"expected 3 fitted_ssvi_slices, got {len(report.fitted_ssvi_slices)}"
+    )
+    assert report.metrics.n_violations_after == 0, (
+        f"expected 0 violations after, got {report.metrics.n_violations_after}"
+    )
+    assert report.repair_infeasible is False, (
+        "repair_infeasible should be False for a clean surface"
+    )
+
+    # theta strictly increasing
+    thetas = [s.ssvi.theta for s in report.fitted_ssvi_slices]
+    for i in range(len(thetas) - 1):
+        assert thetas[i + 1] > thetas[i], (
+            f"theta not strictly increasing: {thetas}"
+        )
+
+    # chi = theta * psi strictly increasing
+    chis = [s.ssvi.theta * s.ssvi.psi for s in report.fitted_ssvi_slices]
+    for i in range(len(chis) - 1):
+        assert chis[i + 1] > chis[i], (
+            f"chi not strictly increasing: {chis}"
+        )

@@ -74,3 +74,4 @@ class RepairReport:
     cleaned_surface: VolSurface | None
     fitted_ssvi_slices: tuple[FittedSSVISlice, ...] = ()
     fitted_sabr_slices: tuple[FittedSABRSlice, ...] = ()
+    repair_infeasible: bool = False
