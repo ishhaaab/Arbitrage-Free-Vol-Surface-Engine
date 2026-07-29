@@ -54,7 +54,7 @@ _OUT = Path(__file__).parent
 # ##########################################################################
 snapshot = date.today()
 print(f"[{snapshot}] Fetching {symbol} chain for backtest...")
-surface, rejected = fetch_chain(symbol, max_expiries=20, min_T_years=14.0 / 365.0)
+surface, rejected, quality_drops = fetch_chain(symbol, max_expiries=20, min_T_years=14.0 / 365.0)
 
 T_count = len(surface.slices)
 Q_count = sum(len(s.quotes) for s in surface.slices)

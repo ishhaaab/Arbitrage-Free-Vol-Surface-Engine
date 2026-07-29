@@ -69,7 +69,7 @@ for ticker in tickers:
     print(f"  {ticker}")
     print(f"{'='*60}")
     try:
-        surface, rejected = fetch_chain(ticker, max_expiries=20, min_T_years=7.0 / 365.0)
+        surface, rejected, quality_drops = fetch_chain(ticker, max_expiries=20, min_T_years=7.0 / 365.0)
         n_kept = len(surface.slices)
         print(f"  Expiries kept: {n_kept}  (rejected {len(rejected)} quotes)")
 

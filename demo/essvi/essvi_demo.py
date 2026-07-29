@@ -29,7 +29,7 @@ symbol = args.symbol
 _OUT = Path(__file__).parent
 print(f"Fetching {symbol} long-dated chains (T > 60 days)")
 
-surface, _ = fetch_chain(symbol, max_expiries=12, min_T_years=60.0 / 365.0)
+surface, _, _ = fetch_chain(symbol, max_expiries=12, min_T_years=60.0 / 365.0)
 
 print(f"Loaded {sum(len(s.quotes) for s in surface.slices)} quotes "
       f"across {len(surface.slices)} expiries")

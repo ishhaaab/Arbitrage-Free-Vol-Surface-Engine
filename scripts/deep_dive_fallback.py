@@ -20,7 +20,7 @@ from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_sl
 
 
 def fetch_and_extract():
-    surface, rejected = fetch_chain("SPY", max_expiries=20, min_T_years=7.0/365.0)
+    surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=20, min_T_years=7.0/365.0)
     fwd_curve = estimate_forward_curve(surface)
     populate_per_slice_r(surface, fwd_curve)
     slices_data = []

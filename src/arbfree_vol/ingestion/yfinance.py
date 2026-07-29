@@ -15,6 +15,11 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve
 from arbfree_vol.ingestion.cleaning import clean_quotes, RejectionRecord
+from arbfree_vol.data.quality import (
+    DataQualityConfig,
+    DropRecord,
+    filter_option_chain,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -95,7 +100,8 @@ def fetch_chain(
     symbol: str,
     max_expiries: int = 5,
     min_T_years: float = 7.0 / 365.0,
-) -> tuple[VolSurface, list[RejectionRecord]]:
+    quality_config: DataQualityConfig | None = None,
+) -> tuple[VolSurface, list[RejectionRecord], list[DropRecord]]:
     """Fetch an option chain from yfinance and return a cleaned VolSurface.
 
     Steps through the nearest expiries, builds quotes from mid prices
@@ -107,6 +113,13 @@ def fetch_chain(
     ``info.dividendYield``.  When either is unavailable, defaults to
     ``r=0.05, q=0.0`` — the repair pipeline's ``detect_with_forward()``
     corrects for that at detection time.
+
+    When ``quality_config`` is provided (or defaults are used), a
+    pre-ingestion data-quality filter is applied to each expiry's raw
+    option chain DataFrame *before* building ``Quote`` objects.  Strikes
+    failing any threshold (min open interest, min volume, max bid-ask
+    spread) are dropped and recorded in the returned ``quality_drops``
+    list.
     """
     ticker = yf.Ticker(symbol)
     expiries = ticker.options
@@ -136,6 +149,7 @@ def fetch_chain(
 
     # build slices from available expiries
     all_rejected: list[RejectionRecord] = []
+    all_quality_drops: list[DropRecord] = []
     slices: list[ExpirySlice] = []
     ref_date = date.today()
 
@@ -148,14 +162,25 @@ def fetch_chain(
             continue
 
         chain = ticker.option_chain(exp_str)
+
+        # Apply data-quality filter to raw DataFrames before building Quotes
+        calls_filtered, calls_drops = filter_option_chain(
+            chain.calls, exp_str, quality_config
+        )
+        puts_filtered, puts_drops = filter_option_chain(
+            chain.puts, exp_str, quality_config
+        )
+        all_quality_drops.extend(calls_drops)
+        all_quality_drops.extend(puts_drops)
+
         quotes: list[Quote] = []
 
-        for _, row in chain.calls.iterrows():
+        for _, row in calls_filtered.iterrows():
             qq = _row_to_quote(row, OptionType.CALL)
             if qq is not None:
                 quotes.append(qq)
 
-        for _, row in chain.puts.iterrows():
+        for _, row in puts_filtered.iterrows():
             qq = _row_to_quote(row, OptionType.PUT)
             if qq is not None:
                 quotes.append(qq)
@@ -173,4 +198,8 @@ def fetch_chain(
 
         slices.append(ExpirySlice(expiry_time=T, quotes=kept))
 
-    return VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices), all_rejected
+    return (
+        VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices),
+        all_rejected,
+        all_quality_drops,
+    )

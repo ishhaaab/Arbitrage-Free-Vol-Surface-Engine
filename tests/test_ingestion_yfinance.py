@@ -44,6 +44,8 @@ def test_fetch_chain_type(mock_ticker_class) -> None:
                 "lastPrice": lp,
                 "bid": b,
                 "ask": a,
+                "volume": 100,
+                "openInterest": 500,
                 "contractSymbol": f"{otype.value}_{i}",
             })
         return pd.DataFrame(rows)
@@ -70,10 +72,11 @@ def test_fetch_chain_type(mock_ticker_class) -> None:
         mock_date.fromisoformat.side_effect = date.fromisoformat
 
         from arbfree_vol.ingestion.yfinance import fetch_chain
-        surface, rejected = fetch_chain("SPY", max_expiries=2)
+        surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
     assert isinstance(surface, VolSurface)
     assert isinstance(rejected, list)
+    assert isinstance(quality_drops, list)
     assert surface.spot == 450.0
     assert len(surface.slices) == 2  # should get 2 weekly expiries
 
@@ -108,16 +111,18 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class)
 
     strikes = [440, 450, 460]
     cols = {"strike": strikes, "lastPrice": [20, 15, 10],
-            "bid": [19, 14, 9], "ask": [21, 16, 11]}
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
     mock_chain = MagicMock()
     mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
     mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
     mock_ticker.option_chain.return_value = mock_chain
 
     from arbfree_vol.ingestion.yfinance import fetch_chain
-    surface, rejected = fetch_chain("SPY", max_expiries=2)
+    surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
     assert surface.risk_free == 0.05  # default fallback
     assert surface.div_yield == 0.0  # default fallback
     assert isinstance(rejected, list)
+    assert isinstance(quality_drops, list)
     assert len(surface.slices) >= 1
