@@ -48,13 +48,23 @@ _OUT = Path(__file__).parent
 # 1. Fetch + clean
 # ##########################################################################
 print(f"Fetching {symbol} chain (mid prices, real r/q, with cleaning)...")
-surface, rejected = fetch_chain(symbol, max_expiries=20, min_T_years=7.0 / 365.0)
+surface, rejected, quality_drops = fetch_chain(symbol, max_expiries=20, min_T_years=7.0 / 365.0)
 
 T_count = len(surface.slices)
 Q_count = sum(len(s.quotes) for s in surface.slices)
 print(f"  Raw quotes fetched: {Q_count + len(rejected)}")
 print(f"  Rejected by cleaning: {len(rejected)} "
       f"({len(rejected) / max(Q_count + len(rejected), 1) * 100:.1f}%)")
+print(f"  Dropped by data quality filter: {len(quality_drops)}")
+if quality_drops:
+    from collections import Counter
+    dq_reasons = Counter()
+    for d in quality_drops:
+        for part in d.reason.split("; "):
+            dq_reasons[part.split("=")[0]] += 1
+    print(f"  Quality drop breakdown:")
+    for reason, count in dq_reasons.most_common():
+        print(f"    {reason}: {count}")
 print(f"  Kept quotes: {Q_count}")
 print(f"  Expiries: {T_count}")
 print(f"  Spot={surface.spot:.2f}, r={surface.risk_free:.4f}, "
@@ -110,9 +120,20 @@ for label, kw in model_configs:
             print(f"    T = {fl}")
 
 # ##########################################################################
-# 3. Build FittedSurface (use SVI report)
+# 3. Build FittedSurface (use SVI report) + extract eSSVI fallback slices
 # ##########################################################################
 fs = build_fitted_surface(reports["SVI"])
+
+# Extract fallback T values from the eSSVI report for plot masking.
+# These are maturities where the hard-constrained H&M Prop 3.1 fit failed
+# and the unconstrained per-slice fallback was used instead.
+essvi_report = reports["eSSVI"]
+fallback_Ts: list[float] = essvi_report.fallback_slices
+if fallback_Ts:
+    print(f"  eSSVI fallback T values (will be grayed in heatmaps): "
+          f"{[f'{T:.4f}' for T in fallback_Ts]}")
+else:
+    print(f"  No eSSVI fallback slices — all plots show arb-free data.")
 
 # ##########################################################################
 # 4. Dupire local vol
@@ -187,19 +208,20 @@ print("  saved: yfinance_demo_model_comparison.png")
 
 # 4. IV heatmap from FittedSurface (new)
 from arbfree_vol.viz.surface import plot_iv_heatmap
-fig = plot_iv_heatmap(fs, symbol=symbol)
+fig = plot_iv_heatmap(fs, symbol=symbol, fallback_slices=fallback_Ts)
 fig.savefig(str(_OUT / "yfinance_demo_iv_heatmap.png"), dpi=150)
 print("  saved: yfinance_demo_iv_heatmap.png")
 
 # 5. Dupire heatmap (new)
 from arbfree_vol.viz.local_vol import plot_dupire_heatmap
-fig = plot_dupire_heatmap(lv, symbol=symbol)
+fig = plot_dupire_heatmap(lv, symbol=symbol, fallback_slices=fallback_Ts)
 fig.savefig(str(_OUT / "yfinance_demo_dupire.png"), dpi=150)
 print("  saved: yfinance_demo_dupire.png")
 
 # 6. Greeks heatmap (new)
 from arbfree_vol.viz.risk import plot_greeks_heatmap
-fig = plot_greeks_heatmap(fs, strikes, maturities, symbol=symbol)
+fig = plot_greeks_heatmap(fs, strikes, maturities, symbol=symbol,
+                          fallback_slices=fallback_Ts)
 fig.savefig(str(_OUT / "yfinance_demo_greeks.png"), dpi=150)
 print("  saved: yfinance_demo_greeks.png")
 
