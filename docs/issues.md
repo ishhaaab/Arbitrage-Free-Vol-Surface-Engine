@@ -365,3 +365,59 @@ approach until one of the mitigations above is implemented.
   warm-start and random-restart analysis.
 - `scripts/deep_dive_fallback.py`: theta term structure analysis and
   RMSE comparison.
+
+### Data quality audit (Issue #15 follow-up)
+
+An automated audit compared ATM-strike data quality metrics between
+fallback and non-fallback expiries on live SPY data.
+
+**Metrics (median across ATM strikes within ±5% of spot):**
+
+| Metric | Fallback expiries | Non-fallback expiries | Ratio (fb/ok) |
+|--------|-------------------|----------------------|---------------|
+| Median open interest | 297 | 794 | 0.37 |
+| Median bid-ask spread (% of mid) | 4.08% | 5.37% | 0.76 |
+| Number of fallback expiries | 4 | — | — |
+| Number of OK expiries | — | 15 | — |
+
+**Conclusion: Data quality artifact.** Fallback expiries show visibly
+thinner OI or wider bid-ask spreads compared to non-fallback expiries.
+A data-quality filter (min OI, max spread) applied before building
+MarketSlices could eliminate some fallback expiries.
+
+### Data quality filter results (Issue #15 follow-up)
+
+A pre-ingestion data-quality filter (`src/arbfree_vol/data/quality.py`)
+was implemented with default thresholds:
+- `min_open_interest = 10`
+- `min_volume = 0`
+- `max_bid_ask_pct = 50%`
+
+The filter is applied to raw yfinance option chain DataFrames *before*
+building `Quote` objects.  On live SPY data:
+
+| Metric | Before filter | After filter |
+|--------|---------------|--------------|
+| Kept quotes | 299 | 299 |
+| Dropped by quality filter | — | 1,825 strikes |
+| Drop breakdown: OI < 10 | — | 1,811 |
+| Drop breakdown: spread > 50% | — | 19 |
+| eSSVI fallback slices | 4 | 1 |
+
+**Result:** The filter reduced fallback slices from 4 to 1.  The three
+short-end fallbacks (T ~ 0.09, 0.25, 0.34) were eliminated — the thin
+OI data that caused non-monotonic theta was removed by the filter, and
+the hard-constrained H&M fit now converges on the cleaned data.  The
+remaining fallback at T = 2.38 is likely a genuine market feature (very
+long-dated SPY options have fundamentally different ATM variance
+characteristics).
+
+**Files added/modified:**
+- `src/arbfree_vol/data/quality.py`: `DataQualityConfig`, `DropRecord`,
+  `filter_option_chain()`.
+- `src/arbfree_vol/ingestion/yfinance.py`: `fetch_chain()` now accepts
+  an optional `quality_config` parameter and returns a 3-tuple
+  `(surface, rejected, quality_drops)`.
+- `demo/yfinance/yfinance_demo.py`: displays quality drop counts and
+  breakdown.
+
