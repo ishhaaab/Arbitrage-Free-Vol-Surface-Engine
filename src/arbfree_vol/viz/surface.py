@@ -2,6 +2,7 @@
 
 from math import sqrt
 
+import matplotlib
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib import cm
@@ -144,6 +145,7 @@ def plot_iv_heatmap(
     n_strikes: int = 50,
     n_maturities: int = 50,
     symbol: str = "SPY",
+    fallback_slices: list[float] | None = None,
 ) -> Figure:
     """2-D heatmap of implied volatility over a dense (strike, maturity) grid.
 
@@ -161,11 +163,17 @@ def plot_iv_heatmap(
         Number of maturity grid points.
     symbol:
         Ticker symbol for the plot title.
+    fallback_slices:
+        Optional list of T values that used the eSSVI fallback path.
+        If provided, those maturity columns are grayed out in the plot
+        and an annotation is added.
 
     Returns
     -------
     Figure
     """
+    from arbfree_vol.plotting.masking import make_fallback_mask
+
     if not fs.fitted_slices:
         raise ValueError("FittedSurface has no slices; cannot render heatmap")
 
@@ -184,16 +192,36 @@ def plot_iv_heatmap(
             except ValueError:
                 pass  # leave as nan
 
+    # Apply fallback mask: mark entire maturity rows as bad
+    if fallback_slices:
+        fb_mask_1d = make_fallback_mask(maturities, fallback_slices)
+        fb_mask_2d = fb_mask_1d[:, None] & np.ones(n_strikes, dtype=bool)
+        iv_grid = np.where(fb_mask_2d, np.nan, iv_grid)
+
     iv_grid = np.ma.masked_invalid(iv_grid)
 
     fig = Figure(figsize=(11, 7))
     ax = fig.add_subplot(111)
 
+    cmap = matplotlib.colormaps["plasma"].copy()
+    if fallback_slices:
+        cmap.set_bad("gray", alpha=0.5)
+
     mesh = ax.pcolormesh(strikes, maturities, iv_grid,
-                         cmap="plasma", shading="auto")
+                         cmap=cmap, shading="auto")
 
     cb = fig.colorbar(mesh, ax=ax, shrink=0.7, aspect=25, pad=0.02)
     cb.set_label("Implied volatility")
+
+    if fallback_slices:
+        ax.text(
+            0.02, 0.02,
+            "Grayed region: non-monotonic ATM variance — see Issue #15",
+            transform=ax.transAxes,
+            fontsize=8,
+            color="dimgray",
+            verticalalignment="bottom",
+        )
 
     ax.set_xlabel("Strike")
     ax.set_ylabel("Time to expiry (yrs)")
