@@ -2,6 +2,9 @@
 
 Attempts to source real risk-free rates and dividend yields.  Falls
 back to pre-pass forward-curve estimation when rates are unavailable.
+
+Index symbols (tickers starting with ``^``, e.g. ``^SPX``) are treated
+as having zero dividend yield — indices do not pay dividends.
 """
 
 import logging
@@ -118,9 +121,9 @@ def fetch_chain(
     When ``quality_config`` is provided (or defaults are used), a
     pre-ingestion data-quality filter is applied to each expiry's raw
     option chain DataFrame *before* building ``Quote`` objects.  Strikes
-    failing any threshold (min open interest, min volume, max bid-ask
-    spread) are dropped and recorded in the returned ``quality_drops``
-    list.
+    failing any threshold (min open interest, max bid-ask spread) are
+    dropped and recorded in the returned ``quality_drops`` list.  Volume
+    is recorded for diagnostic context but is not a filter criterion.
 
     Parameters
     ----------
@@ -147,11 +150,13 @@ def fetch_chain(
 
     # source rates
     r = _get_risk_free_rate()
-    q = _get_dividend_yield(ticker)
-    if r is None or q is None:
-        # fallback: detect_with_forward() will correct via pre-pass
-        r = r or 0.05
-        q = q or 0.0
+    # Index symbols (^SPX, ^VIX, etc.) have no dividends — force q=0
+    _is_index = symbol.startswith("^")
+    q = 0.0 if _is_index else _get_dividend_yield(ticker)
+    if r is None:
+        r = 0.05
+    if q is None:
+        q = 0.0
 
     # get the underlying spot price
     spot = None

@@ -225,16 +225,21 @@ def fetch_chain(
     except Exception:
         _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
 
-    try:
-        yf_ticker = yf.Ticker(symbol)
-        info = yf_ticker.info or {}
-        div = info.get("dividendYield")
-        if div is not None and isinstance(div, (int, float)) and div > 0:
-            q = float(div)
-            if q > 0.50:
-                q /= 100.0
-    except Exception:
-        _logger.warning("Failed to fetch dividend yield", exc_info=True)
+    # Index symbols (^SPX, ^VIX, etc.) have no dividends — force q=0
+    _is_index = symbol.startswith("^")
+    if _is_index:
+        q = 0.0
+    else:
+        try:
+            yf_ticker = yf.Ticker(symbol)
+            info = yf_ticker.info or {}
+            div = info.get("dividendYield")
+            if div is not None and isinstance(div, (int, float)) and div > 0:
+                q = float(div)
+                if q > 0.50:
+                    q /= 100.0
+        except Exception:
+            _logger.warning("Failed to fetch dividend yield", exc_info=True)
 
     r = r or 0.05
     q = q or 0.0
