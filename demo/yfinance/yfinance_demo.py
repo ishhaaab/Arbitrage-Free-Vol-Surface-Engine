@@ -165,7 +165,7 @@ else:
     maturities = mat_base
 
 print(f"  Building Dupire grid: {len(strikes)} strikes x {len(maturities)} maturities")
-lv = dupire(fs, strikes, maturities)
+lv = dupire(fs, strikes, maturities, fallback_slices=fallback_Ts or None)
 
 # ##########################################################################
 # 5. Portfolio Greeks + scenarios

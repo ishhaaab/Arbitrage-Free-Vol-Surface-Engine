@@ -22,25 +22,25 @@ def plot_dupire_heatmap(
         Ticker symbol for the plot title.
     fallback_slices:
         Optional list of T values that used the eSSVI fallback path.
-        If provided, those maturity rows are grayed out in the plot
-        and an annotation is added.
+        If provided, an annotation is added to the plot.  The actual
+        row masking is driven by NaN values in the grid itself —
+        ``dupire()`` propagates NaN into any row whose FD stencil
+        touches a fallback slice.  This is the single source of truth
+        for invalid cells.
 
     Returns
     -------
     Figure
     """
-    from arbfree_vol.plotting.masking import make_fallback_mask
     import matplotlib
 
     strikes = np.array(lv.strikes)
     maturities = np.array(lv.maturities)
     grid = np.array(lv.grid)  # (n_maturities, n_strikes)
 
-    # Apply fallback mask: mark entire maturity rows as NaN
-    if fallback_slices:
-        fb_mask_1d = make_fallback_mask(maturities, fallback_slices)
-        fb_mask_2d = fb_mask_1d[:, None] & np.ones(len(strikes), dtype=bool)
-        grid = np.where(fb_mask_2d, np.nan, grid)
+    # Mask based on NaN in the grid (set by dupire() for fallback-
+    # contaminated rows and any other undefined cells).
+    has_nan = np.any(np.isnan(grid))
 
     grid = np.ma.masked_invalid(grid)
 
@@ -48,7 +48,7 @@ def plot_dupire_heatmap(
     ax = fig.add_subplot(111)
 
     cmap = matplotlib.colormaps["inferno"].copy()
-    if fallback_slices:
+    if has_nan:
         cmap.set_bad("gray", alpha=0.5)
 
     mesh = ax.pcolormesh(strikes, maturities, grid,

@@ -32,6 +32,7 @@ approximated with finite differences.
    ``dT`` to avoid straddling the nearest slice expiry.
 """
 
+import bisect
 from dataclasses import dataclass
 from math import log, nan, sqrt, isnan
 
@@ -49,7 +50,57 @@ _DENOM_MIN: float = 1e-10         # denominator values ≤ this => local-vol
                                   # undefined (return nan)
 _CAL_ARB_TOL: float = 0.0         # dw/dT ≤ tol => calendar arbitrage => raise
 _T_MIN: float = 1e-4              # absolute tiny threshold for T near zero
+_FB_TOL: float = 0.01             # tolerance for matching fallback T values
 
+
+def _stencil_touches_fallback(
+    T: float,
+    fitted_times: tuple[float, ...],
+    fallback_set: set[float],
+    dT: float,
+) -> bool:
+    """Check if T's Dupire FD stencil crosses or touches a fallback slice.
+
+    The finite-difference stencil for dw/dT evaluates total variance at
+    T-dT and T+dT.  If either of those points falls in an interpolation
+    interval whose endpoint is a fallback slice, the computed derivative
+    is contaminated.
+
+    Parameters
+    ----------
+    T:
+        Grid maturity to check.
+    fitted_times:
+        Sorted tuple of all fitted slice expiry times.
+    fallback_set:
+        Set of fallback T values (for O(1) lookup).
+    dT:
+        Finite-difference step used by ``_dw_dT``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the stencil is contaminated by a fallback slice.
+    """
+    # T itself is a fallback slice
+    for fb in fallback_set:
+        if abs(T - fb) < _FB_TOL:
+            return True
+
+    # Check each FD stencil point: T - dT and T + dT
+    n = len(fitted_times)
+    for T_eval in (T - dT, T + dT):
+        # Binary search: find index i such that
+        # fitted_times[i] <= T_eval <= fitted_times[i+1]
+        idx = bisect.bisect_right(fitted_times, T_eval) - 1
+        idx = max(0, min(idx, n - 2))
+        lo = fitted_times[idx]
+        hi = fitted_times[idx + 1]
+        for fb in fallback_set:
+            if abs(lo - fb) < _FB_TOL or abs(hi - fb) < _FB_TOL:
+                return True
+
+    return False
 
 
 # LocalVolSurface to compute boundary type  
@@ -227,7 +278,8 @@ def dupire_at(fs: FittedSurface, K: float, T: float,
 def dupire(fs: FittedSurface,
            strikes: list[float],
            maturities: list[float],
-           dT: float = _FD_T_DEFAULT) -> LocalVolSurface:
+           dT: float = _FD_T_DEFAULT,
+           fallback_slices: list[float] | None = None) -> LocalVolSurface:
     """Build a :class:`LocalVolSurface` grid by calling ``dupire_at`` for
     every (K, T) pair.
 
@@ -241,6 +293,13 @@ def dupire(fs: FittedSurface,
         List of time-to-expiry values in years (``len >= 3``).
     dT:
         Finite-difference step for the time derivative.
+    fallback_slices:
+        Optional list of T values that used the unconstrained fallback
+        path during eSSVI sequential fitting.  When provided, any grid
+        row whose FD stencil (T-dT, T, T+dT) reaches into an
+        interpolation interval that borders a fallback slice is set to
+        *nan*.  This prevents derivative leakage from contaminated
+        interpolation regions.
 
     Returns
     -------
@@ -261,8 +320,22 @@ def dupire(fs: FittedSurface,
             f"Need at least 3 maturities, got {len(maturities)}"
         )
 
+    # Pre-compute fallback contamination lookup
+    fallback_set: set[float] = set()
+    fitted_times: tuple[float, ...] = ()
+    if fallback_slices:
+        fallback_set = set(fallback_slices)
+        fitted_times = tuple(sorted(s.expiry_time for s in fs.fitted_slices))
+
     grid: list[tuple[float, ...]] = []
     for T in maturities:
+        # Check if this row's stencil is contaminated by a fallback slice
+        if fallback_slices and _stencil_touches_fallback(
+            T, fitted_times, fallback_set, dT
+        ):
+            grid.append(tuple(nan for _ in strikes))
+            continue
+
         row: list[float] = []
         for K in strikes:
             try:
