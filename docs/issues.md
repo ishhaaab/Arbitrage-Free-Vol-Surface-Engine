@@ -390,8 +390,12 @@ MarketSlices could eliminate some fallback expiries.
 A pre-ingestion data-quality filter (`src/arbfree_vol/data/quality.py`)
 was implemented with default thresholds:
 - `min_open_interest = 10`
-- `min_volume = 0`
 - `max_bid_ask_pct = 50%`
+
+(Volume is intentionally excluded as a filter criterion — daily per-strike
+volume=0 is normal for legitimate market-maker quotes away from ATM and is
+not a reliable per-strike liquidity signal.  Volume is recorded in
+`DropRecord` for diagnostic context only.)
 
 The filter is applied to raw yfinance option chain DataFrames *before*
 building `Quote` objects.  On live SPY data:
@@ -473,4 +477,57 @@ is set to NaN.  This includes:
 truth) rather than independently re-deriving which rows to gray out.
 `make_fallback_mask` is still used for IV heatmap and Greeks heatmap
 (which don't use FD stencils across T).
+
+### Data source comparison (Issue #15 follow-up)
+
+The audit was run across multiple data sources to determine whether
+the theta non-monotonicity is a data-source artifact or a genuine
+market feature.
+
+#### Sources compared
+
+| Source | Fitted | Fallback | Quality drops | Theta dips | Max dip % |
+|--------|--------|----------|---------------|------------|-----------|
+| yfinance/SPY (raw) | 23 | 8 | 0 | 0 | 0.0% |
+| yfinance/SPY (filtered) | 23 | 6 | 1894 | 0 | 0.0% |
+| yfinance/SPX (raw) | 40 | 13 | 0 | 0 | 0.0% |
+| yfinance/SPX (filtered) | 40 | 12 | 3672 | 0 | 0.0% |
+| OpenBB/SPY (raw) | 23 | 5 | 0 | 0 | 0.0% |
+| OpenBB/SPY (filtered) | 23 | 3 | 1883 | 0 | 0.0% |
+
+**Key question:** Does switching data source (SPY to SPX, or yfinance
+to OpenBB) reduce theta non-monotonicity independent of the quality filter?
+
+**Findings:**
+
+1. **All three sources show theta dips = 0 on raw data.**  The raw ATM
+   total variance (w at k=0) IS monotonic across all slices today.
+   However, the eSSVI sequential fit still produces fallbacks because
+   the H&M Prop 3.1 condition is stricter than simple theta monotonicity
+   — it also requires chi (= theta * psi) monotonicity and cross-slice
+   slope constraints that the optimizer cannot satisfy.
+
+2. **SPX does NOT reduce fallbacks — it makes things worse.**  yfinance/SPX
+   has 13 fallback slices (raw) and 12 (filtered) vs. yfinance/SPY's 8
+   (raw) and 6 (filtered).  SPX has many more near-dated short-tenor
+   expiries (~0.03–0.10y) where the H&M constraint fails.
+
+3. **OpenBB/SPY reduces fallbacks.**  OpenBB has 5 fallbacks (raw) and
+   3 (filtered) vs. yfinance/SPY's 8 (raw) and 6 (filtered).  The
+   quality filter reduces OpenBB's fallbacks from 5 to 3 (a 40%
+   reduction).  However, OpenBB's per-expiry ATM quality metrics are
+   unavailable (the OpenBB ingestion path does not expose raw chain
+   DataFrames for the ticker.option_chain() per-expiry drill-down).
+
+4. **The quality filter helps in all cases:** SPY 8→6, SPX 13→12,
+   OpenBB 5→3.
+
+**Conclusion:** The theta non-monotonicity is not purely a data-source
+artifact — all sources show the same zero-dip pattern today.  The
+fallbacks are driven by the H&M Prop 3.1 optimizer constraints being
+stricter than simple monotonicity.  OpenBB/SPY has the fewest fallbacks
+(3 with filter), but the per-expiry ATM quality drill-down was not
+available for OpenBB.  Neither SPX nor OpenBB eliminates the fallback
+phenomenon entirely — it is a structural constraint of the H&M
+formulation combined with real market data characteristics.
 
