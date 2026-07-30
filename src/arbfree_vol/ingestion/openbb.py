@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 from datetime import date, datetime, time
 from typing import Any
 
@@ -20,6 +21,7 @@ from arbfree_vol.data.quality import (
     DropRecord,
     filter_option_chain,
 )
+from arbfree_vol.data.snapshot_guard import check_snapshot_time
 from arbfree_vol.ingestion.cleaning import RejectionRecord, clean_quotes
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
@@ -182,6 +184,11 @@ def fetch_chain(
             "The 'openbb' package is required for this data source. "
             "Install it with:  pip install openbb"
         )
+
+    # Snapshot-time guard (warns, does not block)
+    guard_warning = check_snapshot_time()
+    if guard_warning:
+        warnings.warn(guard_warning, stacklevel=2)
 
     # ── Fetch the full chain ─────────────────────────────────────────
     _logger.info("Fetching %s options via OpenBB (provider=%s)", symbol, provider)

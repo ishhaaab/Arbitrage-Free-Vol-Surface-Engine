@@ -9,6 +9,7 @@ as having zero dividend yield — indices do not pay dividends.
 
 import logging
 import math
+import warnings
 from datetime import date
 from typing import Any
 
@@ -23,6 +24,7 @@ from arbfree_vol.data.quality import (
     DropRecord,
     filter_option_chain,
 )
+from arbfree_vol.data.snapshot_guard import check_snapshot_time
 
 _logger = logging.getLogger(__name__)
 
@@ -142,6 +144,11 @@ def fetch_chain(
         data — passing ``quality_config=None`` with
         ``disable_quality_filter=False`` still applies default thresholds.
     """
+    # Snapshot-time guard (warns, does not block)
+    guard_warning = check_snapshot_time()
+    if guard_warning:
+        warnings.warn(guard_warning, stacklevel=2)
+
     ticker = yf.Ticker(symbol)
     expiries = ticker.options
 
