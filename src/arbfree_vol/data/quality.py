@@ -1,9 +1,15 @@
 """Data quality filter for raw option chain DataFrames.
 
-Applies market microstructure thresholds (minimum open interest, minimum
-volume, maximum bid-ask spread) to raw yfinance option chain DataFrames
-before building MarketSlices.  This is a pre-ingestion filter that catches
-thinly-traded or no-quote strikes that could degrade calibration quality.
+Applies market microstructure thresholds (minimum open interest, maximum
+bid-ask spread) to raw option chain DataFrames before building MarketSlices.
+This is a pre-ingestion filter that catches thinly-traded or no-quote strikes
+that could degrade calibration quality.
+
+Volume is **not** used as a filter criterion — daily per-strike volume=0 is
+normal for legitimate market-maker quotes away from ATM, and is not a reliable
+per-strike liquidity signal (unlike open interest or bid-ask width).  Filtering
+on volume would drop good strikes, not just bad ones.  Volume is still
+recorded in ``DropRecord`` for diagnostic context.
 """
 
 from __future__ import annotations
@@ -17,17 +23,26 @@ import pandas as pd
 class DataQualityConfig:
     """Thresholds for the data-quality filter.
 
+    Only ``min_open_interest`` and ``max_bid_ask_pct`` are enforced.
+    Volume is intentionally excluded: daily per-strike volume=0 is normal
+    for legitimate market-maker quotes away from ATM and is not a reliable
+    per-strike liquidity signal (unlike open interest or bid-ask width).
+    Filtering on volume would drop good strikes, not just bad ones.
+
     All thresholds are applied independently — a strike that fails
     *any* threshold is dropped.
     """
     min_open_interest: int = 10
-    min_volume: int = 0
     max_bid_ask_pct: float = 50.0  # percentage, not fraction
 
 
 @dataclass(frozen=True, slots=True)
 class DropRecord:
-    """Audit record for a strike that was dropped by the data-quality filter."""
+    """Audit record for a strike that was dropped by the data-quality filter.
+
+    ``volume`` is included for diagnostic context only — it is not a
+    pass/fail criterion (volume is never compared against a threshold).
+    """
     strike: float
     expiry: str
     reason: str
@@ -41,7 +56,11 @@ def filter_option_chain(
     expiry: str,
     config: DataQualityConfig | None = None,
 ) -> tuple[pd.DataFrame, list[DropRecord]]:
-    """Filter a raw yfinance option chain DataFrame by data quality thresholds.
+    """Filter a raw option chain DataFrame by data quality thresholds.
+
+    Only two thresholds are enforced: ``min_open_interest`` and
+    ``max_bid_ask_pct``.  Volume is recorded in ``DropRecord`` for
+    diagnostic context but is not a pass/fail criterion.
 
     Parameters
     ----------
@@ -95,9 +114,6 @@ def filter_option_chain(
 
         if oi < config.min_open_interest:
             reason_parts.append(f"OI={oi}<{config.min_open_interest}")
-
-        if vol < config.min_volume:
-            reason_parts.append(f"vol={vol}<{config.min_volume}")
 
         if mid > 0 and bid_ask_pct > config.max_bid_ask_pct:
             reason_parts.append(

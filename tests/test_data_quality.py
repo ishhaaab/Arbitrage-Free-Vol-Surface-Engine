@@ -52,20 +52,20 @@ class TestFilterOptionChain:
         assert len(drops) == 2
         assert filtered.iloc[0]["strike"] == 110
 
-    def test_low_volume_dropped(self):
-        """Strikes with volume below min_volume are dropped."""
+    def test_low_volume_no_longer_filtered(self):
+        """Volume is NOT a filter criterion — zero-volume strikes pass."""
         df = _make_chain_df(
             strikes=[100, 110, 120],
             oi=[100, 200, 300],
             volume=[0, 5, 0],  # 100 and 120 have zero volume
-            bid=[9.0, 4.0, 1.0],
-            ask=[11.0, 6.0, 2.0],
+            bid=[9.0, 4.5, 1.8],
+            ask=[11.0, 5.5, 2.2],  # all spreads well under 50%
         )
-        config = DataQualityConfig(min_volume=1)
+        # No min_volume field exists — all strikes pass the volume check.
+        config = DataQualityConfig(min_open_interest=10)
         filtered, drops = filter_option_chain(df, "2026-08-15", config)
-        assert len(filtered) == 1
-        assert len(drops) == 2
-        assert filtered.iloc[0]["strike"] == 110
+        assert len(filtered) == 3  # all three pass
+        assert len(drops) == 0
 
     def test_wide_spread_dropped(self):
         """Strikes with bid-ask spread above max_bid_ask_pct are dropped."""
@@ -96,19 +96,23 @@ class TestFilterOptionChain:
         assert len(drops) == 1
         assert "OI=3<10" in drops[0].reason
 
-    def test_drop_reason_contains_volume(self):
-        """Drop reason string includes the volume violation."""
+    def test_volume_still_recorded_in_drop(self):
+        """Volume is recorded in DropRecord for diagnostic context, not as a reason."""
         df = _make_chain_df(
             strikes=[100],
             oi=[100],
             volume=[0],
-            bid=[9.0],
-            ask=[11.0],
+            bid=[5.0],
+            ask=[15.0],  # wide spread — this is the actual filter hit
         )
-        config = DataQualityConfig(min_volume=1)
+        config = DataQualityConfig(max_bid_ask_pct=50.0)
         _, drops = filter_option_chain(df, "2026-08-15", config)
         assert len(drops) == 1
-        assert "vol=0<1" in drops[0].reason
+        # Volume is NOT in the reason — only spread is
+        assert "vol" not in drops[0].reason
+        assert "spread=" in drops[0].reason
+        # But volume IS recorded for diagnostic purposes
+        assert drops[0].volume == 0
 
     def test_drop_reason_contains_spread(self):
         """Drop reason string includes the spread violation."""
@@ -135,13 +139,15 @@ class TestFilterOptionChain:
             ask=[15.0],
         )
         config = DataQualityConfig(
-            min_open_interest=10, min_volume=1, max_bid_ask_pct=50.0
+            min_open_interest=10, max_bid_ask_pct=50.0
         )
         _, drops = filter_option_chain(df, "2026-08-15", config)
         assert len(drops) == 1
         assert "OI=3<10" in drops[0].reason
-        assert "vol=0<1" in drops[0].reason
         assert "spread=" in drops[0].reason
+        # Volume is recorded but NOT a reason
+        assert drops[0].volume == 0
+        assert "vol" not in drops[0].reason
 
     def test_expiry_recorded_in_drop(self):
         """The expiry string is passed through to DropRecord."""
@@ -161,3 +167,21 @@ class TestFilterOptionChain:
         filtered, drops = filter_option_chain(df, "2026-08-15")
         assert len(filtered) == 0
         assert len(drops) == 0
+
+    def test_zero_volume_high_oi_tight_spread_passes(self):
+        """A zero-volume strike with high OI and tight spread is NOT dropped.
+
+        This is the key invariant: volume=0 is normal for legitimate
+        market-maker quotes away from ATM and must not be filtered.
+        """
+        df = _make_chain_df(
+            strikes=[100],
+            oi=[100],       # well above min_open_interest=10
+            volume=[0],     # zero volume — must still pass
+            bid=[0.99],     # tight spread: (1.01-0.99)/1.00 = 2%
+            ask=[1.01],
+        )
+        filtered, drops = filter_option_chain(df, "2026-08-15")
+        assert len(filtered) == 1
+        assert len(drops) == 0
+        assert filtered.iloc[0]["strike"] == 100
