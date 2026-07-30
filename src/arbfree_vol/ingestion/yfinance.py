@@ -101,6 +101,7 @@ def fetch_chain(
     max_expiries: int = 5,
     min_T_years: float = 7.0 / 365.0,
     quality_config: DataQualityConfig | None = None,
+    disable_quality_filter: bool = False,
 ) -> tuple[VolSurface, list[RejectionRecord], list[DropRecord]]:
     """Fetch an option chain from yfinance and return a cleaned VolSurface.
 
@@ -120,6 +121,23 @@ def fetch_chain(
     failing any threshold (min open interest, min volume, max bid-ask
     spread) are dropped and recorded in the returned ``quality_drops``
     list.
+
+    Parameters
+    ----------
+    symbol:
+        Ticker symbol (e.g. ``"SPY"``).
+    max_expiries:
+        Maximum number of expiries to process.
+    min_T_years:
+        Minimum time-to-expiry in years.
+    quality_config:
+        Data-quality filter thresholds.  Uses ``DataQualityConfig()``
+        defaults when ``None`` and ``disable_quality_filter`` is False.
+    disable_quality_filter:
+        When ``True``, skip the data-quality filter entirely and return
+        raw yfinance data.  This is the ONLY way to get truly unfiltered
+        data — passing ``quality_config=None`` with
+        ``disable_quality_filter=False`` still applies default thresholds.
     """
     ticker = yf.Ticker(symbol)
     expiries = ticker.options
@@ -164,14 +182,18 @@ def fetch_chain(
         chain = ticker.option_chain(exp_str)
 
         # Apply data-quality filter to raw DataFrames before building Quotes
-        calls_filtered, calls_drops = filter_option_chain(
-            chain.calls, exp_str, quality_config
-        )
-        puts_filtered, puts_drops = filter_option_chain(
-            chain.puts, exp_str, quality_config
-        )
-        all_quality_drops.extend(calls_drops)
-        all_quality_drops.extend(puts_drops)
+        if disable_quality_filter:
+            calls_filtered = chain.calls
+            puts_filtered = chain.puts
+        else:
+            calls_filtered, calls_drops = filter_option_chain(
+                chain.calls, exp_str, quality_config
+            )
+            puts_filtered, puts_drops = filter_option_chain(
+                chain.puts, exp_str, quality_config
+            )
+            all_quality_drops.extend(calls_drops)
+            all_quality_drops.extend(puts_drops)
 
         quotes: list[Quote] = []
 

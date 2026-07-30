@@ -126,3 +126,56 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class)
     assert isinstance(rejected, list)
     assert isinstance(quality_drops, list)
     assert len(surface.slices) >= 1
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_disable_quality_filter(mock_date_class, mock_ticker_class) -> None:
+    """disable_quality_filter=True skips the filter and returns empty drops."""
+    import pandas as pd
+    from datetime import date as real_date
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.005}
+    mock_ticker.options = ["2030-08-15"]
+
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    # Include strikes with low OI that would normally be filtered
+    strikes = [440, 450, 460]
+    cols = {
+        "strike": strikes,
+        "lastPrice": [20, 15, 10],
+        "bid": [19, 14, 9],
+        "ask": [21, 16, 11],
+        "volume": [100, 100, 100],
+        "openInterest": [1, 500, 1],  # mixed: two low OI, one passes filter
+    }
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+
+    from arbfree_vol.ingestion.yfinance import fetch_chain
+
+    # With filter disabled: low-OI strikes pass through, quality_drops is empty
+    surface_raw, _, quality_drops_raw = fetch_chain(
+        "SPY", max_expiries=1, disable_quality_filter=True
+    )
+    assert isinstance(quality_drops_raw, list)
+    assert len(quality_drops_raw) == 0  # no drops when filter is disabled
+
+    # With filter enabled (default): low-OI strikes get dropped
+    surface_filtered, _, quality_drops_filtered = fetch_chain(
+        "SPY", max_expiries=1, disable_quality_filter=False
+    )
+    assert len(quality_drops_filtered) > 0  # OI=1 < 10 → dropped
