@@ -421,3 +421,56 @@ characteristics).
 - `demo/yfinance/yfinance_demo.py`: displays quality drop counts and
   breakdown.
 
+### Corrected audit approach (Issue #15 follow-up)
+
+**Problem with previous audit:** The "before filter" baseline was
+potentially measured post-filter, because `fetch_chain(..., quality_config=None)`
+silently substituted `DataQualityConfig()` defaults — there was no way
+to get truly unfiltered data.
+
+**Fix:** Added `disable_quality_filter: bool = False` parameter to
+`fetch_chain()`.  When `True`, the filter is skipped entirely and raw
+yfinance data is returned.  This is the ONLY way to get truly unfiltered
+data.
+
+**Updated audit script** (`scripts/audit_theta_dip_data_quality.py`):
+now runs twice — once with filter OFF (true baseline) and once with
+filter ON (default thresholds).  Reports per-expiry OI<10 drop breakdown
+and fitted-slice count comparison.
+
+**Pending:** Run the updated audit script with live SPY data to populate
+the corrected numbers below:
+
+| Metric | Filter OFF (baseline) | Filter ON |
+|--------|----------------------|-----------|
+| Fitted slices | TBD | TBD |
+| Fallback slices | TBD | TBD |
+| Quality drops | 0 | TBD |
+
+Per-expiry OI<10 drop breakdown and fitted-slice count comparison will
+be populated by running:
+```
+python scripts/audit_theta_dip_data_quality.py
+```
+
+### Dupire stencil contamination fix (Issue #15 follow-up)
+
+The Dupire local vol computation now propagates NaN from fallback slices
+through the FD stencil.  Previously, `plot_dupire_heatmap` independently
+masked fallback rows via `make_fallback_mask` — the actual Dupire grid
+computation was unguarded, producing contaminated values adjacent to
+fallback boundaries.
+
+**Fix:** `dupire()` now accepts `fallback_slices: list[float] | None`.
+For each grid maturity T, the FD stencil (T-dT, T+dT) is checked against
+the fitted surface's interpolation intervals.  If either stencil point
+falls in an interval that borders a fallback slice, the entire grid row
+is set to NaN.  This includes:
+- The fallback row itself
+- Any good row whose stencil crosses into a fallback-bounded interval
+
+`plot_dupire_heatmap` now relies on NaN in the grid (single source of
+truth) rather than independently re-deriving which rows to gray out.
+`make_fallback_mask` is still used for IV heatmap and Greeks heatmap
+(which don't use FD stencils across T).
+
