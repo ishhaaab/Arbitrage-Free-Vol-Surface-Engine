@@ -411,3 +411,84 @@ def test_slsqp_non_converged_slice_lands_in_fallback(monkeypatch) -> None:
     assert result.failed_slices == []
     fitted_Ts = [T for T, _ in result.fitted_slices]
     assert fitted_Ts == [0.25, 0.50]
+
+
+# ── Test 8: hard-constraint enforcement on genuinely incompatible data ─
+# End-to-end regression for the sequential hard-constraint logic.  The
+# dataset below is genuinely H&M-incompatible (slice 2 dips in theta AND
+# chi against slice 1, slice 4 dips against slice 3) — nothing is
+# monkeypatched.  If the constraints in _fit_slice were deleted, the
+# unconstrained fit would recover the dips and verify_hm_condition
+# would report a violation with an EMPTY fallback_slices; the tests
+# below would fail.
+_DIP_TRUTH = [
+    (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
+    (0.50, dict(theta=0.03, rho=-0.2, psi=0.35)),  # theta + chi dip
+    (1.00, dict(theta=0.12, rho=0.1, psi=0.4)),
+    (2.00, dict(theta=0.07, rho=0.2, psi=0.55)),   # theta dip again
+]
+
+
+def _dip_slices_data(with_tail: bool = False):
+    """Build (expiry, [(k, w)]) data from the dip ground truth."""
+    data = [
+        (T, [(float(k), ssvi_w(float(k), t["theta"], t["rho"], t["psi"])) for k in _KS])
+        for T, t in _DIP_TRUTH
+    ]
+    if with_tail:
+        data.append(
+            (3.0, [(float(k), ssvi_w(float(k), 0.10, 0.1, 0.5)) for k in _KS])
+        )
+    return data
+
+
+def test_hard_constraint_or_fallback_on_incompatible_data() -> None:
+    """On genuinely H&M-incompatible data, every fitted slice either
+    satisfies Prop 3.1 or is honestly recorded in fallback_slices.
+
+    Deleting the hard constraints in _fit_slice makes the unconstrained
+    fit recover the theta dips → verify_hm_condition() is False with an
+    empty fallback_slices → this test fails.
+    """
+    result = fit_ssvi_surface_sequential(_dip_slices_data())
+
+    assert result.failed_slices == []
+    params_only = [p for _, p in result.fitted_slices]
+    hm_ok = verify_hm_condition(params_only)
+    if not hm_ok:
+        assert len(result.fallback_slices) > 0, (
+            "verify_hm_condition reports a violation but no slice is "
+            "recorded in fallback_slices — the H&M hard constraints "
+            "appear to be missing from _fit_slice"
+        )
+
+
+def test_fitted_slices_prev_threads_last_hard_constrained_predecessor() -> None:
+    """fitted_slices_prev must point at the last HARD-CONSTRAINED slice
+    before each fitted slice, skipping fallback slices.
+
+    On the current dataset slice T=2.0 really falls back (the
+    'Positive directional derivative for linesearch' failure also seen
+    on live data), giving prev=[None, 0.25, 0.5, 1.0, 1.0]: the T=3.0
+    slice anchors to T=1.0, NOT to the fallback slice T=2.0.  A
+    regression where a fallback slice wrongly becomes the predecessor
+    of the next slice would make the recomputed expectation differ.
+    """
+    result = fit_ssvi_surface_sequential(_dip_slices_data(with_tail=True))
+
+    assert len(result.fitted_slices_prev) == len(result.fitted_slices)
+    assert result.fitted_slices_prev[0] is None
+
+    expected_prev: list[float | None] = []
+    last_valid_T: float | None = None
+    for T, _ in result.fitted_slices:
+        expected_prev.append(last_valid_T)
+        if T not in result.fallback_slices:
+            last_valid_T = T
+
+    assert result.fitted_slices_prev == expected_prev, (
+        "fitted_slices_prev threading drifted from the documented "
+        "last-hard-constrained-predecessor rule:\n"
+        f"  got      {result.fitted_slices_prev}\n"
+        f"  expected {expected_prev}"
+    )
