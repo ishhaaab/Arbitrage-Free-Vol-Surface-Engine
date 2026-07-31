@@ -104,3 +104,81 @@ class TestSafeConversions:
 
     def test_safe_float_with_valid(self):
         assert openbb_mod._safe_float(3.14) == pytest.approx(3.14)
+
+
+class TestOpenBBIndexDividendYield:
+    """Test per-expiry dividend yield estimation for index symbols."""
+
+    def test_estimate_via_parity(self) -> None:
+        """Verify q estimation matches the put-call parity rearrangement."""
+        from datetime import date as date_cls
+        from arbfree_vol.models.option import OptionContract, BlackScholesInput
+        from arbfree_vol.models.option import OptionType as OT
+        from arbfree_vol.pricing.black_scholes import price
+        from arbfree_vol.models.surface import ExpirySlice, Quote
+
+        S, r, T, K = 100.0, 0.05, 1.0, 100.0
+        q_true = 0.013
+
+        contract_c = OptionContract(
+            symbol="X", option_type=OT.CALL, strike=K,
+            expiry_date=date_cls(2030, 1, 1),
+        )
+        C = price(BlackScholesInput(
+            contract=contract_c, spot=S, expiry_time=T,
+            risk_free=r, div_yield=q_true, volatility=0.2,
+        ))
+
+        contract_p = OptionContract(
+            symbol="X", option_type=OT.PUT, strike=K,
+            expiry_date=date_cls(2030, 1, 1),
+        )
+        P = price(BlackScholesInput(
+            contract=contract_p, spot=S, expiry_time=T,
+            risk_free=r, div_yield=q_true, volatility=0.2,
+        ))
+
+        slice_ = ExpirySlice(
+            expiry_time=T,
+            quotes=[
+                Quote(strike=K, option_type=OT.CALL, price=C),
+                Quote(strike=K, option_type=OT.PUT, price=P),
+            ],
+        )
+
+        q_est = openbb_mod._estimate_index_dividend_yield(slice_, S, r)
+        assert q_est is not None
+        assert abs(q_est - q_true) < 0.002
+
+    def test_no_atm_pair(self) -> None:
+        """Slice with only calls → returns None."""
+        from arbfree_vol.models.option import OptionType as OT
+        from arbfree_vol.models.surface import ExpirySlice, Quote
+
+        slice_ = ExpirySlice(
+            expiry_time=1.0,
+            quotes=[
+                Quote(strike=100.0, option_type=OT.CALL, price=5.0),
+                Quote(strike=105.0, option_type=OT.CALL, price=3.0),
+            ],
+        )
+
+        q_est = openbb_mod._estimate_index_dividend_yield(slice_, 100.0, 0.05)
+        assert q_est is None
+
+    @patch("yfinance.Ticker")
+    def test_representative_spx(self, mock_ticker_class) -> None:
+        """^SPX → SPY mapping returns SPY's dividend yield."""
+        mock_ticker = MagicMock()
+        mock_ticker.info = {"dividendYield": 0.013}
+        mock_ticker_class.return_value = mock_ticker
+
+        q = openbb_mod._get_representative_dividend_yield("^SPX")
+        assert q is not None
+        assert abs(q - 0.013) < 1e-6
+        mock_ticker_class.assert_called_once_with("SPY")
+
+    def test_representative_vix(self) -> None:
+        """^VIX → None (no representative ETF)."""
+        q = openbb_mod._get_representative_dividend_yield("^VIX")
+        assert q is None

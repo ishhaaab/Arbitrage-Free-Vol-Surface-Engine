@@ -67,6 +67,117 @@ def _get_dividend_yield(ticker: yf.Ticker) -> float | None:
     return None
 
 
+# Mapping of index symbols to representative ETFs that track the same
+# (or very similar) underlying basket.  Used as a FALLBACK when per-expiry
+# put-call parity estimation of q fails (e.g., no ATM call/put pair).
+# This is the ETF's TRAILING yield, not the index's market-implied forward
+# yield — it is an approximation.  Per-expiry put-call parity is preferred.
+_INDEX_REPRESENTATIVE: dict[str, str | None] = {
+    "^SPX": "SPY",   # SPY tracks S&P 500, same constituents
+    "^NDX": "QQQ",   # QQQ tracks Nasdaq-100
+    "^DJI": "DIA",   # DIA tracks Dow Jones
+    "^RUT": "IWM",   # IWM tracks Russell 2000
+    "^VIX": None,    # VIX has no constituents
+    # Add more as needed
+}
+
+
+def _estimate_index_dividend_yield(
+    slice_: ExpirySlice,
+    spot: float,
+    r: float,
+) -> float | None:
+    """Estimate the dividend yield for one expiry slice via put-call parity.
+
+    Uses 3-5 strikes on each side of ATM (6-10 strikes total) to solve
+    the put-call parity relation for q:
+
+        C - P + K * e^{-rT} = S * e^{-qT}
+        q = -log((C - P + K * e^{-rT}) / S) / T
+
+    The wider band (vs. just the 3 nearest strikes) averages out
+    single-strike quote noise that dominates the <0.10y bucket where
+    the bid-ask spread is widest.
+
+    Returns the MEDIAN q across all usable ATM pairs, or None if
+    estimation fails (no call/put pair, or invalid values).
+    """
+    from statistics import median
+    from math import exp, log
+
+    if slice_.expiry_time <= 0:
+        return None
+
+    by_strike: dict[float, dict[OptionType, float]] = {}
+    for q in slice_.quotes:
+        by_strike.setdefault(q.strike, {})[q.option_type] = q.price
+
+    # 3-5 strikes on each side of ATM (6-10 total) for noise robustness.
+    # Strike grid on SPX/SPY is typically $1 or $5 wide, so 3-5 strikes on
+    # each side spans ~$6-$50 around ATM depending on spacing. This wider
+    # band averages out single-strike quote noise that dominates the
+    # <0.10y bucket where the bid-ask spread is widest.
+    all_strikes_sorted = sorted(by_strike.keys())
+    atm_idx = min(range(len(all_strikes_sorted)), key=lambda i: abs(all_strikes_sorted[i] - spot))
+    window = 5  # strikes on each side
+    low_idx = max(0, atm_idx - window)
+    high_idx = min(len(all_strikes_sorted), atm_idx + window + 1)
+    atm_strikes = all_strikes_sorted[low_idx:high_idx]
+
+    qs: list[float] = []
+    for K in atm_strikes:
+        sides = by_strike[K]
+        if OptionType.CALL not in sides or OptionType.PUT not in sides:
+            continue
+        C = sides[OptionType.CALL]
+        P = sides[OptionType.PUT]
+        T = slice_.expiry_time
+        numerator = C - P + K * exp(-r * T)
+        if numerator <= 0 or spot <= 0:
+            continue
+        q_est = -log(numerator / spot) / T
+        # Sanity check: dividend yield should be in a reasonable range
+        if -0.5 < q_est < 0.5:
+            qs.append(q_est)
+
+    if not qs:
+        return None
+    return float(median(qs))
+
+
+def _get_representative_dividend_yield(symbol: str) -> float | None:
+    """Fetch the trailing dividend yield from a representative ETF for an
+    index symbol.
+
+    This is a FALLBACK used only when per-expiry put-call parity
+    estimation of q fails.  The returned value is the ETF's trailing
+    yield (e.g., SPY's ~1.3%), not the index's market-implied forward
+    yield — it is an approximation.  Per-expiry put-call parity is
+    preferred because it uses the actual options data.
+
+    Returns None if no representative is mapped, or the representative
+    ticker's dividend yield cannot be fetched.
+    """
+    rep = _INDEX_REPRESENTATIVE.get(symbol)
+    if rep is None:
+        return None
+    try:
+        rep_ticker = yf.Ticker(rep)
+        info = rep_ticker.info or {}
+        q = info.get("dividendYield")
+        if q is not None and isinstance(q, (int, float)) and q > 0:
+            q = float(q)
+            if q > 0.50:
+                q /= 100.0
+            return q
+    except Exception:
+        _logger.warning(
+            "Failed to fetch representative dividend yield for %s via %s",
+            symbol, rep, exc_info=True,
+        )
+    return None
+
+
 def _row_to_quote(row: Any, otype: OptionType) -> Quote | None:
     """Convert a yfinance DataFrame row to a Quote.
 
@@ -157,13 +268,23 @@ def fetch_chain(
 
     # source rates
     r = _get_risk_free_rate()
-    # Index symbols (^SPX, ^VIX, etc.) have no dividends — force q=0
-    _is_index = symbol.startswith("^")
-    q = 0.0 if _is_index else _get_dividend_yield(ticker)
     if r is None:
         r = 0.05
-    if q is None:
-        q = 0.0
+    _is_index = symbol.startswith("^")
+    if _is_index:
+        # For index symbols (^SPX, etc.), estimate q per-expiry via put-call
+        # parity.  This is more accurate than hardcoding q=0 because indices
+        # have a genuine implied dividend yield from their constituents
+        # (e.g., SPX ~1.2-1.5%/yr from S&P 500 dividends).  If parity
+        # estimation fails for all slices, fall back to the representative
+        # ETF's trailing yield (approximation).  See _estimate_index_dividend_yield.
+        # NOTE: q is set per-slice inside the loop below; here we set the
+        # surface-level q as a fallback.
+        q = 0.0  # will be updated after slice loop
+    else:
+        q = _get_dividend_yield(ticker)
+        if q is None:
+            q = 0.0
 
     # get the underlying spot price
     spot = None
@@ -231,6 +352,24 @@ def fetch_chain(
             continue
 
         slices.append(ExpirySlice(expiry_time=T, quotes=kept))
+
+    # For index symbols, estimate q per-expiry via put-call parity.
+    # If all slices fail estimation, fall back to representative ETF yield.
+    if _is_index and slices:
+        from statistics import median as _median
+        per_slice_qs: list[float] = []
+        for sl in slices:
+            q_est = _estimate_index_dividend_yield(sl, spot, r)
+            if q_est is not None:
+                sl.div_yield = q_est
+                per_slice_qs.append(q_est)
+        if per_slice_qs:
+            q = _median(per_slice_qs)
+        else:
+            rep_q = _get_representative_dividend_yield(symbol)
+            if rep_q is not None:
+                q = rep_q
+            # else q stays at 0.0 from the initial assignment
 
     return (
         VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices),

@@ -1,11 +1,11 @@
 """Tests for the forward curve estimator."""
 from datetime import date
-from math import exp
+from math import exp, log
 from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, _slice_forward
+from arbfree_vol.repair.fwd_curve import estimate_forward_curve, _slice_forward, populate_per_slice_r
 
 
 SPOT = 100.0
@@ -105,3 +105,26 @@ def test_fwd_curve_multiple_slices() -> None:
     assert sorted(curve.keys()) == [0.5, 1.0]
     for T, F in curve.items():
         assert F == approx(SPOT * exp(R * T), abs=0.02)
+
+
+def test_populate_per_slice_r_uses_per_slice_q() -> None:
+    """Verify populate_per_slice_r uses per-slice div_yield, not surface-level."""
+    # Surface with q=0.05, but slice has q=0.02 (per-slice override)
+    slice_ = ExpirySlice(
+        expiry_time=1.0,
+        div_yield=0.02,  # per-slice override
+        quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.45),
+            Quote(strike=100.0, option_type=OptionType.PUT, price=5.57),
+        ],
+    )
+    surface = VolSurface(spot=100.0, risk_free=0.05, div_yield=0.05, slices=[slice_])
+
+    fwd_curve = {1.0: 105.0}  # F = 105
+    populate_per_slice_r(surface, fwd_curve)
+
+    # r = log(F/S)/T + q_slice = log(105/100)/1 + 0.02
+    # = 0.04879 + 0.02 = 0.06879
+    # NOT log(F/S)/T + q_surface = 0.04879 + 0.05 = 0.09879
+    expected_r = log(105.0 / 100.0) / 1.0 + 0.02
+    assert slice_.risk_free == approx(expected_r, abs=1e-6)

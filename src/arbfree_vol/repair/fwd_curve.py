@@ -65,11 +65,16 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
 def populate_per_slice_r(surface: VolSurface, fwd_curve: dict[float, float]) -> None:
     """Set per-slice risk_free from the forward curve estimate.
 
-    For each slice: r(T) = log(F / S) / T + q.  Slices without a valid
-    forward keep their current value (None = falls back to surface.r).
+    For each slice: r(T) = log(F / S) / T + q.  Uses the per-slice
+    dividend yield (via ``get_q``) if set, otherwise falls back to
+    the surface-level ``div_yield``.  Slices without a valid forward
+    keep their current value (None = falls back to surface.r).
+
+    The per-slice q pattern matches the per-slice-r pattern already
+    in the codebase (``get_r`` / ``get_q`` in ``models/surface.py``).
     """
-    q = surface.div_yield
     for sl in surface.slices:
         F = fwd_curve.get(sl.expiry_time)
         if F is not None and F > 0 and sl.expiry_time > 0:
+            q = get_q(surface, sl)  # per-slice q (falls back to surface-level)
             sl.risk_free = log(F / surface.spot) / sl.expiry_time + q
