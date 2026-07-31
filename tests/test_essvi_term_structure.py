@@ -302,3 +302,112 @@ def test_sequential_fit_reports_failed_slice_when_both_fits_fail(monkeypatch) ->
     assert len(result.fallback_slices) == 0, (
         f"expected 0 fallback slices, got {result.fallback_slices}"
     )
+
+
+# ── Test 7: SLSQP non-converged statuses must fall back ──────────────
+# Regression tests for the SLSQP status-acceptance bug: the SLSQP retry
+# used to accept exit modes 0/1/2/3 as success.  Per scipy's
+# _slsqp_py.py exit-mode table, only mode 0 ("Optimization terminated
+# successfully") is convergence — `result.success` is True exactly for
+# mode 0.  Modes 1 (stalled line search), 2 (degenerate problem) and 3
+# (LSQ-subproblem iteration cap) are NOT convergence; the fit must
+# raise so the caller routes the slice into fallback_slices instead of
+# certifying a non-converged fit as arb-free.
+def _fit_points():
+    """Minimal 5-point (k, w) slice for _fit_slice."""
+    return [(float(k), 0.05 + 0.01 * float(k)) for k in (-0.2, -0.1, 0.0, 0.1, 0.2)]
+
+
+def _scripted_minimize(calls):
+    """Build a fake scipy minimize that returns results from an iterator.
+
+    _fit_slice calls minimize twice: trust-constr first, then SLSQP.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    it = iter(calls)
+
+    def fake_minimize(fun, x0, method=None, bounds=None, constraints=None, options=None):
+        return next(it)
+
+    return ts, fake_minimize
+
+
+def _opt_result(status, message, success=False):
+    from scipy.optimize import OptimizeResult
+
+    return OptimizeResult(
+        x=np.array([0.1, 0.0, -0.5]),
+        success=success,
+        status=status,
+        message=message,
+    )
+
+
+def test_fit_slice_slsqp_non_converged_status_raises(monkeypatch) -> None:
+    """SLSQP exit mode 1 (stalled line search) must raise RuntimeError,
+    not be accepted as a hard-constrained fit."""
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(4, "The maximum number of function evaluations is exceeded."),
+        _opt_result(1, "Function evaluation required (f & c)"),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    with pytest.raises(RuntimeError, match="Function evaluation required"):
+        ts._fit_slice(_fit_points())
+
+
+def test_fit_slice_slsqp_mode8_linesearch_failure_raises(monkeypatch) -> None:
+    """SLSQP exit mode 8 ("Positive directional derivative for
+    linesearch") is the known RuntimeError surface and must keep
+    raising so the caller falls back (regression guard)."""
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(4, "The maximum number of function evaluations is exceeded."),
+        _opt_result(8, "Positive directional derivative for linesearch"),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    with pytest.raises(RuntimeError, match="Positive directional derivative"):
+        ts._fit_slice(_fit_points())
+
+
+def test_fit_slice_slsqp_success_status_accepted(monkeypatch) -> None:
+    """A converged fit (success=True, status 1/2 for trust-constr) still
+    returns fitted parameters."""
+    from math import exp
+
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(1, "Optimization terminated successfully", success=True),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    params = ts._fit_slice(_fit_points())
+    assert params.theta == pytest.approx(0.1)
+    assert params.rho == pytest.approx(0.0)
+    assert params.psi == pytest.approx(exp(-0.5))
+
+
+def test_slsqp_non_converged_slice_lands_in_fallback(monkeypatch) -> None:
+    """End-to-end: when the SLSQP retry returns a non-converged status,
+    the slice routes into fallback_slices (same as the RuntimeError
+    path) instead of being certified as a hard-constrained fit."""
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(1, "Function evaluation required (f & c)"),
+        _opt_result(1, "Function evaluation required (f & c)"),
+        _opt_result(1, "Function evaluation required (f & c)"),
+        _opt_result(1, "Function evaluation required (f & c)"),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    slices_data = [
+        (0.25, _fit_points()),
+        (0.50, _fit_points()),
+    ]
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    assert result.fallback_slices == [0.25, 0.50], (
+        f"expected both slices in fallback_slices, got {result.fallback_slices}"
+    )
+    assert result.failed_slices == []
+    fitted_Ts = [T for T, _ in result.fitted_slices]
+    assert fitted_Ts == [0.25, 0.50]

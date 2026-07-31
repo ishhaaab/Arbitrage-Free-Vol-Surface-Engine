@@ -265,9 +265,12 @@ def _fit_slice(
 
     # Primary attempt: trust-constr
     result = _run("trust-constr", x0, tol=1e-10, maxiter=500)
-    success = result.success or (
-        getattr(result, "status", -1) in (1, 2, 3)  # converged / iter-limit OK
-    )
+    # trust-constr: result.success is True exactly for statuses 1/2
+    # (gtol/xtol satisfied).  Status 0 (max f-evals) and status 4
+    # ("minimize successful but constraints not satisfied") are
+    # failures, and status 3 (callback termination) needs a callback
+    # this code never passes.  Only result.success is trustable.
+    success = result.success
 
     # Retry with SLSQP if the primary run did not converge
     if not success:
@@ -277,9 +280,14 @@ def _fit_slice(
             getattr(result, "status", "?"), result.message,
         )
         result = _run("SLSQP", result.x, tol=1e-12, maxiter=1000)
-        success = result.success or (
-            getattr(result, "status", -1) in (0, 1, 2, 3)
-        )
+        # SLSQP: result.success is True ONLY for exit mode 0
+        # ("Optimization terminated successfully").  Modes 1 (stalled
+        # line search), 2 (degenerate problem) and 3 (LSQ-subproblem
+        # iteration cap) are NOT convergence — accepting them would
+        # certify a non-converged fit as hard-constrained arb-free and
+        # skip the fallback bookkeeping.  Anything else must raise so
+        # the caller routes the slice into fallback_slices.
+        success = result.success
 
     if not success:
         raise RuntimeError(
