@@ -185,3 +185,76 @@ class TestFilterOptionChain:
         assert len(filtered) == 1
         assert len(drops) == 0
         assert filtered.iloc[0]["strike"] == 100
+
+    def test_missing_oi_distinguishable_from_zero(self):
+        """Missing/NaN OI is dropped with a 'missing' reason and flag —
+        never byte-identical to a genuinely observed OI=0."""
+        df = _make_chain_df(
+            strikes=[100, 110],
+            oi=[None, 0],  # 100: OI missing; 110: OI genuinely zero
+            volume=[10, 10],
+            bid=[9.0, 9.0],
+            ask=[11.0, 11.0],
+        )
+        _, drops = filter_option_chain(df, "2026-08-15")
+        assert len(drops) == 2
+        by_strike = {d.strike: d for d in drops}
+        missing = by_strike[100.0]
+        zero = by_strike[110.0]
+        assert "OI=missing<10" in missing.reason
+        assert missing.missing_fields == ("open_interest",)
+        assert "OI=0<10" in zero.reason
+        assert zero.missing_fields == ()
+
+    def test_missing_oi_via_nan_flagged(self):
+        """NaN openInterest is treated as missing, not zero."""
+        df = _make_chain_df(
+            strikes=[100],
+            oi=[float("nan")],
+            volume=[10],
+            bid=[9.0],
+            ask=[11.0],
+        )
+        _, drops = filter_option_chain(df, "2026-08-15")
+        assert len(drops) == 1
+        assert "OI=missing<10" in drops[0].reason
+        assert drops[0].missing_fields == ("open_interest",)
+
+    def test_missing_bid_or_ask_distinguishable(self):
+        """A missing bid (or ask) with the other side present produces a
+        spread drop that names the missing side — not a fabricated
+        spread number indistinguishable from a real quote pair, and not
+        a silent pass-through with a made-up mid."""
+        df = _make_chain_df(
+            strikes=[100, 110, 120],
+            oi=[100, 100, 100],
+            volume=[10, 10, 10],
+            bid=[float("nan"), 5.0, float("nan")],
+            ask=[10.0, float("nan"), float("nan")],
+        )
+        _, drops = filter_option_chain(df, "2026-08-15")
+        by_strike = {d.strike: d for d in drops}
+        # bid missing, ask present → dropped, names the missing side
+        assert "missing: bid" in by_strike[100.0].reason
+        assert by_strike[100.0].missing_fields == ("bid",)
+        # ask missing, bid present → previously passed with a fabricated
+        # mid=bid/2 and a negative spread; now flagged instead
+        assert "missing: ask" in by_strike[110.0].reason
+        assert by_strike[110.0].missing_fields == ("ask",)
+        # both sides missing → no spread check, no drop (mid = 0)
+        assert 120.0 not in by_strike
+
+    def test_missing_volume_recorded_not_reason(self):
+        """Missing volume is recorded in missing_fields but is not a
+        filter reason (volume is never a criterion)."""
+        df = _make_chain_df(
+            strikes=[100],
+            oi=[3],  # OI violation drives the drop
+            volume=[None],
+            bid=[9.0],
+            ask=[11.0],
+        )
+        _, drops = filter_option_chain(df, "2026-08-15")
+        assert len(drops) == 1
+        assert "volume" in drops[0].missing_fields
+        assert "vol" not in drops[0].reason

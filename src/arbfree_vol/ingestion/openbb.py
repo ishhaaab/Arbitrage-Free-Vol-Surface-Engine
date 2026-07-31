@@ -222,10 +222,15 @@ def _normalise_columns(df):
         "implied_volatility": "impliedVolatility",
     }
     out = df.rename(columns=rename_map)
-    # Ensure volume and openInterest are numeric (some providers return objects)
-    for col in ("volume", "openInterest", "bid", "ask", "strike"):
+    # Coerce numerics but PRESERVE missingness (NaN, not 0.0) for the
+    # market-data columns so ``filter_option_chain`` can tell a missing
+    # value apart from a genuinely observed zero.  ``strike`` keeps a
+    # 0.0 default — a missing strike is unpriceable either way.
+    for col in ("volume", "openInterest", "bid", "ask"):
         if col in out.columns:
-            out[col] = out[col].apply(lambda x: _safe_float(x, 0.0))
+            out[col] = out[col].apply(lambda x: _safe_float(x, float("nan")))
+    if "strike" in out.columns:
+        out["strike"] = out["strike"].apply(lambda x: _safe_float(x, 0.0))
     return out
 
 

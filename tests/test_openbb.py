@@ -39,8 +39,10 @@ class TestOpenBBColumnMapping:
         assert "open_interest" not in result.columns
         assert "last_trade_price" not in result.columns
 
-    def test_normalise_columns_handles_nan(self):
-        """_normalise_columns converts NaN values to 0."""
+    def test_normalise_columns_preserves_missing(self):
+        """_normalise_columns keeps missing values as NaN (not 0.0) so the
+        quality filter can distinguish a missing value from a genuinely
+        observed zero (the missing-OI-as-0 bug class)."""
         import pandas as pd
         import math
         df = pd.DataFrame({
@@ -51,8 +53,8 @@ class TestOpenBBColumnMapping:
             "ask": [2.0, 3.0],
         })
         result = openbb_mod._normalise_columns(df)
-        assert result.iloc[0]["openInterest"] == 0.0
-        assert result.iloc[0]["volume"] == 0.0
+        assert math.isnan(result.iloc[0]["openInterest"])
+        assert math.isnan(result.iloc[0]["volume"])
 
 
 class TestOpenBBRowToQuote:
