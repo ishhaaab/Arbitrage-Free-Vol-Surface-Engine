@@ -42,7 +42,7 @@ References
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
@@ -72,10 +72,18 @@ class SequentialFitResult:
         Expiry times where both the hard-constrained and the
         unconstrained fit failed.  These slices are omitted from
         ``fitted_slices`` entirely.
+    fitted_slices_prev : list of float | None
+        For each entry in ``fitted_slices``, the expiry time of the
+        actual ``prev`` slice used in the calibration.  The first
+        fitted slice has ``None`` (no predecessor).  For a fallback
+        slice, this records the T of the last *hard-constrained* fit
+        before it — which may be several positions back in the
+        fitted sequence when there are consecutive fallbacks.
     """
     fitted_slices: list[tuple[float, SSVIParams]]
     fallback_slices: list[float]
     failed_slices: list[float]
+    fitted_slices_prev: list[float | None] = field(default_factory=list)
 
 
 def _butterfly_constraints(
@@ -329,13 +337,20 @@ def fit_ssvi_surface_sequential(
     fitted: list[tuple[float, SSVIParams]] = []
     fallback: list[float] = []
     failed: list[float] = []
+    fitted_slices_prev: list[float | None] = []
     last_valid_prev: SSVIParams | None = None
+    last_valid_prev_T: float | None = None
 
     for expiry, pts in ordered:
+        # Record the prev_T that will be used for this slice
+        prev_T_for_this_slice = last_valid_prev_T
+
         try:
             params = _fit_slice(pts, prev=last_valid_prev)
             last_valid_prev = params  # update only on hard-constrained success
+            last_valid_prev_T = expiry  # update for NEXT slice
             fitted.append((expiry, params))
+            fitted_slices_prev.append(prev_T_for_this_slice)
         except RuntimeError as e:
             _logger.warning(
                 "eSSVI hard-constrained fit failed for T=%.4f (%s); "
@@ -346,7 +361,9 @@ def fit_ssvi_surface_sequential(
                 params = fit_ssvi_slice(pts)
                 fitted.append((expiry, params))
                 fallback.append(expiry)
-                # do NOT update last_valid_prev — fallback slices aren't arb-free
+                fitted_slices_prev.append(prev_T_for_this_slice)
+                # do NOT update last_valid_prev or last_valid_prev_T
+                # — fallback slices aren't arb-free
             except (RuntimeError, ValueError) as e2:
                 _logger.error(
                     "eSSVI fallback fit also failed for T=%.4f (%s); "
@@ -354,6 +371,8 @@ def fit_ssvi_surface_sequential(
                     expiry, e2,
                 )
                 failed.append(expiry)
+                # failed slices are NOT in fitted_slices, so no entry
+                # in fitted_slices_prev
 
     if len(fitted) >= 2:
         params_only = [p for _, p in fitted]
@@ -368,6 +387,7 @@ def fit_ssvi_surface_sequential(
         fitted_slices=fitted,
         fallback_slices=fallback,
         failed_slices=failed,
+        fitted_slices_prev=fitted_slices_prev,
     )
 
 
@@ -427,3 +447,106 @@ def verify_hm_condition(
             return False
 
     return True
+
+
+def verify_hm_condition_breakdown(
+    fitted_slices: list[tuple[float, SSVIParams]],
+    fitted_prev_Ts: list[float | None] | None = None,
+    *,
+    tol: float = 1e-8,
+) -> list[dict]:
+    """Return per-fitted-slice H&M Prop 3.1 sub-condition breakdown.
+
+    For each fitted slice (except the first if no valid predecessor),
+    reports which of the three H&M sub-conditions fails relative to the
+    slice's actual predecessor in the calibration.
+
+    Parameters
+    ----------
+    fitted_slices : list of (T, SSVIParams)
+        Ordered by ascending T.  Typically ``SequentialFitResult.fitted_slices``.
+    fitted_prev_Ts : list of T | None, optional
+        The actual ``prev_T`` used in the calibration for each fitted slice.
+        If provided, must have the same length as ``fitted_slices``.
+        If ``None``, falls back to using the immediately preceding fitted
+        slice (legacy behavior — INCORRECT when there are consecutive
+        fallbacks, because ``fit_ssvi_surface_sequential`` does not
+        update ``last_valid_prev`` on fallback).
+    tol : float
+        Numerical tolerance on the inequality checks.
+
+    Returns
+    -------
+    list of dict, one per fitted slice with a valid ``prev``:
+        - "slice_T": float — T of this slice
+        - "prev_T": float — T of the actual predecessor
+        - "theta_self", "theta_prev": float
+        - "theta_ok": bool — True if theta_self >= theta_prev - tol
+        - "chi_self", "chi_prev": float — chi = theta * psi
+        - "chi_ok": bool — True if chi_self >= chi_prev - tol
+        - "rho_chi_self", "rho_chi_prev": float — rho * chi
+        - "ratio_value": float — |rho_chi_self - rho_chi_prev| / max(chi_self - chi_prev, tol)
+        - "ratio_ok": bool — True if ratio_value <= 1 + tol
+        - "failing_conditions": list of str — subset of {"theta", "chi", "ratio"}
+
+    Slices with no valid predecessor (``prev_T`` is None or not in the
+    fitted-slices dict) are skipped (not included in the output).
+    """
+    params_by_T: dict[float, SSVIParams] = {T: p for T, p in fitted_slices}
+    results: list[dict] = []
+
+    for i, (slice_T, params) in enumerate(fitted_slices):
+        # Determine the predecessor T
+        if fitted_prev_Ts is not None and i < len(fitted_prev_Ts):
+            prev_T = fitted_prev_Ts[i]
+        elif i > 0:
+            prev_T = fitted_slices[i - 1][0]
+        else:
+            prev_T = None
+
+        # Skip if no valid predecessor
+        if prev_T is None or prev_T not in params_by_T:
+            continue
+
+        prev_params = params_by_T[prev_T]
+
+        theta_self = params.theta
+        theta_prev = prev_params.theta
+        theta_ok = theta_self >= theta_prev - tol
+
+        chi_self = params.theta * params.psi
+        chi_prev = prev_params.theta * prev_params.psi
+        chi_ok = chi_self >= chi_prev - tol
+
+        rho_chi_self = params.rho * chi_self
+        rho_chi_prev = prev_params.rho * chi_prev
+        denom = max(chi_self - chi_prev, tol)
+        ratio_value = abs(rho_chi_self - rho_chi_prev) / denom
+        ratio_ok = ratio_value <= 1.0 + tol
+
+        failing: list[str] = []
+        if not theta_ok:
+            failing.append("theta")
+        if not chi_ok:
+            failing.append("chi")
+        if not ratio_ok:
+            failing.append("ratio")
+
+        results.append({
+            "slice_T": slice_T,
+            "prev_T": prev_T,
+            "theta_self": theta_self,
+            "theta_prev": theta_prev,
+            "theta_ok": theta_ok,
+            "chi_self": chi_self,
+            "chi_prev": chi_prev,
+            "chi_ok": chi_ok,
+            "rho_chi_self": rho_chi_self,
+            "rho_chi_prev": rho_chi_prev,
+            "ratio_value": ratio_value,
+            "ratio_ok": ratio_ok,
+            "failing_conditions": failing,
+        })
+
+    return results
+
