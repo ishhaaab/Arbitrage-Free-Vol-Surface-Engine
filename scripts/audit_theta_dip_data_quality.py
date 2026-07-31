@@ -17,8 +17,10 @@ Volume is recorded as diagnostic context only — it is not a filter criterion.
 
 Usage:
     python scripts/audit_theta_dip_data_quality.py
+    python scripts/audit_theta_dip_data_quality.py --use-fixture
 """
 
+import argparse
 import sys
 import logging
 from math import log, sqrt
@@ -35,9 +37,60 @@ from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 from arbfree_vol.ingestion.yfinance import fetch_chain as yf_fetch_chain
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Audit eSSVI fallback counts across data sources"
+    )
+    parser.add_argument(
+        "--use-fixture",
+        action="store_true",
+        help="Load SPX data from tests/fixtures/spx_sample.json instead of yfinance",
+    )
+    return parser.parse_args()
+
+
+def load_spx_fixture() -> VolSurface:
+    """Load SPX raw data from the saved fixture file."""
+    import json
+
+    from arbfree_vol.models.option import OptionType
+    from arbfree_vol.models.surface import ExpirySlice, Quote
+
+    fixture_path = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "spx_sample.json"
+    data = json.loads(fixture_path.read_text(encoding="utf-8"))
+    slices = []
+    for sl_data in data["slices"]:
+        quotes = [
+            Quote(
+                strike=q["strike"],
+                option_type=OptionType(q["option_type"]),
+                price=q["price"],
+                bid=q["bid"],
+                ask=q["ask"],
+            )
+            for q in sl_data["quotes"]
+            if q["price"] is not None
+        ]
+        if not quotes:
+            continue
+        slices.append(ExpirySlice(
+            expiry_time=sl_data["expiry_time"],
+            risk_free=sl_data.get("risk_free"),
+            div_yield=sl_data.get("div_yield"),
+            quotes=quotes,
+        ))
+    return VolSurface(
+        spot=data["spot"],
+        risk_free=data["risk_free"],
+        div_yield=data["div_yield"],
+        slices=slices,
+    )
 
 
 # ── Data fetching ────────────────────────────────────────────────────
@@ -228,6 +281,44 @@ def compute_theta_dip_severity(slices_data):
     }
 
 
+# ── Tenor bucket breakdown ───────────────────────────────────────────
+
+_TENOR_BUCKETS = [
+    (0.10, "< 0.10y"),
+    (0.25, "0.10-0.25y"),
+    (0.50, "0.25-0.50y"),
+    (1.00, "0.50-1.00y"),
+    (2.00, "1.00-2.00y"),
+    (float("inf"), "> 2.00y"),
+]
+
+
+def _bucket_T(T: float) -> str:
+    """Map a maturity in years to a tenor bucket label."""
+    for upper, label in _TENOR_BUCKETS:
+        if T < upper:
+            return label
+    return _TENOR_BUCKETS[-1][1]
+
+
+def compute_tenor_bucket_breakdown(
+    surface,
+    fallback_Ts: list[float],
+) -> dict[str, dict[str, int]]:
+    """Count fallback vs total slices per tenor bucket.
+
+    Returns dict mapping bucket label to {"fallback": int, "total": int}.
+    """
+    result = {label: {"fallback": 0, "total": 0} for _, label in _TENOR_BUCKETS}
+    fallback_set = set(fallback_Ts)
+    for sl in surface.slices:
+        bucket = _bucket_T(sl.expiry_time)
+        result[bucket]["total"] += 1
+        if sl.expiry_time in fallback_set:
+            result[bucket]["fallback"] += 1
+    return result
+
+
 # ── Single audit run ────────────────────────────────────────────────
 
 def _run_single_audit(
@@ -327,6 +418,16 @@ def _run_single_audit(
               f"{r['oi_dropped']:>6}  {r['total_strikes']:>6}  "
               f"{r['drop_rate']:>6.1%}")
 
+    # Tenor bucket breakdown
+    tenor_breakdown = compute_tenor_bucket_breakdown(surface, result.fallback_slices)
+    print(f"\n  {'Tenor Bucket Breakdown':}")
+    print(f"  {'Bucket':<12} {'Fallback':>8} {'Total':>8}")
+    print(f"  {'-' * 30}")
+    for _, label in _TENOR_BUCKETS:
+        tb = tenor_breakdown[label]
+        if tb["total"] > 0:
+            print(f"  {label:<12} {tb['fallback']:>8} {tb['total']:>8}")
+
     return {
         "rows": rows,
         "fallback_rows": [r for r in rows if r["tag"] == "FALLBACK"],
@@ -337,13 +438,16 @@ def _run_single_audit(
         "n_quality_drops": len(quality_drops),
         "theta_dips": theta_info["n_dips"],
         "theta_max_dip_pct": theta_info["max_dip_pct"],
+        "tenor_breakdown": tenor_breakdown,
     }
 
 
 # ── Main audit ──────────────────────────────────────────────────────
 
-def run_audit():
+def run_audit(args=None):
     """Run the full data quality audit across multiple sources/symbols."""
+    if args is None:
+        args = parse_args()
     print("=" * 72)
     print("  Data Quality Audit: eSSVI fallback comparison across sources")
     print("=" * 72)
@@ -380,21 +484,29 @@ def run_audit():
     }
 
     # ── Source 2: yfinance + SPX ─────────────────────────────────────
-    print("\n[2] yfinance + ^SPX")
+    print("\n[2] yfinance + ^SPX (from fixture)" if args.use_fixture else "\n[2] yfinance + ^SPX")
     print("-" * 40)
     try:
-        ticker_spx = yf.Ticker("^SPX")
-        spx_raw_surface, _, spx_raw_drops = fetch_yf_data("^SPX", disable_quality_filter=True)
-        spx_spot = spx_raw_surface.spot
-
-        spx_filt_surface, _, spx_filt_drops = fetch_yf_data("^SPX", disable_quality_filter=False)
+        if args.use_fixture:
+            print("  Using saved raw fixture (quality filter not applied).")
+            spx_raw_surface = load_spx_fixture()
+            spx_spot = spx_raw_surface.spot
+            spx_raw_drops = []
+            spx_filt_surface = load_spx_fixture()
+            spx_filt_drops = []
+            ticker_spx = None
+        else:
+            ticker_spx = yf.Ticker("^SPX")
+            spx_raw_surface, _, spx_raw_drops = fetch_yf_data("^SPX", disable_quality_filter=True)
+            spx_spot = spx_raw_surface.spot
+            spx_filt_surface, _, spx_filt_drops = fetch_yf_data("^SPX", disable_quality_filter=False)
 
         spx_raw_result = _run_single_audit(
-            "yfinance/^SPX — FILTER OFF",
+            "yfinance/^SPX — FILTER OFF" + (" (FIXTURE)" if args.use_fixture else ""),
             spx_raw_surface, spx_raw_drops, spx_spot, ticker_spx,
         )
         spx_filt_result = _run_single_audit(
-            "yfinance/^SPX — FILTER ON",
+            "yfinance/^SPX — FILTER ON" + (" (FIXTURE; same as raw)" if args.use_fixture else ""),
             spx_filt_surface, spx_filt_drops, spx_spot, ticker_spx,
         )
         results["yfinance_SPX"] = {
@@ -470,6 +582,39 @@ def run_audit():
             "label": row_label,
             **r,
         })
+
+    # ── Tenor bucket breakdown ───────────────────────────────────────
+    print(f"\n{'=' * 72}")
+    print("  TENOR BUCKET BREAKDOWN (fallback / total per bucket)")
+    print(f"{'=' * 72}")
+
+    for key, label in [
+        ("yfinance_SPY", "yfinance/SPY raw"),
+        ("yfinance_SPY", "yfinance/SPY filt"),
+        ("yfinance_SPX", "yfinance/SPX raw"),
+        ("yfinance_SPX", "yfinance/SPX filt"),
+        ("openbb_SPY",    "OpenBB/SPY raw"),
+        ("openbb_SPY",    "OpenBB/SPY filt"),
+    ]:
+        entry = results.get(key)
+        if entry is None:
+            continue
+        is_raw = "raw" in label
+        r = entry["raw"] if is_raw else entry["filtered"]
+        suffix = "raw" if is_raw else "filt"
+        row_label = f"{key.replace('_', '/')} {suffix}"
+
+        tenor = r.get("tenor_breakdown", {})
+        if not tenor:
+            continue
+
+        print(f"\n  {row_label}:")
+        print(f"    {'Bucket':<12} {'Fallback':>8} {'Total':>8}")
+        print(f"    {'-' * 30}")
+        for _, bucket_label in _TENOR_BUCKETS:
+            tb = tenor.get(bucket_label, {"fallback": 0, "total": 0})
+            if tb["total"] > 0:
+                print(f"    {bucket_label:<12} {tb['fallback']:>8} {tb['total']:>8}")
 
     return results
 
@@ -568,14 +713,32 @@ def write_findings_to_issues(results):
 
     lines.append("")
 
-    # Replace existing data source comparison section if present
+    # Replace only this bounded section so later Issue #15 sections,
+    # including the determinism snapshot, are preserved.
     marker = "### Data source comparison"
     if marker in content:
-        idx = content.index(marker)
-        content = content[:idx].rstrip() + "\n"
+        start_idx = content.index(marker)
+        # Find the next ### heading after the start marker
+        next_section_idx = content.find("\n### ", start_idx + len(marker))
+        if next_section_idx == -1:
+            # No next section — replace from marker to end of file
+            new_data_source_section = "\n".join(lines) + "\n"
+            content = content[:start_idx].rstrip() + "\n" + new_data_source_section
+        else:
+            # Replace only the data source comparison section
+            new_data_source_section = "\n".join(lines) + "\n"
+            content = (
+                content[:start_idx].rstrip()
+                + "\n"
+                + new_data_source_section
+                + "\n"
+                + content[next_section_idx + 1:]  # keep the \n before next section
+            )
+    else:
+        # No existing section — append
+        content = content.rstrip() + "\n" + "\n".join(lines) + "\n"
 
-    new_content = content + "\n".join(lines) + "\n"
-    issues_path.write_text(new_content, encoding="utf-8")
+    issues_path.write_text(content, encoding="utf-8")
     print(f"\n  Wrote data source comparison to {issues_path}")
 
 
