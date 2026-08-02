@@ -82,7 +82,7 @@ Raw SVI is expressive but not arbitrage-free by construction. For near-expiry da
 **Possible mitigations (none yet implemented):**
 1. **Fit with a butterfly penalty** — add `g(k) < 0` as a soft constraint in the `least_squares` objective.
 2. **Parameter constraints** — restrict `b * (1 + |rho|) < 2 * a / sigma` (Gatheral & Jacquier condition for SSVI).
-3. **Upgrade to SSVI/eSSVI** — the eSSVI path is now arbitrage-free by construction via the Hendriks & Martini (2019) Prop 3.1 sequential hard-constraint fit (commit 582d1cf, see `src/arbfree_vol/ssvi/term_structure.py`); for the raw SVI path the calendar penalty in commit 8b3e149 mitigates it.
+3. **Upgrade to SSVI/eSSVI** — the eSSVI path is now arbitrage-free by construction (for slices that fit within the H&M hard constraints) via the Hendriks & Martini (2019) Prop 3.1 sequential hard-constraint fit (commit 582d1cf, see `src/arbfree_vol/ssvi/term_structure.py`); slices that fall back to the unconstrained per-slice fit are NOT arb-free by construction (see Issue #15 and `RepairReport.repair_infeasible`). For the raw SVI path the calendar penalty in commit 8b3e149 mitigates it.
 4. **Increase minimum time-to-expiry** for data fed into the SVI calibrator (pragmatic — skip T < 14d).
 
 **Status:** Known, documented. Not yet mitigated. The repair engine reports these honestly as remaining violations.
@@ -250,10 +250,15 @@ independent-fit calendar risk.  That is now RESOLVED -- the eSSVI path
 fits slices sequentially by increasing maturity with the
 Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition enforced
 as a HARD optimizer constraint, plus both Gatheral-Jacquier (2014)
-butterfly bounds per slice.  It is arbitrage-free by construction
-(commit 582d1cf).  See `src/arbfree_vol/ssvi/term_structure.py`.
+butterfly bounds per slice.  Slices that fit within the constraints are
+arbitrage-free by construction (commit 582d1cf); slices that fall back
+to the unconstrained per-slice fit are NOT (see Issue #15 and
+`RepairReport.repair_infeasible`).  See
+`src/arbfree_vol/ssvi/term_structure.py`.
 
-**Status:** eSSVI -- resolved (arb-free by construction, commit 582d1cf).
+**Status:** eSSVI -- resolved (arb-free by construction for
+hard-constrained slices; fallback slices excepted, see Issue #15 /
+`repair_infeasible`, commit 582d1cf).
 SABR -- known limitation, documented and empirical; dynamic SABR is a
 future research extension.
 

@@ -2,7 +2,7 @@
 
 Provides a single-cohort cross-sectional mispricing backtest:
 
-1. Detect quotes whose market IV differs from the fitted arbitrage-free surface.
+1. Detect quotes whose market IV differs from the fitted surface (hard-constrained eSSVI slices are arb-free by construction; fallback slices are not — see ``repair_infeasible``).
 2. Enter delta-hedged trades (long underpriced, short overpriced).
 3. Realise P&L at expiry under the frozen-vol hedge convention.
 4. Aggregate metrics: hit rate, Sharpe, max drawdown, percentiles.

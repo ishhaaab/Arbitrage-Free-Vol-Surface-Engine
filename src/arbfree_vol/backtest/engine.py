@@ -45,7 +45,8 @@ def run_backtest(
     surface:
         Raw (or cleaned) volatility surface.
     fs:
-        Fitted arbitrage-free surface.
+        Fitted surface (hard-constrained eSSVI slices are arb-free by
+        construction; fallback slices are not — see ``repair_infeasible``).
     symbol:
         Ticker symbol for fetching underlying price data.
     snapshot_date:

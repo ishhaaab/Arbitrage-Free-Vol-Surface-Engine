@@ -66,7 +66,8 @@ def detect_mispricing(
     surface:
         Raw (or cleaned) volatility surface with market quotes.
     fs:
-        Fitted arbitrage-free surface.
+        Fitted surface (hard-constrained eSSVI slices are arb-free by
+        construction; fallback slices are not — see ``repair_infeasible``).
     threshold:
         Minimum absolute mispricing (in vol points) to generate a signal.
     min_signal_T_years:

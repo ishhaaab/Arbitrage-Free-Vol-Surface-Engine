@@ -1,6 +1,6 @@
 # arbfree-vol-surface
 
-This library takes a messy real-world option chain and turns it into a clean, arbitrage-free implied volatility surface.
+This library takes a messy real-world option chain and turns it into a clean implied volatility surface. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and are reported honestly in `RepairReport.fallback_slices` / `repair_infeasible`.
 
 ## The problem
 
@@ -89,7 +89,7 @@ A few decisions are baked into the code, worth knowing up front:
 
 The core engine is built and tested: ingestion, cleaning, all four arbitrage checks, three smile models, the repair loop, the query layer, Dupire, PCA, and a single-snapshot mispricing backtest. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery.
 
-This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The backtest is single-snapshot with a frozen-vol hedge, not a rolling daily refit (that would need a historical snapshot collector that doesn't exist yet). SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers; European options only.
+This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The backtest is single-snapshot with a frozen-vol hedge, not a rolling daily refit (that would need a historical snapshot collector that doesn't exist yet). SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. The eSSVI path is arbitrage-free by construction only for slices that fit within the H&M hard constraints; slices that fall back to an unconstrained per-slice fit are not, and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers; European options only.
 
 ## Roadmap
 

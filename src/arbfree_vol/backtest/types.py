@@ -25,7 +25,9 @@ class MispricingSignal:
     market_iv:
         Implied volatility recovered from the market mid price.
     model_iv:
-        Implied volatility from the fitted arbitrage-free surface.
+        Implied volatility from the fitted surface (hard-constrained
+        eSSVI slices are arb-free by construction; fallback slices are
+        not — see ``repair_infeasible``).
     mispricing:
         ``market_iv - model_iv`` (signed; positive = overpriced relative to model).
     entry_price:
