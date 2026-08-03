@@ -538,3 +538,125 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
     assert report.failed_slices == [], (
         f"expected empty failed_slices, got {report.failed_slices}"
     )
+
+
+# ── Real (non-monkeypatched) fallback through the engine ─────────────
+# Same genuinely H&M-incompatible ground truth as the term-structure
+# tests, but priced into a VolSurface so the FULL repair() pipeline
+# runs: cleaning -> forward curve -> sequential eSSVI fit -> engine
+# fallback bookkeeping.  The T=2.0 slice really falls back (the
+# live-data linesearch failure), repair_infeasible goes True, and the
+# remaining violation is surfaced — nothing is silently certified.
+_DIP_TRUTH_ENGINE = [
+    (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
+    (0.50, dict(theta=0.03, rho=-0.2, psi=0.35)),  # theta + chi dip
+    (1.00, dict(theta=0.12, rho=0.1, psi=0.4)),
+    (2.00, dict(theta=0.07, rho=0.2, psi=0.55)),   # theta dip again
+]
+
+
+def _ssvi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
+    """Price a surface from SSVI ground truth so the (k, w) data the
+    engine sees matches the fitted model's conventions exactly."""
+    from math import sqrt, exp
+    from arbfree_vol.ssvi.model import ssvi_w
+
+    ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+    if n_strikes is not None:
+        ks = ks[:n_strikes]
+    slices: list[ExpirySlice] = []
+    for T, t in truth:
+        F = SPOT * exp((R - Q) * T)
+        quotes: list[Quote] = []
+        for k in ks:
+            K = F * exp(k)
+            w = ssvi_w(k, t["theta"], t["rho"], t["psi"])
+            sigma = sqrt(max(w / T, 1e-12))
+            quotes.append(Quote(
+                strike=K, option_type=OptionType.CALL,
+                price=_bs_price(OptionType.CALL, K, sigma=sigma, tt=T),
+            ))
+            quotes.append(Quote(
+                strike=K, option_type=OptionType.PUT,
+                price=_bs_price(OptionType.PUT, K, sigma=sigma, tt=T),
+            ))
+        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
+    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+
+def test_repair_essvi_real_fallback_on_incompatible_data() -> None:
+    """End-to-end: genuinely H&M-incompatible data through repair()
+    produces a REAL fallback (no monkeypatch) that is honestly flagged.
+
+    The T=2.0 slice falls back (the live-data linesearch failure),
+    repair_infeasible is True, and the remaining calendar violation is
+    surfaced in n_violations_after — the surface is never silently
+    certified arb-free.  Deleting the hard constraints in _fit_slice
+    would let the unconstrained fit recover the dips with no fallback
+    recorded, and this test would fail.
+    """
+    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
+
+    assert report.metrics.n_slices_fitted == 4, (
+        f"expected 4 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+    assert len(report.fitted_ssvi_slices) == 4
+    assert 2.0 in report.fallback_slices, (
+        f"expected a real fallback at T=2.0, got {report.fallback_slices}"
+    )
+    assert report.failed_slices == []
+    assert report.repair_infeasible is True, (
+        "repair_infeasible must be True when a fallback slice violates H&M"
+    )
+    assert report.metrics.n_violations_after >= 1, (
+        "the remaining calendar violation must be surfaced, not hidden"
+    )
+
+
+def test_repair_essvi_skips_slice_with_few_points() -> None:
+    """A slice with fewer than 5 (k,w) points is skipped from the eSSVI
+    fit with a warning — not fitted, not failed, no crash."""
+    truth = _DIP_TRUTH_ENGINE + [(3.0, dict(theta=0.10, rho=0.1, psi=0.5))]
+    surface = _ssvi_priced_surface(truth)
+    # Shrink the T=3.0 slice to 2 strikes (4 quotes -> 4 (k,w) points)
+    small = surface.slices[-1]
+    surface.slices[-1] = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
+
+    report = repair(surface, use_ssvi=True)
+
+    assert report.metrics.n_slices_input == 5
+    assert report.metrics.n_slices_fitted == 4, (
+        f"expected the tiny slice to be skipped, got "
+        f"{report.metrics.n_slices_fitted} fitted"
+    )
+    fitted_Ts = [s.expiry_time for s in report.fitted_ssvi_slices]
+    assert 3.0 not in fitted_Ts
+    assert 3.0 not in report.failed_slices
+    assert 3.0 not in report.fallback_slices
+
+
+def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
+    """When both the hard fit and the unconstrained fallback fail for a
+    slice, repair() records it in failed_slices and skips it from the
+    fitted output with a warning — no crash, no silent hole."""
+    import arbfree_vol.ssvi.term_structure as ts
+
+    def _always_raise(points, prev=None, **kwargs):
+        raise RuntimeError("simulated total fit failure")
+
+    def _no_fallback(points):
+        raise RuntimeError("simulated fallback failure")
+
+    monkeypatch.setattr(ts, "_fit_slice", _always_raise)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _no_fallback)
+
+    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
+
+    assert report.failed_slices == [0.25, 0.5, 1.0, 2.0], (
+        f"expected all expiries in failed_slices, got {report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 0
+    assert len(report.fitted_ssvi_slices) == 0
