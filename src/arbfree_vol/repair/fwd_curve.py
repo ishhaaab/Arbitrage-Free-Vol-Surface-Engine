@@ -1,8 +1,11 @@
+import logging
 from math import exp, log
 from statistics import median
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r, get_q
 from arbfree_vol.models.option import OptionType
+
+_logger = logging.getLogger(__name__)
 
 
 def _slice_forward(s: ExpirySlice, r: float, spot: float) -> float | None:
@@ -56,6 +59,12 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
         q = get_q(surface, s)
         F = _slice_forward(s, r, spot)
         if F is None:
+            _logger.warning(
+                "Slice T=%.4f has no (call, put) parity pair; forward "
+                "falls back to theoretical spot*exp((r-q)*T) with "
+                "r=%.4f, q=%.4f",
+                s.expiry_time, r, q,
+            )
             F = spot * exp((r - q) * s.expiry_time)
         curve[s.expiry_time] = F
 

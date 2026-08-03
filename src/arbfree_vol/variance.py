@@ -1,16 +1,21 @@
 """Per-slice implied total variance; its shared by arbitrage detection and SVI fitting."""
 
+import logging
 from datetime import date
 
 from arbfree_vol.models.option import ImpliedVolInput, OptionContract
 from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_r, get_q
 from arbfree_vol.pricing.implied_vol import implied_vol
 
+_logger = logging.getLogger(__name__)
+
 
 def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, float]:
     """Maps each quoted strike in the slice to its total variance w = sigma**2 * T.
 
     Quotes whose price admits no implied vol (arb-violating) are dropped.
+    When enough quotes are dropped that the caller can no longer fit the
+    slice, a WARNING is logged with the drop count.
 
     When both a call and a put survive cleaning at the same strike, the
     per-strike value is the *average* of the two independently-computed
@@ -20,6 +25,7 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
     # accumulate (sum, count) per strike; average at the end so that
     # both call and put contribute when both are present.
     acc: dict[float, list[float]] = {}
+    n_dropped = 0
 
     for q in s.quotes:
         iv_input = ImpliedVolInput(
@@ -42,6 +48,14 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
             if q.strike not in acc:
                 acc[q.strike] = []
             acc[q.strike].append(w)
+        else:
+            n_dropped += 1
+
+    if n_dropped:
+        _logger.warning(
+            "slice T=%.4f: %d/%d quotes dropped (no implied vol found)",
+            s.expiry_time, n_dropped, len(s.quotes),
+        )
 
     # average call and put when both present
     return {strike: sum(values) / len(values) for strike, values in acc.items()}

@@ -269,6 +269,11 @@ def fetch_chain(
     # source rates
     r = _get_risk_free_rate()
     if r is None:
+        _logger.warning(
+            "Risk-free rate unavailable for %s (^IRX fetch failed or "
+            "empty); substituting r=0.05",
+            symbol,
+        )
         r = 0.05
     _is_index = symbol.startswith("^")
     if _is_index:
@@ -284,6 +289,11 @@ def fetch_chain(
     else:
         q = _get_dividend_yield(ticker)
         if q is None:
+            _logger.warning(
+                "Dividend yield unavailable for %s (dividendYield missing "
+                "from ticker info); substituting q=0.0",
+                symbol,
+            )
             q = 0.0
 
     # get the underlying spot price
@@ -358,11 +368,16 @@ def fetch_chain(
     if _is_index and slices:
         from statistics import median as _median
         per_slice_qs: list[float] = []
+        parity_slices: list[float] = []
+        failed_parity_slices: list[float] = []
         for sl in slices:
             q_est = _estimate_index_dividend_yield(sl, spot, r)
             if q_est is not None:
                 sl.div_yield = q_est
                 per_slice_qs.append(q_est)
+                parity_slices.append(sl.expiry_time)
+            else:
+                failed_parity_slices.append(sl.expiry_time)
         if per_slice_qs:
             q = _median(per_slice_qs)
         else:
@@ -370,6 +385,35 @@ def fetch_chain(
             if rep_q is not None:
                 q = rep_q
             # else q stays at 0.0 from the initial assignment
+
+        # Visibility only — no value changes.  Report which slices got a
+        # genuine per-expiry parity q and which fell back to the
+        # surface-level q, and where that surface q came from, so a mixed
+        # q-quality surface is never silent.
+        if failed_parity_slices and per_slice_qs:
+            _logger.warning(
+                "Index %s: q quality is MIXED across slices — %d/%d used "
+                "per-expiry put-call parity q (%s); %d/%d used the "
+                "surface-level q (median of parity estimates, q=%.6f) "
+                "(%s)",
+                symbol, len(parity_slices), len(slices), parity_slices,
+                len(failed_parity_slices), len(slices), q,
+                failed_parity_slices,
+            )
+        elif not per_slice_qs:
+            if q != 0.0:
+                _logger.warning(
+                    "Index %s: put-call parity q failed for all %d slices; "
+                    "surface q from representative ETF yield (q=%.6f)",
+                    symbol, len(slices), q,
+                )
+            else:
+                _logger.warning(
+                    "Index %s: put-call parity q failed for all %d slices "
+                    "and no representative ETF yield available; surface q "
+                    "hardcoded to 0.0",
+                    symbol, len(slices),
+                )
 
     return (
         VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices),

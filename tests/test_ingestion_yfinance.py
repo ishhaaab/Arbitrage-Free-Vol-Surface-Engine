@@ -1,5 +1,6 @@
 """Tests for the yfinance fetcher (mocked, no network calls)."""
 
+import logging
 from unittest.mock import patch, MagicMock
 from datetime import date
 
@@ -83,11 +84,10 @@ def test_fetch_chain_type(mock_ticker_class) -> None:
 
 @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
 @patch("arbfree_vol.ingestion.yfinance.date")
-def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class) -> None:
-    """When ^IRX or dividend yield is missing, the surface still builds.
-
-    The forward pre-pass (detect_with_forward) handles the correction.
-    """
+def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class, caplog) -> None:
+    """When ^IRX or dividend yield is missing, the surface still builds
+    with the documented fallbacks — and a WARNING states exactly which
+    value was substituted and why (no silent defaults)."""
     import pandas as pd
     from datetime import date as real_date
 
@@ -119,13 +119,191 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class)
     mock_ticker.option_chain.return_value = mock_chain
 
     from arbfree_vol.ingestion.yfinance import fetch_chain
-    surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
-    assert surface.risk_free == 0.05  # default fallback
-    assert surface.div_yield == 0.0  # default fallback
+    assert surface.risk_free == 0.05  # default fallback — values unchanged
+    assert surface.div_yield == 0.0  # default fallback — values unchanged
+    # ...but the substitution must NOT be silent
+    assert "substituting r=0.05" in caplog.text, (
+        f"expected r fallback warning, got: {caplog.text}"
+    )
+    assert "substituting q=0.0" in caplog.text, (
+        f"expected q fallback warning, got: {caplog.text}"
+    )
     assert isinstance(rejected, list)
     assert isinstance(quality_drops, list)
     assert len(surface.slices) >= 1
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_no_fallback_warning_when_rates_available(
+    mock_date_class, mock_ticker_class, caplog,
+) -> None:
+    """When ^IRX and dividendYield ARE available, no fallback warning is
+    logged — a regression guard against logging on every call."""
+    import pandas as pd
+    from datetime import date as real_date
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.005}
+    mock_ticker.options = ["2030-08-15", "2030-09-15"]
+
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    strikes = [440, 450, 460]
+    cols = {"strike": strikes, "lastPrice": [20, 15, 10],
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+
+    from arbfree_vol.ingestion.yfinance import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
+
+    assert surface.risk_free == approx(0.0485)
+    assert surface.div_yield == approx(0.005)
+    assert "substituting" not in caplog.text, (
+        f"no fallback should be logged with real rates, got: {caplog.text}"
+    )
+
+
+def _mock_index_chain(mock_ticker_class, symbol="^SPX"):
+    """Shared mock chain for index-symbol fetch_chain tests."""
+    import pandas as pd
+    from datetime import date as real_date
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    mock_ticker.info = {"regularMarketPrice": 450.0}
+    mock_ticker.options = ["2030-08-15", "2030-09-15"]
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    strikes = [440, 450, 460]
+    cols = {"strike": strikes, "lastPrice": [20, 15, 10],
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+    return mock_ticker
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_index_q_mix_is_logged(
+    mock_date_class, mock_ticker_class, monkeypatch, caplog,
+) -> None:
+    """When some index slices get a per-expiry parity q and others do
+    not, the resulting MIXED q-quality surface is logged explicitly."""
+    from datetime import date as real_date
+    import arbfree_vol.ingestion.yfinance as yf_mod
+
+    _mock_index_chain(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    # First slice: parity succeeds.  Second slice: parity fails.
+    calls = {"n": 0}
+
+    def fake_estimate(sl, spot, r):
+        calls["n"] += 1
+        return 0.01 if calls["n"] == 1 else None
+
+    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield", fake_estimate)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
+
+    assert "MIXED" in caplog.text, (
+        f"expected MIXED q-quality warning, got: {caplog.text}"
+    )
+    assert "1/2" in caplog.text
+    # Values unchanged: first slice has its own parity q, second falls
+    # back to the surface q (the parity median here)
+    assert surface.slices[0].div_yield == approx(0.01)
+    assert surface.slices[1].div_yield is None
+    assert surface.div_yield == approx(0.01)
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
+    mock_date_class, mock_ticker_class, monkeypatch, caplog,
+) -> None:
+    """All slices fail parity -> representative ETF yield fallback is
+    logged, and the surface carries the ETF q."""
+    from datetime import date as real_date
+    import arbfree_vol.ingestion.yfinance as yf_mod
+
+    _mock_index_chain(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
+                        lambda sl, spot, r: None)
+    monkeypatch.setattr(yf_mod, "_get_representative_dividend_yield",
+                        lambda symbol: 0.013)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
+
+    assert "representative ETF yield" in caplog.text, (
+        f"expected ETF fallback warning, got: {caplog.text}"
+    )
+    assert surface.div_yield == approx(0.013)
+    for sl in surface.slices:
+        assert sl.div_yield is None  # per-slice q untouched
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
+    mock_date_class, mock_ticker_class, monkeypatch, caplog,
+) -> None:
+    """All slices fail parity AND no representative ETF -> q=0.0
+    fallback-of-last-resort is logged explicitly."""
+    from datetime import date as real_date
+    import arbfree_vol.ingestion.yfinance as yf_mod
+
+    _mock_index_chain(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
+                        lambda sl, spot, r: None)
+    monkeypatch.setattr(yf_mod, "_get_representative_dividend_yield",
+                        lambda symbol: None)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
+
+    assert "hardcoded to 0.0" in caplog.text, (
+        f"expected q=0.0 last-resort warning, got: {caplog.text}"
+    )
+    assert surface.div_yield == 0.0
 
 
 @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
