@@ -1,8 +1,6 @@
 from math import sqrt
 
 from arbfree_vol.svi.model import SVIParams, svi_total_variance, svi_g
-from arbfree_vol.svi.data import slice_to_point
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
 
 
 from scipy.optimize import least_squares
@@ -114,8 +112,3 @@ def calibrate_constrained(
         raise RuntimeError(f"SVI constrained calibration failed: {result.message}")
     a, b, rho, m, sigma = result.x
     return SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)
-
-
-def calibrate_slice(surface: VolSurface, s: ExpirySlice) -> SVIParams:
-    """Convenience: calls ``slice_to_point`` then ``calibrate``."""
-    return calibrate(slice_to_point(surface, s))

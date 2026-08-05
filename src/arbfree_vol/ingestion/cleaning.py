@@ -135,6 +135,15 @@ def _check_deep_moneyness(sl: ExpirySlice,
 
     Approximate forward using spot directly by ignoring r/q for the
     cleaning step (the precise value is computed later in fwd_curve).
+
+    Deliberate moneyness divergence: this guard uses ``log(K / spot)``
+    (spot-based) while the downstream pipeline uses ``log(K / F)``
+    (forward-based).  That is intentional — the forward curve is NOT
+    available at cleaning time (it is estimated afterwards in
+    ``fwd_curve`` from the surviving quotes).  This is a coarse guard
+    only: the precise forward-based moneyness is computed later in
+    ``fwd_curve``, so any small disagreement between spot and forward
+    moneyness at the boundary is acceptable here.
     """
     if spot <= 0 or q.strike <= 0:
         return None

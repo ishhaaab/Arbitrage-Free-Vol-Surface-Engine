@@ -43,34 +43,3 @@ def greeks(model: BlackScholesInput) -> Greeks:
 
     return Greeks(delta=delta, gamma=gamma, vega=vega, theta=theta, rho=rho)
 
-
-@dataclass(frozen=True, slots=True)
-class ScaledGreeks:
-    """Greeks in commonly-used units for display.
-
-    - delta, gamma: unchanged (per 1.0 spot)
-    - vega_volpt:  vega per 1 vol point (1% = 0.01)
-    - theta_day:   theta per calendar day
-    - rho_1pct:    rho per 1% rate change (100 bps)
-    """
-    delta: float
-    gamma: float
-    vega_volpt: float
-    theta_day: float
-    rho_1pct: float
-
-
-def scaled_greeks(g: Greeks) -> ScaledGreeks:
-    """Scale raw Greeks to commonly-used display units."""
-    return ScaledGreeks(
-        delta=g.delta,
-        gamma=g.gamma,
-        vega_volpt=g.vega / 100.0,
-        theta_day=g.theta / 365.0,
-        rho_1pct=g.rho / 100.0,
-    )
-
-
-
-
-
