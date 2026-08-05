@@ -5,7 +5,7 @@ from datetime import date
 from pytest import approx
 
 from arbfree_vol.arbitrage.quote_detect import detect
-from arbfree_vol.arbitrage.report import ViolationType
+from arbfree_vol.arbitrage.report import ArbitrageReport, ViolationType
 from arbfree_vol.models.option import (
     BlackScholesInput,
     OptionContract,
@@ -221,3 +221,30 @@ def test_unpaired_strike_is_skipped() -> None:
     report = detect(surface)
 
     assert report.is_arbitrage_free
+
+
+def test_calendar_check_handles_empty_total_variance_slice(monkeypatch) -> None:
+    """A slice whose total-variance dict is empty must not crash the
+    calendar check.
+
+    Regression for the zip-unpack bug where ``ks_l, vs_l = zip(*lw)``
+    ran before the ``len(lw) < 2`` guard, raising
+    ``ValueError: not enough values to unpack`` and killing the whole
+    detect() call.
+    """
+    import arbfree_vol.arbitrage.quote_detect as qd
+
+    surface = _two_expiry_surface(t1=0.5, sig1=0.20, t2=1.0, sig2=0.20)
+    real_stv = qd.slice_total_variance
+
+    def _empty_for_later(surface_, sl):
+        if sl.expiry_time == 1.0:
+            return {}
+        return real_stv(surface_, sl)
+
+    monkeypatch.setattr(qd, "slice_total_variance", _empty_for_later)
+
+    # Must return a report, not raise ValueError
+    report = detect(surface)
+
+    assert isinstance(report, ArbitrageReport)

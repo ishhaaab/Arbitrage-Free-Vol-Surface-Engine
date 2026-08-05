@@ -3,8 +3,11 @@
 Attempts to source real risk-free rates and dividend yields.  Falls
 back to pre-pass forward-curve estimation when rates are unavailable.
 
-Index symbols (tickers starting with ``^``, e.g. ``^SPX``) are treated
-as having zero dividend yield — indices do not pay dividends.
+Index symbols (tickers starting with ``^``, e.g. ``^SPX``) use a
+put-call-parity implied dividend yield per expiry (via
+``estimate_forward_curve`` / parity q), with a representative-ETF
+fallback (``_INDEX_REPRESENTATIVE``, e.g. ``^SPX`` -> SPY) when parity
+estimation fails.  Per-slice q choices are logged.
 """
 
 import logging

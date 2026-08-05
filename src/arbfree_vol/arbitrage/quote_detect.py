@@ -232,11 +232,11 @@ def _check_calendar(surface: VolSurface,
         ew = sorted([(log(K / F_e), w) for K, w in w_e.items()])
         lw = sorted([(log(K / F_l), w) for K, w in w_l.items()])
 
-        ks_e, vs_e = zip(*ew)
-        ks_l, vs_l = zip(*lw)
-
         if len(ew) < 2 or len(lw) < 2:
             continue
+
+        ks_e, vs_e = zip(*ew)
+        ks_l, vs_l = zip(*lw)
 
         k_min = max(min(ks_e), min(ks_l))
         k_max = min(max(ks_e), max(ks_l))

@@ -76,4 +76,3 @@ class RepairReport:
     repair_infeasible: bool = False
     fallback_slices: list[float] = field(default_factory=list)
     failed_slices: list[float] = field(default_factory=list)
-    data_quality_drops: list = field(default_factory=list)
