@@ -459,47 +459,56 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 sabr_meta.append((sl, F, len(sl.quotes)))
 
             if sabr_slices_data:
-                sabr_params_list = fit_sabr_term_structure(sabr_slices_data)
-
-                for (sl, F, n_total), sabr_params, (T_i, _F_i, pts) in zip(
-                    sabr_meta, sabr_params_list, sabr_slices_data,
-                ):
-                    # Per-slice RMSE in w-space
-                    a = sabr_params.alpha
-                    b = sabr_params.beta
-                    r = sabr_params.rho
-                    n = sabr_params.nu
-                    errors = [
-                        (sabr_total_variance(k, F, T_i, a, b, r, n) - w) ** 2
-                        for k, w in pts
-                    ]
-                    rmse = sqrt(mean(errors))
-
-                    # Map to raw SVI params for the SVI-based pipeline
-                    a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
-                        sabr_params, F, T_i,
+                try:
+                    sabr_params_list = fit_sabr_term_structure(sabr_slices_data)
+                except RuntimeError as exc:
+                    _logger.warning(
+                        "SABR term-structure fit failed: %s; marking %d slice(s) failed",
+                        exc, len(sabr_meta),
                     )
-                    raw_svi_params = SVIParams(
-                        a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi,
+                    failed_slices.extend(
+                        sl.expiry_time for sl, _F, _n in sabr_meta
                     )
+                else:
+                    for (sl, F, n_total), sabr_params, (T_i, _F_i, pts) in zip(
+                        sabr_meta, sabr_params_list, sabr_slices_data,
+                    ):
+                        # Per-slice RMSE in w-space
+                        a = sabr_params.alpha
+                        b = sabr_params.beta
+                        r = sabr_params.rho
+                        n = sabr_params.nu
+                        errors = [
+                            (sabr_total_variance(k, F, T_i, a, b, r, n) - w) ** 2
+                            for k, w in pts
+                        ]
+                        rmse = sqrt(mean(errors))
 
-                    fitted.append(FittedSlice(
-                        expiry_time=sl.expiry_time,
-                        params=raw_svi_params,
-                        rmse=rmse,
-                        forward_price=F,
-                        n_quotes_total=n_total,
-                        n_quotes_used=len(pts),
-                        data_points=tuple(pts),
-                    ))
-                    fitted_sabr.append(FittedSABRSlice(
-                        expiry_time=sl.expiry_time,
-                        sabr=sabr_params,
-                        rmse=rmse,
-                        forward_price=F,
-                        n_quotes_total=n_total,
-                        n_quotes_used=len(pts),
-                    ))
+                        # Map to raw SVI params for the SVI-based pipeline
+                        a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
+                            sabr_params, F, T_i,
+                        )
+                        raw_svi_params = SVIParams(
+                            a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi,
+                        )
+
+                        fitted.append(FittedSlice(
+                            expiry_time=sl.expiry_time,
+                            params=raw_svi_params,
+                            rmse=rmse,
+                            forward_price=F,
+                            n_quotes_total=n_total,
+                            n_quotes_used=len(pts),
+                            data_points=tuple(pts),
+                        ))
+                        fitted_sabr.append(FittedSABRSlice(
+                            expiry_time=sl.expiry_time,
+                            sabr=sabr_params,
+                            rmse=rmse,
+                            forward_price=F,
+                            n_quotes_total=n_total,
+                            n_quotes_used=len(pts),
+                        ))
         else:
             prev_svi: SVIParams | None = None
             for sl in sorted_slices:
@@ -517,6 +526,13 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         remaining= detect_svi_surface(svi_slices)
     else:
         remaining= ArbitrageReport(violations=[])
+
+    # A fit that leaves grid-detectable violations is not feasible, even
+    # if the eSSVI H&M parameter check passed (the grid runs the raw-SVI
+    # mapping at discrete k, which can surface violations the parameter
+    # check misses).
+    if remaining.violations:
+        repair_infeasible = True
 
     # step 7: metrics
     metrics= RepairMetrics(

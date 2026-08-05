@@ -660,3 +660,77 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
     )
     assert report.metrics.n_slices_fitted == 0
     assert len(report.fitted_ssvi_slices) == 0
+
+
+def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
+    """When the SABR term-structure fit raises RuntimeError, repair()
+    must not crash: it marks every SABR-eligible expiry as failed,
+    returns no SABR fits, and surfaces the failure honestly.
+
+    Previously the fabricated-default fallback in
+    ``fit_sabr_term_structure`` silently returned SABRParams(0.2, 0.5,
+    0.0, 0.3) that flowed into fitted_sabr_slices as if fitted.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure", _raise)
+
+    expiries = [0.25, 0.5, 1.0]
+    n_strikes = 7
+    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
+
+    slices: list[ExpirySlice] = []
+    for T_val in expiries:
+        quotes: list[Quote] = []
+        for K in strikes:
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.CALL,
+                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
+            )
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.PUT,
+                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
+            )
+        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
+
+    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+    # Must not raise
+    report = repair(surface, use_sabr=True)
+
+    assert report.failed_slices == expiries, (
+        f"expected all SABR-eligible expiries in failed_slices, got "
+        f"{report.failed_slices}"
+    )
+    assert report.fitted_sabr_slices == ()
+    assert len(report.fitted_slices) == 0
+
+
+def test_repair_infeasible_true_when_grid_finds_remaining_violations() -> None:
+    """repair_infeasible must be True when the grid-based
+    detect_svi_surface finds remaining violations, even if the eSSVI
+    H&M parameter check passed.
+
+    The 7-strike variant of the dip ground truth fits all slices hard
+    (no fallback), so verify_hm_condition passes and the pre-fix code
+    kept repair_infeasible=False — yet the raw-SVI grid detects 2
+    calendar violations on the fitted surface.
+    """
+    report = repair(
+        _ssvi_priced_surface(_DIP_TRUTH_ENGINE, n_strikes=7), use_ssvi=True,
+    )
+
+    assert report.fallback_slices == [], (
+        f"test setup error: expected no fallback, got {report.fallback_slices}"
+    )
+    assert report.metrics.n_violations_after >= 1, (
+        "test setup error: expected remaining grid violations on the "
+        "7-strike dip surface"
+    )
+    assert report.repair_infeasible is True, (
+        "repair_infeasible must be True when the grid detects remaining "
+        "violations"
+    )
