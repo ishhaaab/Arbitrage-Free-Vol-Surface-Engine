@@ -58,9 +58,11 @@ def sabr_implied_vol(k: float, F: float, T: float,
                      alpha: float, beta: float, rho: float, nu: float) -> float:
     """SABR asymptotic Black implied volatility (Hagan et al. 2002).
 
-    Uses the standard Hagan-Kumar-Lesniewski-Woodward formula with the
-    full T-correction.  For ``|k| <= 1e-8`` the ATM closed-form limit is
-    used to avoid the degenerate 0/0 in ``z / x(z)``.
+    Implements Hagan et al. Eq 2.17a: the leading log-moneyness bracket
+    ``1 + (1-beta)^2/24 log^2(F/K) + (1-beta)^4/1920 log^4(F/K) + ...``
+    times the ``z / x(z)`` term, times the T-correction bracket.  For
+    ``|k| <= 1e-8`` the ATM closed-form limit is used to avoid the
+    degenerate 0/0 in ``z / x(z)``.
 
     Parameters
     ----------
@@ -106,7 +108,18 @@ def sabr_implied_vol(k: float, F: float, T: float,
     sigma_base = alpha / FK_pow * z_over_x
     corr = _sabr_correction(FK_pow, FK_1mb, alpha, beta, rho, nu)
 
-    return sigma_base * (1.0 + corr * T)
+    # Hagan et al. (2002) Eq 2.17a: the leading log-moneyness bracket
+    # 1 + (1-beta)^2/24 * log^2(F/K) + (1-beta)^4/1920 * log^4(F/K) + ...
+    # log(F/K) = -k since k = ln(K/F); the bracket is even in log(F/K),
+    # so the sign is immaterial.  It reduces to 1 at the ATM limit.
+    log_fk = -k
+    log_corr = (
+        1.0
+        + ((1.0 - beta) ** 2 / 24.0) * log_fk * log_fk
+        + ((1.0 - beta) ** 4 / 1920.0) * log_fk ** 4
+    )
+
+    return sigma_base * log_corr * (1.0 + corr * T)
 
 
 def sabr_total_variance(k: float, F: float, T: float,
@@ -171,7 +184,10 @@ def to_raw_svi_params(sabr_params: SABRParams,
         return [svi_total_variance(float(k), a, b, r, m, s) - float(w)
                 for k, w in zip(k_grid, w_target)]
 
-    result = least_squares(residuals, x0, bounds=bounds)
+    # The SABR wings steepen with the leading log-moneyness bracket of
+    # Eq 2.17a, so the SVI fit needs a larger evaluation budget than the
+    # scipy default (100 * n variables) to converge on the 241-point grid.
+    result = least_squares(residuals, x0, bounds=bounds, max_nfev=10000)
     if not result.success:
         raise RuntimeError(f"SABR-to-SVI mapping failed: {result.message}")
     return tuple(result.x)  # type: ignore[return-value]

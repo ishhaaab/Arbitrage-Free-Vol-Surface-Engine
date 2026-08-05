@@ -492,3 +492,65 @@ def test_fitted_slices_prev_threads_last_hard_constrained_predecessor() -> None:
         f"  got      {result.fitted_slices_prev}\n"
         f"  expected {expected_prev}"
     )
+
+
+# ── Native calendar gate ─────────────────────────────────────────────
+# verify_hm_condition checks necessary (not sufficient) conditions: a
+# fitted pair can satisfy theta/chi monotonicity and |ratio| <= 1 yet
+# still cross in the wings.  verify_ssvi_calendar_free checks the actual
+# no-calendar-spread condition on the native SSVI slices over a dense
+# grid, catching what the parameter check (and the [-1.5, 1.5] raw-SVI
+# detector grid) misses.
+def test_verify_ssvi_calendar_free_rejects_crossing_pairs() -> None:
+    """The native calendar gate must reject pairs that cross in the
+    wings even though the H&M parameter conditions pass."""
+    from arbfree_vol.ssvi.term_structure import verify_ssvi_calendar_free
+
+    crossing_pairs = [
+        # Architecture-review counterexample: verify_hm_condition=True
+        # but min(w2-w1) = -0.00153 at k=0.68.
+        [
+            SSVIParams(theta=0.0149505446, rho=-0.6548551, psi=0.11491999),
+            SSVIParams(theta=0.0574982989, rho=-0.8830506, psi=2.5226500),
+        ],
+        # Theta == 1 case: curves cross immediately off ATM.
+        [
+            SSVIParams(theta=1.0, rho=0.90, psi=1.0),
+            SSVIParams(theta=1.0, rho=0.81, psi=1.2),
+        ],
+        # Wing crossing at k ~ -1.73, outside the [-1.5, 1.5] raw-SVI
+        # detector grid used by detect_svi_surface.
+        [
+            SSVIParams(theta=0.5, rho=0.00, psi=1.0),
+            SSVIParams(theta=1.0, rho=0.58, psi=1.2),
+        ],
+    ]
+    for pair in crossing_pairs:
+        assert verify_hm_condition(pair), (
+            f"setup error: H&M parameter conditions should pass for {pair}"
+        )
+        assert not verify_ssvi_calendar_free(pair), (
+            f"calendar gate must reject crossing pair: {pair}"
+        )
+
+
+def test_verify_ssvi_calendar_free_passes_benign_fit() -> None:
+    """The native calendar gate passes on a cleanly fitted surface."""
+    from arbfree_vol.ssvi.term_structure import verify_ssvi_calendar_free
+
+    result = fit_ssvi_surface_sequential(_make_slices_data())
+    params = [p for _, p in result.fitted_slices]
+    assert result.fallback_slices == []
+    assert verify_ssvi_calendar_free(params)
+
+
+def test_verify_ssvi_calendar_free_near_equal_chi() -> None:
+    """The gate passes on the near-flat (near-equal-chi) surface and does
+    not false-positive on numerical noise around chi_2 ~ chi_1."""
+    from arbfree_vol.ssvi.term_structure import verify_ssvi_calendar_free
+
+    flat_w = 0.04
+    pts = [(float(k), flat_w) for k in np.linspace(-1.0, 1.0, 9)]
+    result = fit_ssvi_surface_sequential([(0.25, pts), (0.50, pts)])
+    params = [p for _, p in result.fitted_slices]
+    assert verify_ssvi_calendar_free(params)

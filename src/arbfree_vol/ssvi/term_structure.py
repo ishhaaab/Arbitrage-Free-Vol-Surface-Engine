@@ -457,6 +457,56 @@ def verify_hm_condition(
     return True
 
 
+def verify_ssvi_calendar_free(
+    params_seq: list[SSVIParams],
+    *,
+    k_grid: NDArray[np.float64] | None = None,
+    tol: float = 1e-4,
+) -> bool:
+    """Post-fit calendar-arbitrage verification on native eSSVI slices.
+
+    ``verify_hm_condition`` checks the Hendriks & Martini Prop 3.1
+    parameter conditions, which are necessary but not sufficient for
+    calendar-spread absence: a pair can satisfy theta/chi monotonicity
+    and the ``|ratio| <= 1`` bound yet still cross in the wings
+    (``w_{i+1}(k) < w_i(k)`` for some ``k``).  This function checks the
+    actual no-calendar-spread condition directly on the native SSVI
+    slices over a dense log-moneyness grid.
+
+    Parameters
+    ----------
+    params_seq : list of SSVIParams
+        Ordered by ascending maturity.
+    k_grid : NDArray[np.float64], optional
+        Log-moneyness grid.  Defaults to ``linspace(-3, 3, 241)`` — the
+        same range the SABR-to-SVI mapping uses.
+    tol : float
+        Absolute tolerance on the total-variance gap (the codebase's de
+        facto arb tolerance of ``1e-4``).
+
+    Returns
+    -------
+    bool
+        ``True`` iff for every adjacent pair and every grid point
+        ``w_{i+1}(k) >= w_i(k) - tol``.
+
+    This is a discrete check: violations strictly between grid points or
+    beyond the grid are not certified.  It complements, not replaces,
+    ``verify_hm_condition``.
+    """
+    if params_seq is None or len(params_seq) < 2:
+        return True
+    if k_grid is None:
+        k_grid = np.linspace(-3.0, 3.0, 241)
+    for i in range(len(params_seq) - 1):
+        t1, r1, p1 = params_seq[i].theta, params_seq[i].rho, params_seq[i].psi
+        t2, r2, p2 = params_seq[i + 1].theta, params_seq[i + 1].rho, params_seq[i + 1].psi
+        for k in k_grid:
+            if ssvi_w(float(k), t1, r1, p1) - ssvi_w(float(k), t2, r2, p2) > tol:
+                return False
+    return True
+
+
 def verify_hm_condition_breakdown(
     fitted_slices: list[tuple[float, SSVIParams]],
     fitted_prev_Ts: list[float | None] | None = None,

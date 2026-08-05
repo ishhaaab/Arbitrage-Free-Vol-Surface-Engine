@@ -734,3 +734,51 @@ def test_repair_infeasible_true_when_grid_finds_remaining_violations() -> None:
         "repair_infeasible must be True when the grid detects remaining "
         "violations"
     )
+
+
+def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
+    """repair_infeasible must be True when the fitted eSSVI slices cross
+    in the wings OUTSIDE the [-1.5, 1.5] raw-SVI detector grid.
+
+    The crossing pair passes verify_hm_condition AND the raw-SVI
+    detect_svi_surface grid (the crossing sits at k ~ -1.73, beyond the
+    detector grid).  Only the native-calendar gate in the engine catches
+    it.  fallback_slices and failed_slices must stay empty — the fit
+    succeeded; it is the certification that must fail.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+    from arbfree_vol.ssvi.model import SSVIParams
+    from arbfree_vol.ssvi.term_structure import SequentialFitResult
+
+    crossing_params = [
+        (0.25, SSVIParams(theta=0.5, rho=0.00, psi=1.0)),
+        (1.00, SSVIParams(theta=1.0, rho=0.58, psi=1.2)),
+    ]
+    fake_result = SequentialFitResult(
+        fitted_slices=crossing_params,
+        fallback_slices=[],
+        failed_slices=[],
+    )
+
+    def _fake_sequential(slices_data):
+        return fake_result
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(engine_mod, "fit_ssvi_surface_sequential", _fake_sequential)
+
+    try:
+        report = repair(
+            _ssvi_priced_surface(_DIP_TRUTH_ENGINE, n_strikes=9), use_ssvi=True,
+        )
+    finally:
+        monkeypatch.undo()
+
+    # The fake fit reports success: no fallback and no failed slices.
+    assert report.fallback_slices == []
+    assert report.failed_slices == []
+    # The wing crossing is NOT visible to the raw-SVI detector grid, yet
+    # the native-calendar gate must flag the surface as infeasible.
+    assert report.repair_infeasible is True, (
+        "repair_infeasible must be True when fitted eSSVI slices cross "
+        "outside the raw-SVI detector grid"
+    )

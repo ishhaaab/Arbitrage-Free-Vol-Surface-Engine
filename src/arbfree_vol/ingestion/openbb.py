@@ -30,7 +30,6 @@ from arbfree_vol.ingestion._index_rates import (
 )
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve
 
 _logger = logging.getLogger(__name__)
 

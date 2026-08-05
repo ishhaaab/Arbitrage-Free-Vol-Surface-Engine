@@ -13,6 +13,7 @@ from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
+    verify_ssvi_calendar_free,
     SequentialFitResult,
 )
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
@@ -294,7 +295,10 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 # Check calendar-arb feasibility of the fit
                 if len(params_list) >= 2:
                     params_only_sorted = [p for _, p in sorted(params_list, key=lambda x: x[0])]
-                    repair_infeasible = not verify_hm_condition(params_only_sorted)
+                    repair_infeasible = (
+                        not verify_hm_condition(params_only_sorted)
+                        or not verify_ssvi_calendar_free(params_only_sorted)
+                    )
                 else:
                     repair_infeasible = False
 

@@ -5,7 +5,7 @@ back to pre-pass forward-curve estimation when rates are unavailable.
 
 Index symbols (tickers starting with ``^``, e.g. ``^SPX``) use a
 put-call-parity implied dividend yield per expiry (via
-``estimate_forward_curve`` / parity q), with a representative-ETF
+``_estimate_index_dividend_yield``), with a representative-ETF
 fallback (``_INDEX_REPRESENTATIVE``, e.g. ``^SPX`` -> SPY) when parity
 estimation fails.  Per-slice q choices are logged.
 """
@@ -20,7 +20,6 @@ import yfinance as yf
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve
 from arbfree_vol.ingestion.cleaning import clean_quotes, RejectionRecord
 from arbfree_vol.ingestion._index_rates import (
     _INDEX_REPRESENTATIVE,

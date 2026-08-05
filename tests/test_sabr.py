@@ -116,6 +116,31 @@ def _sabr_atm_closed_form(alpha: float, beta: float, rho: float,
     return sigma_atm * (1.0 + corr * T)
 
 
+def test_sabr_log_moneyness_bracket_known_values() -> None:
+    """Regression against Hagan et al. (2002) Eq 2.17a including the
+    leading log-moneyness bracket.
+
+    Reference values were computed with an independent implementation of
+    the full Eq 2.17a for F=100, T=1, alpha=0.25, beta=0.5, rho=-0.4,
+    nu=0.8 (the parameter set used in the architecture review).  Without
+    the bracket, the wing IV is understated by ~0.065% at |k|=0.25 and
+    ~0.58% at k=0.75.
+    """
+    F, T = 100.0, 1.0
+    alpha, beta, rho, nu = 0.25, 0.5, -0.4, 0.8
+    cases = [
+        (0.0, 0.025988496094),
+        (0.25, 0.063028392718),
+        (-0.25, 0.085651314868),
+        (0.75, 0.137731503445),
+    ]
+    for k, expected in cases:
+        iv = sabr_implied_vol(k, F, T, alpha, beta, rho, nu)
+        assert iv == approx(expected, abs=1e-10), (
+            f"sabr_implied_vol({k}) = {iv:.12f}, expected {expected:.12f}"
+        )
+
+
 def test_sabr_rho_zero_symmetry() -> None:
     """With rho=0 and beta=1 the SABR smile is symmetric in k; with non-zero
     rho (beta=0.5) it is not.  (Beta != 1 introduces asymmetry through the
