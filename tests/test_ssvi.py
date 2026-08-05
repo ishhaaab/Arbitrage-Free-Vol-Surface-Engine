@@ -160,15 +160,30 @@ def test_gj_safe_params_positive_residual() -> None:
 
 
 def test_gj_boundary_near_zero() -> None:
-    # Safe:   theta=0.25, rho=0.5, psi=4  -> 4 - 0.25*4*1.5 = 2.5
+    # theta=0.25, rho=0.5, psi=4 violates the psi^2 bound:
+    #   first residual  = 4 - 0.25*4*1.5   = 2.5  (>= 0, first bound OK)
+    #   second residual = 4 - 0.25*16*1.5  = -2.0 (< 0, psi^2 bound violated)
     r1 = gatheral_jacquier_condition(0.25, 0.5, 4.0)
-    assert r1 >= 0
-    assert r1 == approx(2.5, abs=1e-12)
+    assert r1 < 0
+    assert r1 == approx(-2.0, abs=1e-12)
 
-    # Unsafe: theta=0.25, rho=0.5, psi=12 -> 4 - 0.25*12*1.5 = -0.5
+    # theta=0.25, rho=0.5, psi=12 violates BOTH bounds:
+    #   first  = 4 - 0.25*12*1.5  = -0.5
+    #   second = 4 - 0.25*144*1.5 = -50.0
     r2 = gatheral_jacquier_condition(0.25, 0.5, 12.0)
     assert r2 < 0
-    assert r2 == approx(-0.5, abs=1e-12)
+    assert r2 == approx(-50.0, abs=1e-12)
+
+
+def test_gj_psi_squared_bound_binds() -> None:
+    # theta=0.25, rho=0.5, psi=4.0: the psi^2 bound is the binding one.
+    #   first residual  = 4 - 0.25*4*1.5  = 2.5  (>= 0, first bound OK)
+    #   second residual = 4 - 0.25*16*1.5 = -2.0 (< 0, psi^2 bound violated)
+    # The returned residual is the MINIMUM across both bounds, so it is
+    # negative and equals the psi^2-bound residual.
+    residual = gatheral_jacquier_condition(0.25, 0.5, 4.0)
+    assert residual < 0
+    assert residual == approx(-2.0, abs=1e-12)
 
 
 def test_gj_rho_at_boundary_returns_neg_inf() -> None:

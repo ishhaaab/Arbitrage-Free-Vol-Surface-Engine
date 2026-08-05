@@ -73,10 +73,17 @@ def ssvi_d2w_dk2(k: float, theta: float, rho: float, psi: float) -> float:
 def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     """Sufficient no-arb condition for SSVI (Gatheral & Jacquier 2014).
 
-    From GJ (2014) Theorem 4.2: a slice is free of butterfly arbitrage
-    when ``theta * psi * (1 + |rho|) <= 4``.
+    From GJ (2014) Theorem 4.2, a slice is free of butterfly arbitrage
+    when BOTH bounds hold:
 
-    Returns the residual ``4.0 - theta * psi * (1.0 + abs(rho))``.
+        theta * psi * (1 + |rho|) <= 4
+        theta * psi^2 * (1 + |rho|) <= 4
+
+    (Each bound is a minimum over the (1+rho)/(1-rho) split, which
+    equals the (1+|rho|) form.)
+
+    Returns the MINIMUM residual across the two bounds,
+    ``min(4 - theta*psi*(1+|rho|), 4 - theta*psi^2*(1+|rho|))``.
     The slice is arb-free when the residual >= 0.
     If ``|rho| >= 1.0``, returns ``float('-inf')`` (always a violation).
 
@@ -88,7 +95,9 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     abs_rho = abs(rho)
     if abs_rho >= 1.0:
         return float("-inf")
-    return 4.0 - theta * psi * (1.0 + abs_rho)
+    first_residual = 4.0 - theta * psi * (1.0 + abs_rho)
+    second_residual = 4.0 - theta * psi * psi * (1.0 + abs_rho)
+    return min(first_residual, second_residual)
 
 
 def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:

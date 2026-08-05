@@ -9,14 +9,12 @@ from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 from arbfree_vol.svi.calibration import calibrate_constrained
 from arbfree_vol.svi.model import svi_total_variance, SVIParams
-from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
     SequentialFitResult,
 )
-from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
 from arbfree_vol.sabr.term_structure import fit_sabr_term_structure
 from arbfree_vol.variance import slice_total_variance
@@ -140,138 +138,6 @@ def _fit_slice(sl: ExpirySlice,
         n_quotes_used=len(points),
         data_points=tuple(points),
     )
-
-
-def _fit_slice_ssvi(sl: ExpirySlice,
-                    forward_price: float,
-                    surface: VolSurface) -> tuple[FittedSlice, FittedSSVISlice] | None:
-    """Fit eSSVI to one cleaned slice and map to raw SVI for visualization.
-
-    Returns (FittedSlice, FittedSSVISlice) or None if too few points.
-    """
-    strike_w= slice_total_variance(surface, sl)
-    if len(strike_w) < 5:
-        _logger.warning(
-            "slice T=%.4f has %d (k,w) points — need >= 5; skipping SSVI fit",
-            sl.expiry_time, len(strike_w),
-        )
-        return None
-
-    points= [
-        (log(strike / forward_price), w)
-        for strike, w in strike_w.items()
-    ]
-    points.sort()
-
-    try:
-        ssvi_params= fit_ssvi_slice(points)
-    except RuntimeError:
-        _logger.warning(
-            "SSVI calibration failed for slice T=%.4f; skipping",
-            sl.expiry_time, exc_info=True,
-        )
-        return None
-
-    # RMSE in w-space using SSVI formula
-    errors= [
-        (ssvi_w(k, ssvi_params.theta, ssvi_params.rho, ssvi_params.psi) - w) ** 2
-        for k, w in points
-    ]
-    rmse= sqrt(mean(errors))
-
-    # Map to raw SVI params so existing SVI-based pipeline (plots, detection) works
-    a, b, rho, m, sigma= to_raw_svi_params(
-        ssvi_params.theta, ssvi_params.rho, ssvi_params.psi
-    )
-    raw_svi_params= SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)
-
-    fitted_svi= FittedSlice(
-        expiry_time=sl.expiry_time,
-        params=raw_svi_params,
-        rmse=rmse,
-        forward_price=forward_price,
-        n_quotes_total=len(sl.quotes),
-        n_quotes_used=len(points),
-        data_points=tuple(points),
-    )
-    fitted_ssvi= FittedSSVISlice(
-        expiry_time=sl.expiry_time,
-        ssvi=ssvi_params,
-        rmse=rmse,
-        forward_price=forward_price,
-        n_quotes_total=len(sl.quotes),
-        n_quotes_used=len(points),
-    )
-    return fitted_svi, fitted_ssvi
-
-
-def _fit_slice_sabr(sl: ExpirySlice,
-                    forward_price: float,
-                    surface: VolSurface) -> tuple[FittedSlice, FittedSABRSlice] | None:
-    """Fit SABR to one cleaned slice and map to raw SVI for visualization.
-
-    Returns (FittedSlice, FittedSABRSlice) or None if too few points.
-    """
-    strike_w = slice_total_variance(surface, sl)
-    if len(strike_w) < 5:
-        _logger.warning(
-            "slice T=%.4f has %d (k,w) points — need >= 5; skipping SABR fit",
-            sl.expiry_time, len(strike_w),
-        )
-        return None
-
-    points = [
-        (log(strike / forward_price), w)
-        for strike, w in strike_w.items()
-    ]
-    points.sort()
-
-    try:
-        sabr_params = calibrate_sabr(points, forward=forward_price,
-                                      expiry_time=sl.expiry_time)
-    except RuntimeError:
-        _logger.warning(
-            "SABR calibration failed for slice T=%.4f; skipping",
-            sl.expiry_time, exc_info=True,
-        )
-        return None
-
-    # RMSE in w-space using SABR formula
-    alpha = sabr_params.alpha
-    beta = sabr_params.beta
-    rho = sabr_params.rho
-    nu = sabr_params.nu
-    errors = [
-        (sabr_total_variance(k, forward_price, sl.expiry_time,
-                             alpha, beta, rho, nu) - w) ** 2
-        for k, w in points
-    ]
-    rmse = sqrt(mean(errors))
-
-    # Map to raw SVI params so existing SVI-based pipeline works
-    a, b, r, m, sigma = sabr_to_raw_svi_params(
-        sabr_params, forward_price, sl.expiry_time
-    )
-    raw_svi_params = SVIParams(a=a, b=b, rho=r, m=m, sigma=sigma)
-
-    fitted_svi = FittedSlice(
-        expiry_time=sl.expiry_time,
-        params=raw_svi_params,
-        rmse=rmse,
-        forward_price=forward_price,
-        n_quotes_total=len(sl.quotes),
-        n_quotes_used=len(points),
-        data_points=tuple(points),
-    )
-    fitted_sabr = FittedSABRSlice(
-        expiry_time=sl.expiry_time,
-        sabr=sabr_params,
-        rmse=rmse,
-        forward_price=forward_price,
-        n_quotes_total=len(sl.quotes),
-        n_quotes_used=len(points),
-    )
-    return fitted_svi, fitted_sabr
 
 
 def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) -> RepairReport:

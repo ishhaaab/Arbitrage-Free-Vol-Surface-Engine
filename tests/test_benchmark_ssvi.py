@@ -4,7 +4,7 @@ Verifies the Gatheral-Jacquier (2014) no-arb condition across a range
 of parameter tuples, and confirms the defining SSVI property: w(0) = theta.
 """
 
-from math import isfinite
+from math import isfinite, sqrt
 
 import numpy as np
 from pytest import approx
@@ -13,11 +13,15 @@ from arbfree_vol.ssvi.model import gatheral_jacquier_condition, ssvi_w
 
 
 def _safe_psi(theta: float, rho: float, fraction: float = 0.5) -> float:
-    """Return psi safely inside the GJ bound: psi = fraction * psi_max.
+    """Return psi safely inside BOTH Gatheral-Jacquier bounds.
 
-    psi_max = 4 / (theta * (1 + |rho|)).
+    The two bounds are ``theta * psi * (1 + |rho|) <= 4`` and
+    ``theta * psi^2 * (1 + |rho|) <= 4``, so the largest safe psi is
+    ``min(4 / (theta * (1 + |rho|)), sqrt(4 / (theta * (1 + |rho|))))``.
     """
-    return fraction * 4.0 / (theta * (1.0 + abs(rho)))
+    psi_bound_1 = 4.0 / (theta * (1.0 + abs(rho)))
+    psi_bound_2 = sqrt(4.0 / (theta * (1.0 + abs(rho))))
+    return fraction * min(psi_bound_1, psi_bound_2)
 
 
 def test_benchmark_ssvi_gj_range() -> None:
