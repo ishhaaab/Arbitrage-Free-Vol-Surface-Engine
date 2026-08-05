@@ -140,14 +140,7 @@ def fit_sabr_term_structure(
     # ---- N = 1: delegate to per-slice calibrate_sabr ----
     if N == 1:
         T, F, points = slices_data[0]
-        try:
-            params = calibrate_sabr(points, forward=F, expiry_time=T, beta_hint=beta)
-        except RuntimeError:
-            _logger.warning(
-                "Single-slice SABR calibration failed at T=%.4f; "
-                "returning default params", T,
-            )
-            params = SABRParams(alpha=0.2, beta=beta, rho=0.0, nu=0.3)
+        params = calibrate_sabr(points, forward=F, expiry_time=T, beta_hint=beta)
         result = [params]
         if return_splines:
             # For single slice, build constant splines
@@ -171,13 +164,7 @@ def fit_sabr_term_structure(
         T_i = float(expiries[i])
         F_i = float(forwards[i])
         pts_i = all_points[i]
-        try:
-            p_i = calibrate_sabr(pts_i, forward=F_i, expiry_time=T_i, beta_hint=beta)
-        except RuntimeError:
-            _logger.warning(
-                "Per-slice SABR init failed at T=%.4f; using defaults", T_i,
-            )
-            p_i = SABRParams(alpha=0.2, beta=beta, rho=0.0, nu=0.3)
+        p_i = calibrate_sabr(pts_i, forward=F_i, expiry_time=T_i, beta_hint=beta)
         per_slice_params.append(p_i)
 
     # --- Step B: build initial coefficient vector ---

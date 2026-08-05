@@ -129,3 +129,20 @@ def test_default_returns_just_list() -> None:
     result = fit_sabr_term_structure(slices)
     assert isinstance(result, list)
     assert all(isinstance(p, SABRParams) for p in result)
+
+
+def test_single_slice_calibration_failure_raises(monkeypatch) -> None:
+    """When ``calibrate_sabr`` raises for a single-slice input,
+    ``fit_sabr_term_structure`` propagates the RuntimeError instead of
+    silently returning fabricated default params."""
+    import arbfree_vol.sabr.term_structure as ts
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("calibration failed")
+
+    monkeypatch.setattr(ts, "calibrate_sabr", _raise)
+
+    slices = [(0.5, _FORWARD, [(0.0, 0.04)])]
+
+    with pytest.raises(RuntimeError, match="calibration failed"):
+        fit_sabr_term_structure(slices)
