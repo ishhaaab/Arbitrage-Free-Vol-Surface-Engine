@@ -26,7 +26,14 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--cov=arbfree_vol --cov-fail-under=85 --cov-report=term-missing"
+# Default run excludes the slow marker so `pytest tests/` stays fast and
+# still enforces the 85% coverage floor. Run `pytest -m slow` for only the
+# slow tests (real-data reproducers, subprocess determinism) or
+# `pytest -m ""` to run everything.
+addopts = "-m 'not slow' --cov=arbfree_vol --cov-fail-under=85 --cov-report=term-missing"
+markers = [
+  "slow: long-running tests (real-data reproducers, subprocess determinism) — excluded from the default run; run with -m slow",
+]
 
 [tool.pyright]
 include = ["src", "tests"]

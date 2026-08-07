@@ -99,6 +99,9 @@ def _run_fit_subprocess() -> dict:
     return json.loads(result.stdout.strip())
 
 
+@pytest.mark.slow
+# Slow: spawns 2 subprocesses that each run the full eSSVI sequential fit
+# on the SPX fixture (~23s).
 def test_determinism_fallback_lists_match() -> None:
     """Identical input must produce identical fallback and failed lists."""
     if not _FIXTURE_PATH.exists():
@@ -110,6 +113,9 @@ def test_determinism_fallback_lists_match() -> None:
     assert run1["failed_slices"] == run2["failed_slices"]
 
 
+@pytest.mark.slow
+# Slow: spawns 2 subprocesses that each run the full eSSVI sequential fit
+# on the SPX fixture (~23s).
 def test_determinism_fitted_params_match() -> None:
     """Identical input must produce identical fitted parameters."""
     if not _FIXTURE_PATH.exists():

@@ -413,6 +413,9 @@ def test_repair_essvi_sequential_is_calendar_arb_free() -> None:
         )
 
 
+@pytest.mark.slow
+# Slow: runs the full SABR term-structure fit + constrained calibration on
+# 3 slices (real optimizer work, ~9s).
 def test_repair_sabr_term_structure_reduces_violations() -> None:
     """SABR term-structure path produces valid params on a 3-slice surface.
 
@@ -812,6 +815,9 @@ def _flat_bs_surface(expiries: list[float], n_strikes: int = 7) -> VolSurface:
     return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
+@pytest.mark.slow
+# Slow: runs the real SABR->SVI mapping (sabr_to_raw_svi_params), which
+# burns thousands of optimizer evals per slice (~65s).
 def test_sabr_mapping_adversarial_params_no_crash(monkeypatch) -> None:
     """The adversarial SABR combo (alpha=3.0, rho=0.995, nu=0.2) must not
     crash repair(): at max_nfev=50000 the mapping converges (adversarial
@@ -857,6 +863,9 @@ def test_sabr_mapping_adversarial_params_no_crash(monkeypatch) -> None:
         )
 
 
+@pytest.mark.slow
+# Slow: runs the real SABR->SVI mapping (sabr_to_raw_svi_params), which
+# burns thousands of optimizer evals per slice (~55s).
 def test_sabr_mapping_real_data_params_no_crash(monkeypatch) -> None:
     """The real-data SABR combo (alpha=0.00243, rho=-0.484, nu=2.72) must
     not crash repair(): it needs 13,685 evaluations — the documented case

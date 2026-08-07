@@ -1,5 +1,6 @@
 /docs
 .*/
+!.github/
 __pycache__/
 *.egg-info/
 /plots
