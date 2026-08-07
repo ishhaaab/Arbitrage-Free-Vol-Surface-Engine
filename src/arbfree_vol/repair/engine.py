@@ -181,6 +181,16 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     in ``fitted_sabr_slices``.  Dynamic SABR is a not-implemented research
     extension.
 
+    The SABR->SVI mapping runs under a raised evaluation budget
+    (``max_nfev=50000`` in ``to_raw_svi_params``); that budget (B) reduces
+    how often the per-slice mapping raises.  The mapping call is ALSO
+    wrapped so that when some future real slice exceeds even the raised
+    budget, ``repair()`` degrades to a logged, inspectable failure (the
+    slice's expiry is recorded in ``sabr_mapping_failed_slices``) instead
+    of crashing — that wrap (A) is the actual correctness guarantee, since
+    no ``max_nfev`` is provably sufficient over a continuous parameter
+    space.
+
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
     if use_ssvi and use_sabr:
@@ -212,6 +222,7 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     repair_infeasible= False
     fallback_slices: list[float] = []
     failed_slices: list[float] = []
+    sabr_mapping_failed: list[float] = []
     if cleaned_surface is not None:
         sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
 
@@ -355,9 +366,26 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                         rmse = sqrt(mean(errors))
 
                         # Map to raw SVI params for the SVI-based pipeline
-                        a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
-                            sabr_params, F, T_i,
-                        )
+                        try:
+                            a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
+                                sabr_params, F, T_i,
+                            )
+                        except RuntimeError as exc:
+                            # The raised max_nfev budget (B) reduces how often
+                            # this path is hit; this wrap (A) guarantees that
+                            # when some future real slice exceeds even the
+                            # raised budget, repair() degrades to a logged,
+                            # inspectable failure instead of crashing.  No
+                            # max_nfev is provably sufficient over a
+                            # continuous parameter space.
+                            _logger.warning(
+                                "SABR->SVI mapping failed for slice T=%.4f "
+                                "(alpha=%.6f beta=%.6f rho=%.6f nu=%.6f): %s; "
+                                "slice recorded as failed-mapping",
+                                sl.expiry_time, a, b, r, n, exc,
+                            )
+                            sabr_mapping_failed.append(sl.expiry_time)
+                            continue
                         raw_svi_params = SVIParams(
                             a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi,
                         )
@@ -425,4 +453,5 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         repair_infeasible=repair_infeasible,
         fallback_slices=fallback_slices,
         failed_slices=failed_slices,
+        sabr_mapping_failed_slices=sabr_mapping_failed,
     )

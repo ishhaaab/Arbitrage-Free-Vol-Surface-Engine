@@ -1,11 +1,13 @@
 """Tests for the repair engine."""
 from datetime import date
+import logging
 import pytest
 from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.engine import repair
+from arbfree_vol.sabr.model import SABRParams
 
 
 SPOT = 100.0
@@ -782,3 +784,147 @@ def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
         "repair_infeasible must be True when fitted eSSVI slices cross "
         "outside the raw-SVI detector grid"
     )
+
+
+def _flat_bs_surface(expiries: list[float], n_strikes: int = 7) -> VolSurface:
+    """Build a clean multi-slice surface priced at flat BS vol 0.2.
+
+    Mirrors the surface construction used by the existing SABR repair
+    tests (``test_sabr_failure_marks_failed_slices`` etc.) so the
+    mapping-failure tests exercise the same pipeline path.
+    """
+    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
+
+    slices: list[ExpirySlice] = []
+    for T_val in expiries:
+        quotes: list[Quote] = []
+        for K in strikes:
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.CALL,
+                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
+            )
+            quotes.append(
+                Quote(strike=K, option_type=OptionType.PUT,
+                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
+            )
+        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
+
+    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+
+def test_sabr_mapping_adversarial_params_no_crash(monkeypatch) -> None:
+    """The adversarial SABR combo (alpha=3.0, rho=0.995, nu=0.2) must not
+    crash repair(): at max_nfev=50000 the mapping converges (adversarial
+    scan: nfev ~10389) and every slice lands in fitted_sabr_slices.
+
+    The primary contract is "never crashes"; the fitted/failed accounting
+    is asserted robustly so the test survives future budget changes.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    expiries = [0.25, 0.5, 1.0]
+    adversarial = [SABRParams(alpha=3.0, beta=0.5, rho=0.995, nu=0.2)
+                   for _ in expiries]
+
+    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
+                        lambda slices_data: adversarial)
+
+    report = repair(_flat_bs_surface(expiries), use_sabr=True)
+
+    # Primary contract: no exception propagates out of repair().
+    # Every slice must be accounted for — fitted or failed-mapping.
+    assert len(report.fitted_sabr_slices) + len(report.sabr_mapping_failed_slices) == len(expiries), (
+        f"expected {len(expiries)} slices accounted for, got fitted="
+        f"{len(report.fitted_sabr_slices)}, failed={report.sabr_mapping_failed_slices}"
+    )
+    if report.fitted_sabr_slices:
+        # Strong expectation: the adversarial scan converges at
+        # nfev=10389 (< 50000), so every slice should be fitted and
+        # nothing should be recorded as failed-mapping.
+        assert len(report.fitted_sabr_slices) == len(expiries), (
+            f"expected all slices fitted, got {len(report.fitted_sabr_slices)}"
+        )
+        assert report.sabr_mapping_failed_slices == [], (
+            f"expected no failed-mapping slices, got {report.sabr_mapping_failed_slices}"
+        )
+    else:
+        # Robustness guard: if the mapping budget is ever lowered below
+        # what this combo needs, every slice must be recorded as
+        # failed-mapping rather than silently dropped.
+        assert len(report.sabr_mapping_failed_slices) == len(expiries), (
+            f"expected all expiries in sabr_mapping_failed_slices, got "
+            f"{report.sabr_mapping_failed_slices}"
+        )
+
+
+def test_sabr_mapping_real_data_params_no_crash(monkeypatch) -> None:
+    """The real-data SABR combo (alpha=0.00243, rho=-0.484, nu=2.72) must
+    not crash repair(): it needs 13,685 evaluations — the documented case
+    that used to crash at the old 10,000 budget — and now succeeds at
+    max_nfev=50000.
+
+    Same primary contract as the adversarial test: never crash, and keep
+    the fitted/failed accounting robust.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    expiries = [0.25, 0.5, 1.0]
+    real_data = [SABRParams(alpha=0.00243, beta=0.5, rho=-0.484, nu=2.72)
+                 for _ in expiries]
+
+    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
+                        lambda slices_data: real_data)
+
+    report = repair(_flat_bs_surface(expiries), use_sabr=True)
+
+    assert len(report.fitted_sabr_slices) + len(report.sabr_mapping_failed_slices) == len(expiries), (
+        f"expected {len(expiries)} slices accounted for, got fitted="
+        f"{len(report.fitted_sabr_slices)}, failed={report.sabr_mapping_failed_slices}"
+    )
+    if report.fitted_sabr_slices:
+        # Strong expectation: this is the documented 13,685-eval case
+        # that used to crash at max_nfev=10000; at 50000 it fits.
+        assert len(report.fitted_sabr_slices) == len(expiries), (
+            f"expected all slices fitted, got {len(report.fitted_sabr_slices)}"
+        )
+        assert report.sabr_mapping_failed_slices == []
+    else:
+        assert len(report.sabr_mapping_failed_slices) == len(expiries), (
+            f"expected all expiries in sabr_mapping_failed_slices, got "
+            f"{report.sabr_mapping_failed_slices}"
+        )
+
+
+def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
+    """The wrap around ``sabr_to_raw_svi_params`` (option A) is the
+    correctness guarantee: when a slice's mapping raises RuntimeError,
+    repair() must not crash — the slice is recorded in
+    ``sabr_mapping_failed_slices``, excluded from ``fitted_sabr_slices``
+    and ``fitted_slices``, and a WARNING is logged.  No max_nfev is
+    provably sufficient over a continuous parameter space, so this is the
+    path that keeps repair() usable when some future real slice exceeds
+    even the raised budget.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    expiries = [0.25, 0.5, 1.0]
+
+    def _raise_mapping(*args, **kwargs):
+        raise RuntimeError("mapping boom")
+
+    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _raise_mapping)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(_flat_bs_surface(expiries), use_sabr=True)
+
+    # No exception propagates; every slice is recorded as failed-mapping.
+    assert sorted(report.sabr_mapping_failed_slices) == expiries, (
+        f"expected all expiries in sabr_mapping_failed_slices, got "
+        f"{report.sabr_mapping_failed_slices}"
+    )
+    # The mapping failure excludes the slices from both fitted outputs.
+    assert report.fitted_sabr_slices == ()
+    assert len(report.fitted_slices) == 0
+    # The failure is logged, not swallowed silently.
+    assert "mapping boom" in caplog.text
+    assert "SABR->SVI mapping failed for slice" in caplog.text

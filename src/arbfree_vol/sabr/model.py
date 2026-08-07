@@ -187,7 +187,11 @@ def to_raw_svi_params(sabr_params: SABRParams,
     # The SABR wings steepen with the leading log-moneyness bracket of
     # Eq 2.17a, so the SVI fit needs a larger evaluation budget than the
     # scipy default (100 * n variables) to converge on the 241-point grid.
-    result = least_squares(residuals, x0, bounds=bounds, max_nfev=10000)
+    # An adversarial scan of the parameter space found nfev cliffs up to
+    # ~27,400 (worst combos have |rho| near 0.998, alpha 1.5-3.3,
+    # nu 0.1-0.2) and a real-data case needs 13,685; 50,000 provides
+    # ~82% margin over the observed worst case.
+    result = least_squares(residuals, x0, bounds=bounds, max_nfev=50000)
     if not result.success:
         raise RuntimeError(f"SABR-to-SVI mapping failed: {result.message}")
     return tuple(result.x)  # type: ignore[return-value]

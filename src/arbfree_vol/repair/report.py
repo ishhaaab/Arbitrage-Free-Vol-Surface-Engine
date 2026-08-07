@@ -76,3 +76,6 @@ class RepairReport:
     repair_infeasible: bool = False
     fallback_slices: list[float] = field(default_factory=list)
     failed_slices: list[float] = field(default_factory=list)
+    # Slices whose SABR->SVI mapping raised RuntimeError; they are NOT in
+    # fitted_sabr_slices/fitted_slices; repair_infeasible semantics unchanged.
+    sabr_mapping_failed_slices: list[float] = field(default_factory=list)
