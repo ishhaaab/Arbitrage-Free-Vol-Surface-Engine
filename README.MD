@@ -12,9 +12,9 @@ Raw option quotes are noisy: bid/ask gaps, stale prints, crossed markets, and il
 
 The pipeline has five stages:
 
-1. **Clean the quotes**. Eight rejection rules drop bad prices, crossed markets, wide spreads, illiquid contracts, and near-expiry options. Every rejected quote is kept with a reason, so you can see why it was dropped.
-2. **Detect arbitrage**. It checks the four classic static-arbitrage conditions: put-call parity, strike monotonicity, butterfly (convexity) arbitrage, and calendar arbitrage.
-3. **Repair the surface**. It rejects the worst offending quotes, estimates a forward price per expiry from the median of put-call parity pairs, then refits a smile model with a penalty term that pushes against arbitrage during calibration.
+1. **Clean the quotes**. Eight cleaning rules drop bad prices, crossed markets, wide spreads, and near-expiry options; a separate pre-ingestion liquidity filter (data/quality.py) drops low-open-interest / wide-spread strikes. Every rejected quote is kept with a reason, so you can see why it was dropped.
+2. **Detect arbitrage**. It checks the five classic static-arbitrage conditions: put-call parity, strike monotonicity, butterfly (convexity) arbitrage, calendar arbitrage, and wide-spread.
+3. **Repair the surface**. It rejects all offending quotes, estimates a forward price per expiry from the median of put-call parity pairs, then refits a smile model with a penalty term that pushes against arbitrage during calibration.
 4. **Query it**. The fitted surface answers `iv_at(strike, expiry)` and aggregates portfolio Greeks (delta, gamma, vega, theta, rho).
 5. **Build on it**. Downstream modules pull out Dupire local vol, run PCA on a time series of surfaces to find the dominant ways the surface moves, and backtest a cross-sectional mispricing signal.
 
@@ -23,7 +23,7 @@ Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacqu
 ## Quick start
 
 ```bash
-pytest tests/ -q                                              # 177 tests across 23 files
+pytest tests/ -q                                              # 296 tests across 33 files
 python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
 python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; use --symbol TICKER for others)
 python demo/backtest/backtest_demo.py                         # live mispricing backtest (use --symbol TICKER)
@@ -82,7 +82,7 @@ A few decisions are baked into the code, worth knowing up front:
 - Pydantic at the edges, dataclasses inside. Input and output types are validated Pydantic models. Everything in the hot path (Greeks, violations, fitted slices) is a frozen `@dataclass`. No Pydantic in the numerical loops.
 - Report, don't raise. Detection lists every violation in one pass instead of throwing on the first. Repair tells you what it couldn't fix instead of pretending it fixed everything.
 - Median forward curve. The per-expiry forward is the median of strike-level put-call parity estimates, not the mean, so one bad quote can't drag it around.
-- Constrained calibration. The fit objective adds a penalty for butterfly-arbitrage violations, so the model is steered away from impossible shapes instead of minimized blindly.
+- Constrained calibration. The raw-SVI fit objective adds a penalty for butterfly-arbitrage violations (eSSVI uses hard constraints; SABR uses a calendar soft penalty), so the model is steered away from impossible shapes instead of minimized blindly.
 - Pluggable smile models. `repair(use_ssvi=..., use_sabr=...)` switches models, and a `to_raw_svi_params()` adapter keeps the rest of the pipeline unchanged.
 
 ## What's done, and what isn't
@@ -97,7 +97,7 @@ See `docs/roadmap.md`. Done so far: PCA dynamics, SABR, Dupire local vol, and th
 
 ## Tech stack
 
-Python 3.12+, NumPy, SciPy, Pydantic, Pytest. No sklearn (PCA uses `numpy.linalg.svd`). No web framework yet.
+Python 3.11+, NumPy, SciPy, Pydantic, Pytest. No sklearn (PCA uses `numpy.linalg.svd`). No web framework yet.
 
 ## References
 

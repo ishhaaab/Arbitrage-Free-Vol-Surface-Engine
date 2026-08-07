@@ -59,11 +59,18 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
         q = get_q(surface, s)
         F = _slice_forward(s, r, spot)
         if F is None:
+            default_sub = abs(r - 0.05) < 1e-9 and abs(q) < 1e-9
+            suffix = (
+                " (r/q are the default substitution values — check "
+                "ingestion logs for provenance)"
+                if default_sub
+                else " (r/q are non-default values)"
+            )
             _logger.warning(
                 "Slice T=%.4f has no (call, put) parity pair; forward "
                 "falls back to theoretical spot*exp((r-q)*T) with "
-                "r=%.4f, q=%.4f",
-                s.expiry_time, r, q,
+                "r=%.4f, q=%.4f%s",
+                s.expiry_time, r, q, suffix,
             )
             F = spot * exp((r - q) * s.expiry_time)
         curve[s.expiry_time] = F

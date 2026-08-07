@@ -1,10 +1,15 @@
 """Tests for the OpenBB ingestion module."""
 
+import sys
+import types
+from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
 
+import pandas as pd
 import pytest
 
 from arbfree_vol.ingestion import openbb as openbb_mod
+from arbfree_vol.models.surface import VolSurface
 
 
 class TestOpenBBImportGuard:
@@ -184,3 +189,180 @@ class TestOpenBBIndexDividendYield:
         """^VIX → None (no representative ETF)."""
         q = openbb_mod._get_representative_dividend_yield("^VIX")
         assert q is None
+
+
+class _FakeTicker:
+    """yfinance.Ticker stand-in whose ``.info`` is canned per symbol.
+
+    ``^IRX`` yields the 13-week T-bill rate (r = 5.0 / 100 = 0.05),
+    ``SPY`` yields a real dividend yield (q = 0.011), and index symbols
+    like ``^SPX`` yield an empty info dict so the parity path runs.
+    """
+
+    _INFO = {
+        "^IRX": {"regularMarketPrice": 5.0},
+        "SPY": {"dividendYield": 0.011},
+        "^SPX": {},
+    }
+
+    def __init__(self, symbol: str):
+        self._symbol = symbol
+
+    @property
+    def info(self) -> dict:
+        return dict(self._INFO.get(self._symbol, {}))
+
+
+def _chains_df(spot: float = 100.0) -> pd.DataFrame:
+    """Build a canonical synthetic OpenBB chain DataFrame.
+
+    Two expiries (~30 and ~60 days out), each with calls + puts at three
+    strikes around ``spot``.  Quotes are non-crossed with positive bids
+    and a mid that carries time value over intrinsic, so they pass both
+    the data-quality filter and the cleaning layer.  Exact pricing does
+    not matter — only that the rows are realistic enough to survive the
+    pipeline end-to-end.
+    """
+    rows = []
+    for days in (30, 60):
+        expiration = (date.today() + timedelta(days=days)).isoformat()
+        for strike_frac in (0.9, 1.0, 1.1):
+            strike = spot * strike_frac
+            for otype, intrinsic in (
+                ("call", max(0.0, spot - strike)),
+                ("put", max(0.0, strike - spot)),
+            ):
+                mid = intrinsic + 2.5
+                rows.append({
+                    "strike": strike,
+                    "option_type": otype,
+                    "expiration": expiration,
+                    "bid": round(mid * 0.95, 2),
+                    "ask": round(mid * 1.05, 2),
+                    "last_trade_price": round(mid, 2),
+                    "open_interest": 100,
+                    "volume": 10,
+                    "underlying_price": spot,
+                })
+    return pd.DataFrame(rows)
+
+
+def _fake_openbb(monkeypatch, chains_df: pd.DataFrame) -> MagicMock:
+    """Inject a fake ``openbb`` module and a fake ``yfinance.Ticker``.
+
+    ``obb.derivatives.options.chains(...)`` returns an object whose
+    ``.to_df()`` yields ``chains_df``, so the real ``fetch_chain`` main
+    path runs end-to-end without the ``openbb`` package installed.
+    ``yfinance.Ticker`` is patched so the ^IRX / dividend-yield lookups
+    hit canned info instead of the network.  Returns the fake ``obb`` so
+    callers can configure additional endpoints (e.g. equity quotes).
+    """
+    fake_openbb = types.ModuleType("openbb")
+    fake_obb = MagicMock()
+    fake_obb.derivatives.options.chains.return_value.to_df.return_value = chains_df
+    fake_openbb.obb = fake_obb
+    monkeypatch.setitem(sys.modules, "openbb", fake_openbb)
+    monkeypatch.setattr("yfinance.Ticker", _FakeTicker)
+    return fake_obb
+
+
+class TestOpenBBFetchChainMainPath:
+    """End-to-end fetch_chain main path against a fake openbb module."""
+
+    def test_fetch_chain_main_path_builds_surface(self, monkeypatch) -> None:
+        """SPY with the quality filter ON builds a full VolSurface."""
+        _fake_openbb(monkeypatch, _chains_df())
+
+        surface, rejected, quality_drops = openbb_mod.fetch_chain("SPY")
+
+        assert isinstance(surface, VolSurface)
+        assert surface.spot == pytest.approx(100.0)
+        assert len(surface.slices) >= 1
+        assert all(len(sl.quotes) > 0 for sl in surface.slices)
+        # r comes from the fake ^IRX info (5.0 / 100), q from SPY's info
+        assert surface.risk_free == pytest.approx(0.05)
+        assert surface.div_yield == pytest.approx(0.011)
+        assert isinstance(rejected, list)
+        assert isinstance(quality_drops, list)
+
+    def test_fetch_chain_disable_quality_filter(self, monkeypatch) -> None:
+        """disable_quality_filter=True skips the filter entirely."""
+        df = _chains_df()
+        _fake_openbb(monkeypatch, df)
+
+        surface, rejected, quality_drops = openbb_mod.fetch_chain(
+            "SPY", disable_quality_filter=True
+        )
+
+        assert len(quality_drops) == 0
+        assert len(surface.slices) >= 1
+        # No filter means no drops, so at least as many quotes as filtered
+        quotes_disabled = sum(len(sl.quotes) for sl in surface.slices)
+        surface_filtered, _, _ = openbb_mod.fetch_chain("SPY")
+        quotes_filtered = sum(len(sl.quotes) for sl in surface_filtered.slices)
+        assert quotes_disabled >= quotes_filtered
+
+    def test_fetch_chain_index_symbol_uses_parity_q(self, monkeypatch) -> None:
+        """^SPX with empty info exercises the per-slice parity q path."""
+        _fake_openbb(monkeypatch, _chains_df())
+
+        surface, rejected, quality_drops = openbb_mod.fetch_chain("^SPX")
+
+        assert isinstance(surface, VolSurface)
+        assert any(sl.div_yield is not None for sl in surface.slices) \
+            or surface.div_yield != 0.0
+
+    def test_fetch_chain_missing_expiration_raises(self, monkeypatch) -> None:
+        """A chain without an 'expiration' column raises ValueError."""
+        df = _chains_df().drop(columns=["expiration"])
+        _fake_openbb(monkeypatch, df)
+
+        with pytest.raises(ValueError):
+            openbb_mod.fetch_chain("SPY")
+
+    def test_fetch_chain_empty_df_raises(self, monkeypatch) -> None:
+        """An empty chain DataFrame raises ValueError."""
+        _fake_openbb(monkeypatch, pd.DataFrame())
+
+        with pytest.raises(ValueError):
+            openbb_mod.fetch_chain("SPY")
+
+    def test_fetch_chain_spot_fallback_via_equity_quote(self, monkeypatch) -> None:
+        """Missing underlying_price falls back to obb equity price quote."""
+        df = _chains_df().drop(columns=["underlying_price"])
+        fake_obb = _fake_openbb(monkeypatch, df)
+        fake_obb.equity.price.quote.return_value.to_df.return_value = pd.DataFrame(
+            {"last_price": [100.0]}
+        )
+
+        surface, rejected, quality_drops = openbb_mod.fetch_chain("SPY")
+
+        assert isinstance(surface, VolSurface)
+        assert surface.spot == pytest.approx(100.0)
+
+    def test_fetch_chain_no_slices_raises(self, monkeypatch) -> None:
+        """A chain whose only expiry is today produces no slices."""
+        today = date.today().isoformat()
+        rows = []
+        for strike_frac in (0.9, 1.0, 1.1):
+            strike = 100.0 * strike_frac
+            for otype, intrinsic in (
+                ("call", max(0.0, 100.0 - strike)),
+                ("put", max(0.0, strike - 100.0)),
+            ):
+                mid = intrinsic + 2.5
+                rows.append({
+                    "strike": strike,
+                    "option_type": otype,
+                    "expiration": today,
+                    "bid": round(mid * 0.95, 2),
+                    "ask": round(mid * 1.05, 2),
+                    "last_trade_price": round(mid, 2),
+                    "open_interest": 100,
+                    "volume": 10,
+                    "underlying_price": 100.0,
+                })
+        _fake_openbb(monkeypatch, pd.DataFrame(rows))
+
+        with pytest.raises(ValueError, match="No valid slices"):
+            openbb_mod.fetch_chain("SPY")

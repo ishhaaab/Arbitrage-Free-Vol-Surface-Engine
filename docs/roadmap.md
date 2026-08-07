@@ -225,7 +225,7 @@ Write the core project documentation.
 
 - `arbfree_vol/backtest/`
 - `src/arbfree_vol/viz/backtest.py`
-- `examples/backtest_demo.py`
+- `demo/backtest/backtest_demo.py`
 
 ### Implementation notes
 
@@ -234,7 +234,7 @@ Write the core project documentation.
 - Metrics: Sharpe (per-trade mean / std), hit rate, max drawdown (peak-to-trough on expiry-ordered cumulative P&L), P5/P50/P95 percentiles.
 - `BacktestResult` is a frozen `@dataclass(slots=True)` with `trades` and `pnls` as tuples.
 - Visualization: `viz/backtest.py` — 4 figures: P&L distribution histogram, cumulative P&L with max-drawdown highlight, mispricing-vs-P&L scatter by side, summary metrics bar chart (2×2 grid).
-- Live SPY demo: `examples/backtest_demo.py` (yfinance → repair → run_backtest → 4 PNGs).
+- Live SPY demo: `demo/backtest/backtest_demo.py` (yfinance → repair → run_backtest → 4 PNGs).
 - All viz functions handle `n_trades == 0` gracefully (render "No trades" text).
 - 5 new smoke tests in `tests/test_viz.py` (4 normal + 1 empty-result).
 

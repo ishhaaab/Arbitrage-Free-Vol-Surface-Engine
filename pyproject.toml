@@ -17,6 +17,7 @@ dependencies = [
 [dependency-groups]
 dev = [
   "pytest",
+  "pytest-cov",
 ]
 
 [tool.setuptools.packages.find]
@@ -25,6 +26,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=arbfree_vol --cov-fail-under=85 --cov-report=term-missing"
 
 [tool.pyright]
 include = ["src", "tests"]

@@ -1,4 +1,5 @@
 """Tests for the forward curve estimator."""
+import logging
 from datetime import date
 from math import exp, log
 from pytest import approx
@@ -128,3 +129,43 @@ def test_populate_per_slice_r_uses_per_slice_q() -> None:
     # NOT log(F/S)/T + q_surface = 0.04879 + 0.05 = 0.09879
     expected_r = log(105.0 / 100.0) / 1.0 + 0.02
     assert slice_.risk_free == approx(expected_r, abs=1e-6)
+
+
+def test_fwd_curve_fallback_logs_default_substitution(caplog) -> None:
+    """Fallback with the r=0.05/q=0.0 substitution defaults must say so.
+
+    The provenance matters: when a slice has no (call, put) parity pair,
+    the theoretical forward uses whatever r/q the surface carries.  If
+    those are the ingestion-layer substitution defaults, a reader must
+    not mistake them for genuinely observed rates.
+    """
+    slice_ = ExpirySlice(
+        expiry_time=T,
+        quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=5.0),
+        ],
+    )
+    surface = VolSurface(spot=SPOT, risk_free=0.05, div_yield=0.0, slices=[slice_])
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.fwd_curve"):
+        estimate_forward_curve(surface)
+
+    assert "default substitution" in caplog.text
+
+
+def test_fwd_curve_fallback_logs_non_default_values(caplog) -> None:
+    """Fallback with a genuine (non-default) q must say r/q are non-default."""
+    slice_ = ExpirySlice(
+        expiry_time=T,
+        quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0),
+            Quote(strike=110.0, option_type=OptionType.CALL, price=5.0),
+        ],
+    )
+    surface = VolSurface(spot=SPOT, risk_free=0.05, div_yield=0.02, slices=[slice_])
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.fwd_curve"):
+        estimate_forward_curve(surface)
+
+    assert "non-default" in caplog.text

@@ -46,7 +46,7 @@ The residual ($0.67) is far larger than the bid-ask spread ($0.02), so every str
 **Root cause:**
 Surface-level `r` and `q` are approximations. Real interest rates and dividends vary by expiry and asset. Without correct rates, the parity check generates false positives across the whole surface.
 
-**Fix (planned — see docs/plan-parity-rq.md or issue conversation):**
+**Fix (planned — see the Status block below):**
 1. Try to fetch real `r` and `q` from yfinance (`^IRX` for risk-free rate, `info.dividendYield` for dividend yield).
 2. When real rates are unavailable or the carry is unknown, run `estimate_forward_curve()` as a pre-pass before detection and thread the per-expiry forward price into `_check_parity`.
 3. The threshold stays market-aware (`max(half_spread_C, half_spread_P, 0.05)`) — the fix is about the *reference price* (the forward), not the tolerance.
@@ -386,7 +386,9 @@ fallback and non-fallback expiries on live SPY data.
 | Number of OK expiries | — | 15 | — |
 
 **Conclusion: Data quality artifact.** Fallback expiries show visibly
-thinner OI or wider bid-ask spreads compared to non-fallback expiries.
+thinner open interest (median OI 297 vs 794, ratio 0.37); median
+bid-ask spread was NOT wider (4.08% vs 5.37%, ratio 0.76 — fallback
+expiries actually showed narrower median spreads).
 A data-quality filter (min OI, max spread) applied before building
 MarketSlices could eliminate some fallback expiries.
 
@@ -413,7 +415,7 @@ building `Quote` objects.  On live SPY data:
 | Drop breakdown: spread > 50% | — | 19 |
 | eSSVI fallback slices | 4 | 1 |
 
-**Result:** The filter reduced fallback slices from 4 to 1.  The three
+**Result:** The filter reduced fallback slices from 4 to 1 (snapshot from a different date than the corrected audit table below — see the Calendar date caveat.).  The three
 short-end fallbacks (T ~ 0.09, 0.25, 0.34) were eliminated — the thin
 OI data that caused non-monotonic theta was removed by the filter, and
 the hard-constrained H&M fit now converges on the cleaned data.  The
@@ -486,6 +488,8 @@ truth) rather than independently re-deriving which rows to gray out.
 
 ### Data source comparison (Issue #15 follow-up)
 
+All numbers in this section are snapshot-in-time from a single calendar date and vary day-to-day (see the Calendar date caveat and determinism check below).
+
 The audit was run across multiple data sources to determine whether
 the theta non-monotonicity is a data-source artifact or a genuine
 market feature.
@@ -499,6 +503,8 @@ market feature.
 | yfinance/^SPX (raw) | 40 | 21 | 0 | 1 | 2.5% | 0.50-1.00y: 8/8 |
 | yfinance/^SPX (filtered) | 20 | 5 | 15014 | 6 | 82.8% | 0.50-1.00y: 3/8 |
 | OpenBB/SPY | N/A | N/A | N/A | N/A | N/A | N/A |
+
+*(The ^SPX raw fallback count of 21 varies by snapshot date — see the per-slice breakdown and determinism caveats below.)*
 
 **Key question:** Does switching data source (SPY to SPX, or yfinance
 to OpenBB) reduce theta non-monotonicity independent of the quality filter?
@@ -622,8 +628,7 @@ that the H&M optimizer sees.
 
 **Method:** A determinism check was run by:
 1. Fetching SPX raw option chain data ONCE from yfinance and saving it
-   to a local fixture (`scripts/_fixtures/spx_raw.json`, 2MB, 40 slices,
-   12,863 quotes).
+   to a local fixture (`tests/fixtures/spx_sample.json`, 430,589 bytes; snapshot 2026-07-31).
 2. Running the eSSVI sequential fit on the fixture TWICE in separate
    process invocations (not two calls in the same script run — the
    interpreter was restarted between runs to rule out in-process
@@ -652,6 +657,6 @@ and normal. For reproducible comparisons, use a saved data fixture
 instead of re-fetching from yfinance.
 
 **Fixture:** A saved SPX raw fixture is available at
-`scripts/_fixtures/spx_raw.json` (snapshot from 2026-07-31). The
+`tests/fixtures/spx_sample.json` (snapshot from 2026-07-31). The
 audit script can load this fixture via the `--use-fixture` flag
 instead of re-fetching from yfinance (see `audit_theta_dip_data_quality.py`).
