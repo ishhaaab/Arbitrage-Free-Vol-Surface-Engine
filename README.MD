@@ -16,7 +16,7 @@ The pipeline has five stages:
 2. **Detect arbitrage**. It checks the five classic static-arbitrage conditions: put-call parity, strike monotonicity, butterfly (convexity) arbitrage, calendar arbitrage, and wide-spread.
 3. **Repair the surface**. It rejects all offending quotes, estimates a forward price per expiry from the median of put-call parity pairs, then refits a smile model with a penalty term that pushes against arbitrage during calibration.
 4. **Query it**. The fitted surface answers `iv_at(strike, expiry)` and aggregates portfolio Greeks (delta, gamma, vega, theta, rho).
-5. **Build on it**. Downstream modules pull out Dupire local vol, run PCA on a time series of surfaces to find the dominant ways the surface moves, and backtest a cross-sectional mispricing signal.
+5. **Build on it**. Downstream modules pull out Dupire local vol and run PCA on a time series of surfaces to find the dominant ways the surface moves.
 
 Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacquier 2014), and SABR (Hagan 2002). All three map back to a common SVI parameterization, so everything downstream works the same no matter which one you pick.
 
@@ -26,7 +26,6 @@ Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacqu
 pytest tests/ -q                                              # 296 tests across 33 files
 python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
 python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; use --symbol TICKER for others)
-python demo/backtest/backtest_demo.py                         # live mispricing backtest (use --symbol TICKER)
 python demo/ticker_compare/ticker_compare.py                  # live cross-ticker comparison, 3 plots (SPY/QQQ/IWM by default)
 ```
 
@@ -72,7 +71,6 @@ Run `python demo/yfinance/yfinance_demo.py --symbol SPY` to pull live SPY option
 - `repair/` is the orchestrator that cleans, detects, fits, and re-validates.
 - `surface/` is the fitted-surface query layer: `iv_at` and portfolio Greeks.
 - `dynamics.py` runs SVD-based PCA on a time series of surfaces (no sklearn).
-- `backtest/` is the cross-sectional mispricing backtest.
 - `viz/` holds all the matplotlib plots.
 
 ## Design conventions
@@ -87,13 +85,13 @@ A few decisions are baked into the code, worth knowing up front:
 
 ## What's done, and what isn't
 
-The core engine is built and tested: ingestion, cleaning, all four arbitrage checks, three smile models, the repair loop, the query layer, Dupire, PCA, and a single-snapshot mispricing backtest. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery.
+The core engine is built and tested: ingestion, cleaning, all four arbitrage checks, three smile models, the repair loop, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery.
 
-This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The backtest is single-snapshot with a frozen-vol hedge, not a rolling daily refit (that would need a historical snapshot collector that doesn't exist yet). SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. The eSSVI path is arbitrage-free by construction only for slices that fit within the H&M hard constraints; slices that fall back to an unconstrained per-slice fit are not, and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers; European options only.
+This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. SABR is fit but not arbitrage-free by construction, so its residuals are reported rather than eliminated. The eSSVI path is arbitrage-free by construction only for slices that fit within the H&M hard constraints; slices that fall back to an unconstrained per-slice fit are not, and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers; European options only.
 
 ## Roadmap
 
-See `docs/roadmap.md`. Done so far: PCA dynamics, SABR, Dupire local vol, and the mispricing backtest. Next: a CLI, FastAPI + DuckDB storage, a Streamlit dashboard, and a rolling daily-refit backtest.
+See `docs/roadmap.md`. Done so far: PCA dynamics, SABR, and Dupire local vol. Next: a CLI, FastAPI + DuckDB storage, and a Streamlit dashboard.
 
 ## Tech stack
 
