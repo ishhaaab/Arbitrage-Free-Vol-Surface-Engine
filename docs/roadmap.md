@@ -196,7 +196,7 @@ Extract a local volatility surface from the fitted implied volatility surface.
 
 ## Milestone 8 — Documentation
 
-**Status:** Not started
+**Status:** In progress — core docs exist under docs/ (issues, roadmap, Project, architecture review, code review findings, mutation report, AGENTS, interview-prep); the four originally-planned guides (architecture.md, no_arbitrage_conditions.md, svi.md, data_cleaning.md) do not exist as separate files.
 
 Write the core project documentation.
 
@@ -211,32 +211,7 @@ Write the core project documentation.
 
 ## Milestone 9 — Mispricing Backtest (Cross-Sectional Signal Research)
 
-**Status:** Completed (Design B — single-snapshot cohort)
-
-### Goals
-
-- Cross-sectional mispricing detection: at each daily snapshot, mark every market quote against the fitted arb-free surface and flag quotes where `|market_IV - model_IV| > threshold`.
-- Threshold-based trading strategy: long underpriced, short overpriced options (delta-hedged) and hold-to-expiry.
-- Backtest metrics: Sharpe ratio, hit rate, max drawdown, distribution of P&L per trade.
-- Realized P&L against actual SPY price path for held-to-expiry trades.
-- Data dependency note: requires historical SPY option snapshots + the underlying price path. Can be approximated with a single-snapshot rolling study when historical chains are unavailable.
-
-### Files
-
-- `arbfree_vol/backtest/`
-- `src/arbfree_vol/viz/backtest.py`
-- `demo/backtest/backtest_demo.py`
-
-### Implementation notes
-
-- Single-cohort frozen-vol delta-hedge backtest (`arbfree_vol/backtest/`). Package modules: `types.py` (`MispricingSignal`, `Trade`, `TradePnL`, `BacktestResult`), `signal.py` (`detect_mispricing`), `pnl.py` (`realize_trade_pnl` — frozen-vol daily delta hedge), `prices.py` (`fetch_underlying_path`), `engine.py` (`run_backtest` — orchestration + aggregation).
-- Signal detection: `|market_IV - model_IV| > threshold` (default 1 vol point). Side = +1 (long underpriced), -1 (short overpriced).
-- Metrics: Sharpe (per-trade mean / std), hit rate, max drawdown (peak-to-trough on expiry-ordered cumulative P&L), P5/P50/P95 percentiles.
-- `BacktestResult` is a frozen `@dataclass(slots=True)` with `trades` and `pnls` as tuples.
-- Visualization: `viz/backtest.py` — 4 figures: P&L distribution histogram, cumulative P&L with max-drawdown highlight, mispricing-vs-P&L scatter by side, summary metrics bar chart (2×2 grid).
-- Live SPY demo: `demo/backtest/backtest_demo.py` (yfinance → repair → run_backtest → 4 PNGs).
-- All viz functions handle `n_trades == 0` gracefully (render "No trades" text).
-- 5 new smoke tests in `tests/test_viz.py` (4 normal + 1 empty-result).
+**Status:** Removed. The backtest feature (src/arbfree_vol/backtest/, demo/backtest/, viz/backtest.py, tests/test_backtest.py) was removed in commit e1ed326 (2026-08-08). A cross-sectional mispricing signal remains a research idea; this milestone is no longer planned as a repo feature.
 
 ---
 
@@ -287,7 +262,7 @@ snapshots over time for surface-dynamics PCA.
 
 ## Milestone 12 — Rolling Backtest with Daily Refit
 
-**Status:** Not started
+**Status:** On hold. Depends on the mispricing backtest feature removed in e1ed326; would need re-scoping before restart.
 
 Extend the single-cohort backtest to a true rolling daily-refit design.
 
@@ -317,8 +292,8 @@ Extend the single-cohort backtest to a true rolling daily-refit design.
 | SABR | Completed |
 | FastAPI + DuckDB | Not started |
 | Local Volatility (Dupire) | Completed |
-| Documentation | Not started |
-| Mispricing Backtest | Completed (Design B) |
+| Documentation | In progress — core docs exist; the four planned guides are not yet separate files |
+| Mispricing Backtest | Removed (e1ed326) |
 | Interactive Dashboard (Streamlit) | Not started |
 | Snapshot Collector (Real-Data PCA) | Not started |
-| Rolling Backtest (Daily Refit) | Not started |
+| Rolling Backtest (Daily Refit) | On hold (feature removed) |

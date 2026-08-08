@@ -124,7 +124,7 @@ arbfree-vol-surface/
     yfinance/yfinance_demo.py
     essvi/essvi_demo.py
     ticker_compare/ticker_compare.py
-    backtest/backtest_demo.py
+    # backtest demo removed (e1ed326)
   examples/
     sample_chain.csv
 ```

@@ -156,7 +156,7 @@ hedge_pnl += (-qty * delta_prev * S_prev) * q * dt_actual
 ```
 Or explicitly document that this implementation intentionally excludes carry for simplicity and caveat the reported P&L.
 
-**Status:** Known, not yet fixed.
+**Status:** OBSOLETE — the mispricing backtest feature (including src/arbfree_vol/backtest/pnl.py) was removed in commit e1ed326 (2026-08-08); this issue is no longer applicable.
 
 ---
 
@@ -232,7 +232,7 @@ Linear interpolation in T at a fixed absolute strike K means the two endpoints a
 **Problem:**
 `run_backtest` constructs `Trade` objects with `risk_free=surface.risk_free` and `div_yield=surface.div_yield`. However `detect_mispricing` uses per-slice rates via `get_r(surface, sl)` / `get_q(surface, sl)` — which may differ from surface-level defaults after `populate_per_slice_r`. The signal detection and trade realization thus use different discount/forward rates, producing internally inconsistent P&L.
 
-**Status:** Known, not yet fixed. Mitigation: surface-level r/q are reasonable approximations for liquid equities; the `detect_with_forward` pre-pass corrects the worst cases. Fix would require threading per-slice rates through `MispricingSignal` and `Trade`.
+**Status:** OBSOLETE — the mispricing backtest feature (including src/arbfree_vol/backtest/engine.py) was removed in commit e1ed326 (2026-08-08); this issue is no longer applicable.
 
 ---
 
