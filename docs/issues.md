@@ -206,11 +206,11 @@ Linear interpolation in T at a fixed absolute strike K means the two endpoints a
 
 ---
 
-## RESOLVED — SABR→SVI mapping underweights the smile center (reverse-engineered T3 tolerance)
+## MITIGATED — SABR→SVI mapping underweights the smile center (reverse-engineered T3 tolerance)
 
 - The T3 SABR round-trip reprice tolerance of 0.03 vol was reverse-engineered from an observed ~0.021 vol max reprice error, NOT chosen from an independent standard.
 - Root cause: the SABR→SVI mapping (src/arbfree_vol/sabr/model.py to_raw_svi_params) fits a ±3.0 log-moneyness grid and therefore underweights the smile center (k ∈ [-0.25, 0.25]) used by the round-trip test.
-- Status: RESOLVED (2026-08-08).  The mapping default grid is now center-weighted (`_DEFAULT_K_GRID` in src/arbfree_vol/sabr/model.py): 200 points with 100 inside k ∈ [-1, 1] and the ±3.0 wings fully sampled (50 points per wing), so the traded-moneyness band drives the fit while wing-detectable violations remain represented.  Measured T3 max reprice error dropped from ~0.0208 vol (uniform 241-point grid) to ~0.0175 vol (center-weighted grid); the T3 test tolerance was tightened from 0.03 to 0.02 (see tests/test_recovery_roundtrip.py T3 docstring).
+- Status: MITIGATED (2026-08-08) — the center-underweighting root cause is fixed by the center-weighted default grid, but the mapping is still an approximation: measured max reprice error dropped from ~0.0208 vol to ~0.0175 vol, above the original <=0.01 target, so this is mitigated rather than fully resolved.
 - Dated: 2026-08-08.
 
 ---
