@@ -206,6 +206,25 @@ Linear interpolation in T at a fixed absolute strike K means the two endpoints a
 
 ---
 
+## OPEN FINDING — SABR→SVI mapping underweights the smile center (reverse-engineered T3 tolerance)
+
+- The T3 SABR round-trip reprice tolerance of 0.03 vol was reverse-engineered from an observed ~0.021 vol max reprice error, NOT chosen from an independent standard.
+- Root cause: the SABR→SVI mapping (src/arbfree_vol/sabr/model.py to_raw_svi_params) fits a ±3.0 log-moneyness grid and therefore underweights the smile center (k ∈ [-0.25, 0.25]) used by the round-trip test.
+- Status: OPEN (not deferred indefinitely).
+- Suggested follow-up: evaluate weighting the mapping grid toward the traded-moneyness range, or evaluating the round-trip over the mapping's natural range.
+- Dated: 2026-08-08.
+
+---
+
+## LIVE-DATA NOTE — multi-start SVI fix changes raw-SVI repair() slice count on SPY
+
+- Dated: 2026-08-08 (verified on live yfinance data during Layer-2 verification).
+- The multi-start fix in `src/arbfree_vol/svi/calibration.py` (default seed + capped unconstrained warm start + extreme-param guard) changed raw-SVI repair() output on live SPY data: the previously-dropped longest expiry (T=1.11y, 193 quotes) is now fitted instead of silently dropped.  On the same run ^SPX output was byte-identical, and every previously-fitted SPY slice is unchanged to 12 decimals.
+- The "Data source comparison" numbers documented under Issue #15 below came from the eSSVI path (`fit_ssvi_surface_sequential` via `scripts/audit_theta_dip_data_quality.py`) and are NOT affected by the SVI-path fix.
+- Any future raw-SVI-path run on live SPY will therefore report a slightly different slice count: in the observed run the count moved from fitted 14/20 to 15/20 slices.
+
+---
+
 ## 13. Backtest trades use surface-level r/q, ignoring per-slice overrides
 
 **File:** `src/arbfree_vol/backtest/engine.py:89-90`
