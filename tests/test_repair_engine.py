@@ -1027,3 +1027,120 @@ def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
     # The failure is logged, not swallowed silently.
     assert "mapping boom" in caplog.text
     assert "SABR->SVI mapping failed for slice" in caplog.text
+
+
+# ── No-forward-estimate slice bookkeeping (all three repair paths) ──────
+# A slice whose forward price is missing from the estimated forward curve
+# (``fwd_curve.get(expiry) is None``) cannot be fitted at all.  The three
+# repair paths used to silently ``continue`` past such slices; they now log
+# a warning and record the expiry in ``failed_slices`` — same "report,
+# don't raise" philosophy as the calibration-failure bookkeeping.
+def _forward_curve_missing(expiry_to_drop: float):
+    """Build a fake ``estimate_forward_curve`` that omits one expiry.
+
+    Returns a function matching repair()'s call signature
+    ``estimate_forward_curve(cleaned_surface)``.  Every expiry except
+    ``expiry_to_drop`` maps to the theoretical forward
+    ``spot * exp((r - q) * T)``; the dropped expiry is absent from the
+    dict, which makes ``fwd_curve.get(T)`` return None in the repair
+    loops.
+
+    The fake is installed at the engine's own import site
+    (``arbfree_vol.repair.engine.estimate_forward_curve``), so ONLY
+    repair()'s step-4 call is affected — ``detect_with_forward`` keeps
+    its own module-level import of the real estimator, so violation
+    detection stays deterministic.
+    """
+    from math import exp
+
+    def _estimate(surface):
+        curve = {}
+        for sl in surface.slices:
+            if sl.expiry_time == expiry_to_drop:
+                continue
+            curve[sl.expiry_time] = surface.spot * exp((R - Q) * sl.expiry_time)
+        return curve
+
+    return _estimate
+
+
+def test_repair_svi_records_slice_with_no_forward(caplog, monkeypatch) -> None:
+    """When the forward curve has no estimate for a slice, the raw-SVI
+    path must record the slice in failed_slices (with a warning), fit the
+    remaining slices, and not crash."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    monkeypatch.setattr(
+        engine_mod, "estimate_forward_curve", _forward_curve_missing(1.0),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(_svi_priced_surface(_SVI_TRUTH_ENGINE))
+
+    assert report.failed_slices == [1.0], (
+        f"expected the no-forward expiry in failed_slices, got "
+        f"{report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 1, (
+        f"expected the 0.25 slice to be fitted, got "
+        f"{report.metrics.n_slices_fitted}"
+    )
+    assert [s.expiry_time for s in report.fitted_slices] == [0.25]
+    assert "SVI path: no forward estimate for slice T=1.0000" in caplog.text
+
+
+def test_repair_essvi_records_slice_with_no_forward(caplog, monkeypatch) -> None:
+    """The eSSVI path must record a no-forward slice in failed_slices
+    even though ``failed_slices`` is REASSIGNED from the sequential fit
+    result after the loop — the no-forward expiries are collected first
+    and re-appended after the reassignment (the collect-then-extend
+    logic)."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    truth = [
+        (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
+        (0.50, dict(theta=0.12, rho=-0.2, psi=0.5)),
+    ]
+
+    monkeypatch.setattr(
+        engine_mod, "estimate_forward_curve", _forward_curve_missing(0.5),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(_ssvi_priced_surface(truth), use_ssvi=True)
+
+    assert report.failed_slices == [0.5], (
+        f"expected the no-forward expiry in failed_slices, got "
+        f"{report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 1, (
+        f"expected the 0.25 slice to be fitted, got "
+        f"{report.metrics.n_slices_fitted}"
+    )
+    assert [s.expiry_time for s in report.fitted_ssvi_slices] == [0.25]
+    assert "eSSVI path: no forward estimate for slice T=0.5000" in caplog.text
+
+
+def test_repair_sabr_records_slice_with_no_forward(caplog, monkeypatch) -> None:
+    """The SABR path must record a no-forward slice in failed_slices
+    (this path never reassigns ``failed_slices``, so the append is
+    direct), fit the remaining slices, and not crash."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    monkeypatch.setattr(
+        engine_mod, "estimate_forward_curve", _forward_curve_missing(0.5),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(_flat_bs_surface([0.25, 0.5]), use_sabr=True)
+
+    assert report.failed_slices == [0.5], (
+        f"expected the no-forward expiry in failed_slices, got "
+        f"{report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 1, (
+        f"expected the 0.25 slice to be fitted, got "
+        f"{report.metrics.n_slices_fitted}"
+    )
+    assert [s.expiry_time for s in report.fitted_sabr_slices] == [0.25]
+    assert "SABR path: no forward estimate for slice T=0.5000" in caplog.text

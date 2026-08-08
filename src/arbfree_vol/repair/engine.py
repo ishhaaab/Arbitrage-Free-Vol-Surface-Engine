@@ -189,6 +189,13 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     no ``max_nfev`` is provably sufficient over a continuous parameter
     space.
 
+    ``RepairReport.failed_slices`` records expiries that could not be
+    fitted at all — eSSVI slices where both the hard fit and the
+    unconstrained fallback fail, raw-SVI slices whose constrained
+    calibration raises, and (in every path) slices for which the forward
+    curve has no estimate.  The no-forward case is logged with a warning
+    and recorded, never silently skipped.
+
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
     if use_ssvi and use_sabr:
@@ -228,9 +235,16 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
             # ── eSSVI sequential path (Hendriks & Martini 2019) ────
             slices_data: list[tuple[float, list[tuple[float, float]]]] = []
             slice_meta: list[tuple[ExpirySlice, float]] = []  # (sl, F)
+            no_forward_slices: list[float] = []  # expiries with no forward estimate
             for sl in sorted_slices:
                 F = fwd_curve.get(sl.expiry_time)
                 if F is None:
+                    _logger.warning(
+                        "eSSVI path: no forward estimate for slice T=%.4f; "
+                        "slice recorded as failed",
+                        sl.expiry_time,
+                    )
+                    no_forward_slices.append(sl.expiry_time)
                     continue
                 strike_w = slice_total_variance(cleaned_surface, sl)
                 if len(strike_w) < 5:
@@ -311,6 +325,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 else:
                     repair_infeasible = False
 
+            # Slices with no forward estimate were never submitted to the
+            # sequential fit, so they are absent from seq_result.failed_slices.
+            # Append them AFTER the reassignment above so the record survives
+            # (and also covers the case where slices_data is empty).
+            failed_slices.extend(no_forward_slices)
+
         elif use_sabr:
             # ── SABR B-spline term-structure path ───────────────────
             # Build slices_data for joint fit across expiries
@@ -320,6 +340,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
             for sl in sorted_slices:
                 F = fwd_curve.get(sl.expiry_time)
                 if F is None:
+                    _logger.warning(
+                        "SABR path: no forward estimate for slice T=%.4f; "
+                        "slice recorded as failed",
+                        sl.expiry_time,
+                    )
+                    failed_slices.append(sl.expiry_time)
                     continue
                 strike_w = slice_total_variance(cleaned_surface, sl)
                 if len(strike_w) < 5:
@@ -410,6 +436,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
             for sl in sorted_slices:
                 F= fwd_curve.get(sl.expiry_time)
                 if F is None:
+                    _logger.warning(
+                        "SVI path: no forward estimate for slice T=%.4f; "
+                        "slice recorded as failed",
+                        sl.expiry_time,
+                    )
+                    failed_slices.append(sl.expiry_time)
                     continue
                 try:
                     fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
