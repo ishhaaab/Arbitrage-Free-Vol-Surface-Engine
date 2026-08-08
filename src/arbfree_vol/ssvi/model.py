@@ -12,6 +12,13 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
+# Tolerance for the STRICT Gatheral-Jacquier condition 1 boundary
+# (theta*psi*(1+|rho|) < 4).  A residual at or below this is an exact
+# (within float precision) equality with the paper's boundary, which the
+# paper's strict inequality says is NOT safe.  Used only when
+# ``gatheral_jacquier_condition(..., strict=True)``.
+_GJ_STRICT_EPS: float = 1e-12
+
 
 class SSVIParams(BaseModel):
     """SSVI parameters for one expiry slice.
@@ -70,14 +77,15 @@ def ssvi_d2w_dk2(k: float, theta: float, rho: float, psi: float) -> float:
     return (theta / 2.0) * (psi * psi * (1.0 - rho * rho) / (inner ** 1.5))
 
 
-def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
+def gatheral_jacquier_condition(theta: float, rho: float, psi: float,
+                                strict: bool = False) -> float:
     """Sufficient no-arb condition for SSVI (Gatheral & Jacquier 2014).
 
     From GJ (2014) Theorem 4.2, a slice is free of butterfly arbitrage
     when BOTH bounds hold:
 
-        theta * psi * (1 + |rho|) <= 4
-        theta * psi^2 * (1 + |rho|) <= 4
+        theta * psi * (1 + |rho|) < 4   (STRICT)
+        theta * psi^2 * (1 + |rho|) <= 4   (non-strict)
 
     (Each bound is a minimum over the (1+rho)/(1-rho) split, which
     equals the (1+|rho|) form.)
@@ -86,6 +94,22 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
     ``min(4 - theta*psi*(1+|rho|), 4 - theta*psi^2*(1+|rho|))``.
     The slice is arb-free when the residual >= 0.
     If ``|rho| >= 1.0``, returns ``float('-inf')`` (always a violation).
+
+    Parameters
+    ----------
+    strict : bool, default False
+        The paper's Theorem 4.2 states condition 1 STRICTLY
+        (``theta*psi*(1+|rho|) < 4``) and condition 2 non-strictly
+        (``theta*psi^2*(1+|rho|) <= 4``).  When ``strict=True``, an
+        exact equality on condition 1 (residual within
+        ``_GJ_STRICT_EPS`` of 0) is treated as a violation: the
+        returned residual is nudged negative so the boundary is never
+        reported "safe".  When ``strict=False`` (default), the
+        historical behaviour is kept exactly — condition 1 is folded
+        into the same ``residual >= 0`` safety check as condition 2,
+        so an exact equality is reported "safe".  Condition 2 is
+        non-strict in the paper and is treated identically in both
+        modes.
 
     Reference
     ---------
@@ -97,6 +121,13 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float) -> float:
         return float("-inf")
     first_residual = 4.0 - theta * psi * (1.0 + abs_rho)
     second_residual = 4.0 - theta * psi * psi * (1.0 + abs_rho)
+    if strict and first_residual <= _GJ_STRICT_EPS:
+        # The paper's condition 1 is STRICT: at or past the equality
+        # boundary the slice is not butterfly-safe even when condition 2
+        # holds.  Nudge the residual below zero so the boundary is never
+        # "safe" (the nudge also makes the violation tiny-but-real rather
+        # than relying on downstream comparisons of exact floats).
+        return min(first_residual - _GJ_STRICT_EPS, second_residual)
     return min(first_residual, second_residual)
 
 

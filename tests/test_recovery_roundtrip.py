@@ -211,12 +211,15 @@ def test_roundtrip_sabr_repair_reprice_clean_data() -> None:
     fitted_sabr_slices.  The PRIMARY assertion goes through
     build_fitted_surface + iv_at, which prices from the raw-SVI params
     mapped FROM the SABR fit — that mapping is approximate: measured max
-    reprice error ~0.021 vol for this smile even though the SABR fit
-    itself is exact (alpha/rho/nu recovered to ~1e-6).  Tolerance 0.03
-    (3 vol points) documents this mapping limitation; a tighter 1e-2
-    would fail on the current mapping.  The mapped raw SVI may also carry
-    grid-detectable violations (SABR is not arb-free by construction), so
-    remaining_violations is not asserted here.
+    reprice error ~0.0175 vol for this smile (2026-08-08, after the
+    mapping grid became center-weighted; the previous uniform ±3.0 grid
+    measured ~0.0208) even though the SABR fit itself is exact
+    (alpha/rho/nu recovered to ~1e-6).  Tolerance 0.02 (2 vol points)
+    documents this mapping limitation with a little headroom over the
+    measured error; a tighter 1e-2 would fail on the current mapping.
+    The mapped raw SVI may also carry grid-detectable violations (SABR
+    is not arb-free by construction), so remaining_violations is not
+    asserted here.
     """
     ks = [round(-0.25 + 0.5 * i / 10, 6) for i in range(11)]  # k in [-0.25, 0.25]
     T = 1.0
@@ -247,9 +250,9 @@ def test_roundtrip_sabr_repair_reprice_clean_data() -> None:
     fs = build_fitted_surface(report)
     for K, iv_in in strike_ivs:
         iv_out = iv_at(fs, K, T)
-        assert abs(iv_out - iv_in) <= 0.03, (
+        assert abs(iv_out - iv_in) <= 0.02, (
             f"K={K}: round-trip IV {iv_out:.6f} != input {iv_in:.6f} "
-            f"(SABR->SVI mapping is approximate)"
+            f"(SABR->SVI mapping is approximate; measured max ~0.0175)"
         )
 
 

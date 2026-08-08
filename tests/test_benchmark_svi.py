@@ -128,13 +128,17 @@ def test_gj2014_theorem42_boundary_distinction() -> None:
     min(4 - theta*psi*(1+|rho|), 4 - theta*psi^2*(1+|rho|)) and treats
     residual >= 0 as 'butterfly-safe'.
 
-    NOTE (semantic mismatch): the repo folds the paper's strict condition 1
-    and non-strict condition 2 into a single residual >= 0 check, so the
-    strict/non-strict distinction is LOST: a case where condition 1 holds
-    with equality but condition 2 holds strictly (e.g. theta=8, rho=0,
-    psi=0.5 -> residual exactly 0) is reported 'safe' by the repo although
-    the paper's strict condition 1 says it is NOT safe.  This test asserts
-    the repo's ACTUAL semantics; a future fix could add a strict flag.
+    NOTE (semantic mismatch): the default mode (strict=False) folds the
+    paper's strict condition 1 and non-strict condition 2 into a single
+    residual >= 0 check, so the strict/non-strict distinction is LOST: a
+    case where condition 1 holds with equality but condition 2 holds
+    strictly (e.g. theta=8, rho=0, psi=0.5 -> residual exactly 0) is
+    reported 'safe' although the paper's strict condition 1 says it is
+    NOT safe.
+
+    STRICT MODE (strict=True): condition 1 is enforced STRICTLY per the
+    paper — the equality-only case returns a NEGATIVE residual (not
+    safe) while the healthy case still returns positive.
     """
     # Boundary case: theta*psi*(1+|rho|) == 4 exactly AND the psi^2 bound
     # also fails (16 > 4), so the min-residual is clearly negative -> not
@@ -159,3 +163,23 @@ def test_gj2014_theorem42_boundary_distinction() -> None:
     # condition 1 says NOT safe.  We assert the repo's actual behaviour.
     equality_only = gatheral_jacquier_condition(8.0, 0.0, 0.5)
     assert equality_only == approx(0.0, abs=1e-12)
+
+    # STRICT MODE: the same equality-only case is now a violation — the
+    # residual must be negative (nudged below the strict-1 epsilon).
+    equality_only_strict = gatheral_jacquier_condition(8.0, 0.0, 0.5, strict=True)
+    assert equality_only_strict < 0, (
+        f"strict mode must flag condition-1 equality as not safe, got "
+        f"{equality_only_strict}"
+    )
+
+    # STRICT MODE healthy case: condition 1 holds strictly (3.972 > 0),
+    # so the residual stays positive and identical to the default mode.
+    safe_strict = gatheral_jacquier_condition(0.04, -0.4, 0.5, strict=True)
+    assert safe_strict >= 0  # butterfly-safe
+    assert safe_strict == approx(safe, abs=1e-12)
+
+    # STRICT MODE boundary case: both bounds fail anyway, so the residual
+    # is still the clearly-negative second bound.
+    boundary_strict = gatheral_jacquier_condition(1.0, 0.0, 4.0, strict=True)
+    assert boundary_strict == approx(-12.0, abs=1e-12)
+    assert boundary_strict < 0

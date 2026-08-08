@@ -20,6 +20,20 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 
+# Center-weighted log-moneyness grid for the SABR->SVI mapping.  The
+# traded-moneyness band (k in [-1, 1]) drives the reprice fit, so it
+# gets 100 of the 200 points; the +/- 3.0 wings stay fully sampled
+# (50 points each) so wing-detectable violations remain represented.
+# A uniform 241-point grid underweights the smile center and produced
+# ~0.0208 vol max reprice error on the T3 SABR round-trip; this grid
+# measured ~0.0175 vol (see docs/issues.md SABR-mapping finding).
+_DEFAULT_K_GRID = np.concatenate([
+    np.linspace(-3.0, -1.0, 50),
+    np.linspace(-1.0, 1.0, 100),
+    np.linspace(1.0, 3.0, 50),
+])
+
+
 class SABRParams(BaseModel):
     """SABR model parameters for one expiry slice.
 
@@ -140,7 +154,8 @@ def to_raw_svi_params(sabr_params: SABRParams,
     """Map SABR smile to best-fitting raw SVI (a, b, rho, m, sigma).
 
     Samples ``w_sabr(k) = sabr_total_variance(k, forward, expiry_time, ...)``
-    on a dense k-grid (default ``np.linspace(-3, 3, 241)``), then runs
+    on a center-weighted k-grid (default ``_DEFAULT_K_GRID``: 200 points
+    with 100 inside k in [-1, 1] and 50 per +/- 3.0 wing), then runs
     ``scipy.optimize.least_squares`` to fit raw SVI parameters.
 
     .. note::
@@ -157,7 +172,7 @@ def to_raw_svi_params(sabr_params: SABRParams,
     from arbfree_vol.svi.model import svi_total_variance
 
     if k_grid is None:
-        k_grid = np.linspace(-3.0, 3.0, 241)
+        k_grid = _DEFAULT_K_GRID
 
     alpha = sabr_params.alpha
     beta = sabr_params.beta
@@ -186,7 +201,7 @@ def to_raw_svi_params(sabr_params: SABRParams,
 
     # The SABR wings steepen with the leading log-moneyness bracket of
     # Eq 2.17a, so the SVI fit needs a larger evaluation budget than the
-    # scipy default (100 * n variables) to converge on the 241-point grid.
+    # scipy default (100 * n variables) to converge on the default grid.
     # An adversarial scan of the parameter space found nfev cliffs up to
     # ~27,400 (worst combos have |rho| near 0.998, alpha 1.5-3.3,
     # nu 0.1-0.2) and a real-data case needs 13,685; 50,000 provides

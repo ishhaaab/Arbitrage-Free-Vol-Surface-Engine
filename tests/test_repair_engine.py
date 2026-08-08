@@ -667,6 +667,96 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
     assert len(report.fitted_ssvi_slices) == 0
 
 
+# ── Raw-SVI slice bookkeeping (mirrors the eSSVI path above) ────────────
+# The default (raw SVI) repair path must treat a slice whose constrained
+# calibration fails entirely the same way the eSSVI path treats a total
+# fit failure: recorded in failed_slices, excluded from the fitted output,
+# and logged — never silently dropped.
+_SVI_TRUTH_ENGINE = [
+    (0.25, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
+    (1.00, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
+]
+
+
+def _svi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
+    """Price a surface from raw SVI ground truth so the (k, w) data the
+    engine sees matches the fitted model's conventions exactly."""
+    from math import sqrt, exp
+    from arbfree_vol.svi.model import svi_total_variance
+
+    ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
+    if n_strikes is not None:
+        ks = ks[:n_strikes]
+    slices: list[ExpirySlice] = []
+    for T, t in truth:
+        F = SPOT * exp((R - Q) * T)
+        quotes: list[Quote] = []
+        for k in ks:
+            K = F * exp(k)
+            w = svi_total_variance(k, t["a"], t["b"], t["rho"], t["m"], t["sigma"])
+            sigma = sqrt(max(w / T, 1e-12))
+            quotes.append(Quote(
+                strike=K, option_type=OptionType.CALL,
+                price=_bs_price(OptionType.CALL, K, sigma=sigma, tt=T),
+            ))
+            quotes.append(Quote(
+                strike=K, option_type=OptionType.PUT,
+                price=_bs_price(OptionType.PUT, K, sigma=sigma, tt=T),
+            ))
+        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
+    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+
+
+def test_repair_svi_reports_slice_with_no_fit(monkeypatch) -> None:
+    """When the raw-SVI constrained calibration fails for a slice,
+    repair() records it in failed_slices and skips it from the fitted
+    output with a warning — no crash, no silent hole.
+
+    Mirrors ``test_repair_essvi_reports_slice_with_no_fit`` for the
+    default (raw SVI) path.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("simulated calibration failure")
+
+    monkeypatch.setattr(engine_mod, "calibrate_constrained", _raise)
+
+    report = repair(_svi_priced_surface(_SVI_TRUTH_ENGINE))
+
+    assert report.failed_slices == [0.25, 1.0], (
+        f"expected both expiries in failed_slices, got {report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 0
+    assert len(report.fitted_slices) == 0
+
+
+def test_repair_svi_skips_slice_with_few_points() -> None:
+    """A slice with fewer than 5 (k,w) points is skipped from the raw-SVI
+    fit with a warning — not fitted, not failed, not a fallback.  This is
+    a SKIP (like the eSSVI path), not a failure, so the expiry must NOT
+    appear in failed_slices."""
+    surface = _svi_priced_surface(_SVI_TRUTH_ENGINE)
+    # Shrink the T=1.0 slice to 4 quotes (2 strikes -> 2 (k,w) points)
+    small = surface.slices[-1]
+    surface.slices[-1] = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
+
+    report = repair(surface)
+
+    assert report.metrics.n_slices_input == 2
+    assert report.metrics.n_slices_fitted == 1, (
+        f"expected the tiny slice to be skipped, got "
+        f"{report.metrics.n_slices_fitted} fitted"
+    )
+    fitted_Ts = [s.expiry_time for s in report.fitted_slices]
+    assert 1.0 not in fitted_Ts
+    assert 1.0 not in report.failed_slices
+    assert 1.0 not in report.fallback_slices
+
+
 def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
     """When the SABR term-structure fit raises RuntimeError, repair()
     must not crash: it marks every SABR-eligible expiry as failed,

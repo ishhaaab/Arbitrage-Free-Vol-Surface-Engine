@@ -96,7 +96,12 @@ def _fit_slice(sl: ExpirySlice,
 
     """Fit SVI to one cleaned slice using the estimated forward price.
 
-    Returns None if fewer than 5 (k, w) points are available.
+    Returns None if fewer than 5 (k, w) points are available (a SKIP,
+    mirroring the eSSVI path — tiny slices are neither fitted nor
+    recorded as failed).  A calibration failure (``RuntimeError`` from
+    ``calibrate_constrained``) PROPAGATES to the caller, which records
+    the slice in ``failed_slices`` — a slice must not vanish with zero
+    record.
     """
     # total variance uses the surface r/q for IV solving (independent of forward)
     strike_w= slice_total_variance(surface, sl)
@@ -114,14 +119,7 @@ def _fit_slice(sl: ExpirySlice,
     ]
     points.sort()
 
-    try:
-        params= calibrate_constrained(points, prev_slice=prev_slice)
-    except RuntimeError:
-        _logger.warning(
-            "SVI constrained calibration failed for slice T=%.4f; skipping",
-            sl.expiry_time, exc_info=True,
-        )
-        return None
+    params= calibrate_constrained(points, prev_slice=prev_slice)
 
     # RMSE in w-space
     errors= [
@@ -413,7 +411,19 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                 F= fwd_curve.get(sl.expiry_time)
                 if F is None:
                     continue
-                fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
+                try:
+                    fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
+                except RuntimeError as exc:
+                    # Honest bookkeeping: a slice whose calibration fails
+                    # entirely is recorded in failed_slices (mirroring the
+                    # eSSVI path), not silently dropped from the report.
+                    _logger.warning(
+                        "SVI constrained calibration failed for slice T=%.4f: "
+                        "%s; slice recorded as failed",
+                        sl.expiry_time, exc,
+                    )
+                    failed_slices.append(sl.expiry_time)
+                    continue
                 if fs is not None:
                     fitted.append(fs)
                     prev_svi = fs.params
