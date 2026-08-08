@@ -19,7 +19,8 @@ from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice, fit_essvi_slice
 
 
-# Reference: a healthy SSVI/eSSVI parameter set
+# FIXTURE parameter set — NOT from any paper (Gatheral & Jacquier 2014 uses symbolic theta/phi
+# only; no concrete tuple theta=0.04,rho=-0.4,psi=0.5 appears there). Used for consistency tests.
 TRUE = dict(theta=0.04, rho=-0.4, psi=0.5)
 
 

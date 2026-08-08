@@ -87,3 +87,28 @@ def test_benchmark_ssvi_rho_zero_symmetry() -> None:
     w_pos = ssvi_w(0.5, theta, rho_asym, psi)
     w_neg = ssvi_w(-0.5, theta, rho_asym, psi)
     assert abs(w_pos - w_neg) > 1e-6
+
+
+def test_ssvi_w0_theta_identity_nonatm_k() -> None:
+    """SSVI definition (Gatheral & Jacquier 2014, Definition 4.1):
+    w(0, theta) = theta exactly.  For k != 0, w(k, theta) must be finite
+    and positive for representative (theta, rho, psi).
+
+    Uses a distinct parameter grid from ``test_benchmark_ssvi_atm`` to
+    broaden coverage, plus an explicit non-ATM finiteness/positivity
+    check that the ATM-only test does not exercise.
+    """
+    params_list = [
+        (0.02, -0.5, 0.7),
+        (0.06, 0.2, 1.5),
+        (0.30, -0.1, 0.9),
+        (0.80, 0.4, 0.6),
+    ]
+    ks = np.linspace(-1.0, 1.0, 21)
+    for theta, rho, psi in params_list:
+        w0 = ssvi_w(0.0, theta, rho, psi)
+        assert w0 == approx(theta, abs=1e-12)
+        for k in ks:
+            w = ssvi_w(float(k), theta, rho, psi)
+            assert isfinite(w), f"non-finite w at k={k} for (theta,rho,psi)={(theta, rho, psi)}"
+            assert w > 0, f"non-positive w at k={k} for (theta,rho,psi)={(theta, rho, psi)}"

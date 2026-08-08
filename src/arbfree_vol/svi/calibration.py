@@ -7,13 +7,35 @@ from scipy.optimize import least_squares
 import numpy as np
 
 
+# Evaluation budget for the unconstrained warm-start fit used by the
+# constrained multi-start.  Empirically measured (2026-08-08, scipy
+# 1.17.1): clean synthetic SVI data needs only 9 nfev (T1 fixture,
+# 15 strikes) / 116 nfev (Gatheral 2004 fit tuple, 19 strikes; stable
+# across 10 repeated runs), while the largest real SPX slice (545
+# strikes) needs ~10631 nfev to converge.  The cap must sit above the
+# clean-data requirement so the warm start still converges on
+# clean/synthetic data (that is the whole point of the multi-start), yet
+# small enough that on real data it fails FAST instead of burning
+# scipy's default ~500-eval full failure (~1.1s per slice).  150 sits
+# 1.3x above the most demanding clean case while cutting the
+# real-fixture warm-start waste from ~8.5s (default budget) to ~2.6s
+# across the 7-slice SPX fixture, bringing repair() wall time to ~1.4x
+# of the pre-multi-start code (measured 7.37s vs 5.28s median).
+_WARM_START_MAX_NFEV = 150
+
+
 def _min_total_variance(a: float, b: float, rho: float, sigma: float) -> float:
     """Minimum total variance of the SVI curve: a + b * sigma * sqrt(1 - rho^2)."""
     return a + b * sigma * sqrt(1.0 - rho * rho)
 
 
-def calibrate(points: list[tuple[float,float]]) -> SVIParams:
-    """Fit raw SVI parameters (a, b, rho, m, sigma) to (k, w) points."""
+def calibrate(points: list[tuple[float,float]],
+              max_nfev: int | None = None) -> SVIParams:
+    """Fit raw SVI parameters (a, b, rho, m, sigma) to (k, w) points.
+
+    ``max_nfev`` is threaded through to the internal ``least_squares``
+    call; ``None`` keeps scipy's default budget.
+    """
     if len(points) < 5:
         raise ValueError("need at least 5 points to fit SVI")
 
@@ -25,7 +47,7 @@ def calibrate(points: list[tuple[float,float]]) -> SVIParams:
 
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
-    result = least_squares(residuals, x0, bounds=bounds)
+    result = least_squares(residuals, x0, bounds=bounds, max_nfev=max_nfev)
     if not result.success:
         raise RuntimeError(f"SVI calibration failed: {result.message}")
     a, b, rho, m, sigma = result.x
@@ -104,11 +126,66 @@ def calibrate_constrained(
 
         return data_res + arb_res + min_var_res + cal_res
 
-    x0 = [min(w[1] for w in points), 0.1, -0.5, 0.0, 0.1]
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
-    result = least_squares(residuals, x0, bounds=bounds, max_nfev=5000)
-    if not result.success:
-        raise RuntimeError(f"SVI constrained calibration failed: {result.message}")
-    a, b, rho, m, sigma = result.x
+    # Multi-start: the fixed default seed (a=min(w), b=0.1, rho=-0.5,
+    # m=0.0, sigma=0.1) can stall in a non-smooth local minimum of the
+    # penalty landscape — observed on clean SVI data whose true m is far
+    # from 0 (e.g. the Gatheral 2004 fit tuple m=-0.569) and on the
+    # calendar-penalty path where w(k) == w_prev(k) puts the true solution
+    # on the penalty kink.  We ALSO warm-start from the unconstrained fit —
+    # whenever the constraints are (nearly) satisfied the constrained
+    # optimum sits near it — and keep the lower-cost result.  The
+    # unconstrained seed is skipped only if it itself fails.
+    starts = [[min(w[1] for w in points), 0.1, -0.5, 0.0, 0.1]]
+    try:
+        # Warm-start from the unconstrained fit under a capped evaluation
+        # budget: clean/synthetic data converges well inside
+        # _WARM_START_MAX_NFEV (see the constant comment), while real
+        # 100+ point slices would exhaust even scipy's default budget and
+        # burn ~1.1s per slice before failing — the cap makes that failure
+        # fast and cheap.
+        unconstrained = calibrate(points, max_nfev=_WARM_START_MAX_NFEV)
+        starts.append([unconstrained.a, unconstrained.b, unconstrained.rho,
+                       unconstrained.m, unconstrained.sigma])
+    except (ValueError, RuntimeError):
+        pass
+
+    # Only successful, finite-cost runs are eligible: a failed run can
+    # otherwise win on a spuriously low residual cost and mask a valid
+    # successful start.
+    best = None
+    best_cost = float("inf")
+    last_failure = None
+    for x0 in starts:
+        try:
+            result = least_squares(residuals, x0, bounds=bounds, max_nfev=5000)
+        except ValueError as exc:
+            # A start whose constrained residual vector is non-finite at
+            # the initial point cannot even be evaluated (scipy raises
+            # ValueError).  Seen on live market data where the
+            # unconstrained warm start converged to extreme parameters
+            # (e.g. b ~ 30, rho ~ 0.997).  Such a start is useless —
+            # treat it as a failed start rather than crashing the whole
+            # repair pipeline.  Not a RuntimeError, so _fit_slice's
+            # except RuntimeError would not otherwise catch it.
+            last_failure = exc
+            continue
+        if not result.success:
+            last_failure = result
+            continue
+        cost = float(np.sum(np.square(result.fun)))
+        if np.isfinite(cost) and cost < best_cost:
+            best_cost = cost
+            best = result
+
+    if best is None:
+        # All starts failed — report the message from the first failed
+        # start (if any) or a generic failure.
+        message = (
+            getattr(last_failure, "message", None) or str(last_failure)
+            if last_failure is not None else "no start"
+        )
+        raise RuntimeError(f"SVI constrained calibration failed: {message}")
+    a, b, rho, m, sigma = best.x
     return SVIParams(a=a, b=b, rho=rho, m=m, sigma=sigma)

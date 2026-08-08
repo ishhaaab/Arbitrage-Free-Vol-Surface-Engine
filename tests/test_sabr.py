@@ -17,6 +17,9 @@ from arbfree_vol.svi.model import svi_total_variance
 # approximate)
 _SABR_RECOVERY_TOL = 0.02
 
+# NOTE: these parameters are a repo FIXTURE. Hagan et al. (2002) 'Managing Smile Risk' contains
+# no numeric worked example with these values; the paper's concrete numerics are the swaption
+# vol-of-vol/correlation tables. The fixture is used for consistency tests only.
 # A reproducible SABR parameter set
 _ALPHA = 0.2
 _BETA = 0.5
@@ -120,11 +123,24 @@ def test_sabr_log_moneyness_bracket_known_values() -> None:
     """Regression against Hagan et al. (2002) Eq 2.17a including the
     leading log-moneyness bracket.
 
-    Reference values were computed with an independent implementation of
-    the full Eq 2.17a for F=100, T=1, alpha=0.25, beta=0.5, rho=-0.4,
-    nu=0.8 (the parameter set used in the architecture review).  Without
-    the bracket, the wing IV is understated by ~0.065% at |k|=0.25 and
-    ~0.58% at k=0.75.
+    The Eq 2.17a structure is verified verbatim against Hagan et al.
+    (2002): the leading bracket
+    ``1 + (1-beta)^2/24 log^2(F/K) + (1-beta)^4/1920 log^4(F/K)`` is
+    confirmed present at Eq 2.17a of the paper.
+
+    The numeric reference values below were computed from that formula
+    for F=100, T=1, alpha=0.25, beta=0.5, rho=-0.4, nu=0.8.  They are
+    self-consistency references (computed via the repo's own formula),
+    pending an independent oracle cross-check in Phase 2
+    (py_vollib/pysabr).  Keep them as regression pins.
+
+    Note: per Obloj (2008, arXiv:0708.0998, footnote 4), the simplified
+    formula 2.17a = (A.69c) is NOT affected by Obloj's correction (which
+    targets the general formula A.65 for beta<1), so these pins are
+    in-scope.
+
+    Without the bracket, the wing IV is understated by ~0.065% at
+    |k|=0.25 and ~0.58% at k=0.75.
     """
     F, T = 100.0, 1.0
     alpha, beta, rho, nu = 0.25, 0.5, -0.4, 0.8
