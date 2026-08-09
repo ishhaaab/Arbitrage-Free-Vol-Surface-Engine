@@ -554,3 +554,238 @@ def test_verify_ssvi_calendar_free_near_equal_chi() -> None:
     result = fit_ssvi_surface_sequential([(0.25, pts), (0.50, pts)])
     params = [p for _, p in result.fitted_slices]
     assert verify_ssvi_calendar_free(params)
+
+
+# ── Mutation-testing regressions: seed block & fallback routing ──────
+# The seed block in _fit_slice (the local `from scipy.optimize import
+# least_squares as _ls` call, the theta0/rho0/p0 floors, the prev_chi
+# reset and the rho clip) is exercised through an interior optimum by
+# the end-to-end tests, so arithmetic mutations there survive.  These
+# tests script the seed and the optimizer and pin the exact x0 the
+# optimizer receives, plus the fallback-routing decisions downstream.
+def test_fit_slice_seed_adjustment_pins_floor_clip_and_prev_chi(monkeypatch) -> None:
+    """The seed block in ``_fit_slice`` — the ``_ls`` least-squares seed,
+    its theta0/rho0/p0 floors, the ``prev_chi`` reset and the rho clip —
+    must feed the optimizer exactly the documented ``x0``.
+
+    This pins today's seed arithmetic at the seed level, so a seed tweak
+    that would flip the infeasible-dip fallback (the m66 correctness
+    concern) is caught here rather than only through the end-to-end fit.
+    m45 (rho clip bound) and m54 (``prev_chi = prev.theta * prev.psi``)
+    move the seed across a genuinely MARGINAL fallback decision — the
+    constrained optimizer can converge or fall back either way.  m66's
+    floor is different: ``max(p0, 1.000001)`` can suppress a fallback on
+    a TRULY infeasible slice by starting the optimizer from a high-psi
+    corner where the ``chi0 < prev_chi + eps_chi`` reset never fires, so
+    it is the correctness-relevant one.
+
+    Variant 1: seed p0 = 0.55 -> chi0 stays above prev_chi + eps_chi,
+    so the floor and the clip fully determine x0 (p0 = 0.55, rho0 =
+    -0.99, theta0 = 0.1).
+    Variant 2: seed p0 = 0.01 -> chi0 < prev_chi + eps_chi triggers the
+    prev_chi reset ``p0 = (prev_chi + eps_chi) / theta0``.
+    """
+    from scipy.optimize import OptimizeResult
+    import arbfree_vol.ssvi.term_structure as ts
+
+    points = _fit_points()
+    prev = SSVIParams(theta=0.08, rho=-0.3, psi=0.5)
+    recorded: list[np.ndarray] = []
+
+    def _seed_ls(seed_x):
+        def _fake_ls(fun, x0=None, bounds=None, **kwargs):
+            return OptimizeResult(
+                x=np.array(seed_x, dtype=np.float64),
+                success=True,
+                status=1,
+                message="scripted seed",
+            )
+        return _fake_ls
+
+    def _recording_minimize(fun, x0, method=None, bounds=None, constraints=None, options=None):
+        recorded.append(np.array(x0, dtype=np.float64))
+        return _opt_result(1, "Optimization terminated successfully", success=True)
+
+    monkeypatch.setattr(ts, "minimize", _recording_minimize)
+
+    # Variant 1: no prev_chi reset — the floor and the clip decide p0.
+    monkeypatch.setattr("scipy.optimize.least_squares", _seed_ls([0.1, -0.995, 0.55]))
+    ts._fit_slice(points, prev=prev)
+
+    expected_theta0 = max(prev.theta + 1e-9, 0.1)          # 0.1
+    expected_rho0 = float(np.clip(-0.995, -0.99, 0.99))    # -0.99 (kills m45)
+    expected_p0 = max(0.55, 1e-6)                          # 0.55, no reset (kills m54, m66)
+    expected_x0 = np.array([
+        expected_theta0,
+        float(np.arctanh(expected_rho0)),
+        float(np.log(expected_p0)),
+    ])
+    assert len(recorded) == 1
+    assert recorded[0] == pytest.approx(expected_x0, abs=1e-12)
+
+    # Variant 2: seed p0 is small, so the prev_chi reset fires.
+    recorded.clear()
+    monkeypatch.setattr("scipy.optimize.least_squares", _seed_ls([0.1, -0.995, 0.01]))
+    ts._fit_slice(points, prev=prev)
+
+    expected_p0 = (prev.theta * prev.psi + 1e-6) / expected_theta0  # 0.40001
+    expected_x0 = np.array([
+        expected_theta0,
+        float(np.arctanh(expected_rho0)),
+        float(np.log(expected_p0)),
+    ])
+    assert len(recorded) == 1
+    assert recorded[0] == pytest.approx(expected_x0, abs=1e-12)
+
+
+def test_infeasible_slice_falls_back_regardless_of_high_seed(monkeypatch) -> None:
+    """Even with an m66-style high seed (p0 = 1.000001), a genuinely
+    infeasible slice must route into ``fallback_slices`` when the
+    optimizer reports non-convergence, instead of being silently
+    hard-certified.
+
+    This pins the routing MECHANISM: the fallback decision must be
+    driven by the optimizer's success flag, not by where the seed
+    happens to land.  Both slices use a high seed and non-converged
+    trust-constr + SLSQP results; the unconstrained per-slice fallback
+    then recovers the true theta of each slice.
+    """
+    from scipy.optimize import OptimizeResult
+    import arbfree_vol.ssvi.term_structure as ts
+
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(4, "The maximum number of function evaluations is exceeded."),
+        _opt_result(1, "Function evaluation required (f & c)"),
+        _opt_result(4, "The maximum number of function evaluations is exceeded."),
+        _opt_result(1, "Function evaluation required (f & c)"),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    def _high_seed_ls(fun, x0=None, bounds=None, **kwargs):
+        return OptimizeResult(
+            x=np.array([0.08, -0.3, 1.000001], dtype=np.float64),
+            success=True,
+            status=1,
+            message="scripted high seed",
+        )
+
+    monkeypatch.setattr("scipy.optimize.least_squares", _high_seed_ls)
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    slices_data = [
+        (0.25, [(float(k), ssvi_w(float(k), 0.08, -0.3, 0.5)) for k in ks]),
+        (0.50, [(float(k), ssvi_w(float(k), 0.03, -0.2, 0.35)) for k in ks]),
+    ]
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    # The theta-dipping slice must fall back, not be hard-certified.
+    assert 0.50 in result.fallback_slices, (
+        f"expected T=0.50 in fallback_slices, got {result.fallback_slices}"
+    )
+    assert result.failed_slices == []
+    fitted_by_T = dict(result.fitted_slices)
+    assert 0.50 in fitted_by_T, (
+        f"expected T=0.50 in fitted_slices, got {result.fitted_slices}"
+    )
+    # The fallback params come from the unconstrained per-slice fit.
+    assert fitted_by_T[0.50].theta == pytest.approx(0.03, rel=0.02)
+
+
+def test_fallback_slice_fitted_slices_prev_keeps_predecessor(monkeypatch) -> None:
+    """A fallback slice must keep its last hard-constrained predecessor
+    in ``fitted_slices_prev`` (kills mutmut_39, which changes the
+    fallback-branch ``append(prev_T_for_this_slice)`` to
+    ``append(None)``).  The middle slice falls back; it must still
+    record T=0.25 as its calibration predecessor rather than None.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
+    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
+    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
+    ks = np.linspace(-1.0, 1.0, 9).tolist()
+
+    def _pts(truth):
+        return [
+            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
+            for k in ks
+        ]
+
+    slices_data = [
+        (0.25, _pts(truth1)),
+        (0.50, _pts(truth2)),
+        (1.00, _pts(truth3)),
+    ]
+
+    # Monkeypatch _fit_slice to fail on the 2nd call (the middle slice).
+    call_count = {"n": 0}
+    _real_fit_slice = ts._fit_slice
+
+    def _failing_fit_slice(points, prev=None, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("simulated infeasible H&M constraints")
+        return _real_fit_slice(points, prev=prev, **kwargs)
+
+    monkeypatch.setattr(ts, "_fit_slice", _failing_fit_slice)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    assert 0.50 in result.fallback_slices
+    assert len(result.fitted_slices_prev) == len(result.fitted_slices)
+    assert result.fitted_slices_prev[1] == 0.25, (
+        "fallback slice T=0.50 must keep its last hard-constrained "
+        "predecessor (T=0.25) in fitted_slices_prev, not None: "
+        f"got {result.fitted_slices_prev}"
+    )
+    assert result.fitted_slices_prev[1] is not None
+
+
+@pytest.mark.xfail(
+    reason="m66 gap (docs/code_review_findings.md, 2026-08-09): a hard-fit sitting "
+    "within eps of the H&M boundary is silently certified without a margin check"
+)
+def test_hard_fit_within_eps_of_boundary_not_silently_certified(monkeypatch) -> None:
+    """Desired invariant: a hard-fit that lands within eps of the H&M
+    monotonicity/ratio boundary must NOT be silently certified as
+    arb-free without a margin check — it must either fall back or be
+    flagged (repair_infeasible).
+
+    The m66 scenario forces a high seed (p0 = 1.000001) so the real
+    optimizer can converge to a feasible-but-wrong corner (theta pinned
+    at prev, RMSE ~0.05).  Currently that corner is silently certified;
+    this test is xfail-marked until a post-fit margin check lands, then
+    it flips to XPASS and self-confirms the fix.
+    """
+    from scipy.optimize import OptimizeResult
+    import arbfree_vol.ssvi.term_structure as ts
+
+    def _high_seed_ls(fun, x0=None, bounds=None, **kwargs):
+        return OptimizeResult(
+            x=np.array([0.08, -0.3, 1.000001], dtype=np.float64),
+            success=True, status=1, message="scripted high seed",
+        )
+
+    monkeypatch.setattr("scipy.optimize.least_squares", _high_seed_ls)
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    slices_data = [
+        (0.25, [(float(k), ssvi_w(float(k), 0.08, -0.3, 0.5)) for k in ks]),
+        (1.00, [(float(k), ssvi_w(float(k), 0.12, 0.1, 0.4)) for k in ks]),
+        (2.00, [(float(k), ssvi_w(float(k), 0.07, 0.2, 0.55)) for k in ks]),
+    ]
+
+    result = fit_ssvi_surface_sequential(slices_data)
+    fitted_by_T = dict(result.fitted_slices)
+
+    if 2.00 in fitted_by_T:
+        theta_delta = fitted_by_T[2.00].theta - fitted_by_T[1.00].theta
+        assert theta_delta > 1e-4, (
+            "hard-fit sits within eps of the H&M monotonicity boundary "
+            f"(theta delta {theta_delta:.3e}); must not be silently "
+            "certified without a margin check"
+        )
+    assert 2.00 in result.fallback_slices, (
+        "the theta-dipping slice must be honestly recorded in fallback_slices"
+    )
