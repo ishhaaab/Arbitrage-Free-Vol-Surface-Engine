@@ -25,7 +25,8 @@ The surface is free of calendar-spread arbitrage iff (Prop 3.1):
       | (rho_{i+1}*chi_{i+1} - rho_i*chi_i) / (chi_{i+1} - chi_i) | <= 1
 
 Butterfly arbitrage per slice (Gatheral & Jacquier 2014, Theorem 4.2):
-  theta * psi * (1 + |rho|) <= 4   AND   theta * psi^2 * (1 + |rho|) <= 4
+  theta * psi * (1 + |rho|) < 4   (STRICT; enforced with a small margin)
+  theta * psi^2 * (1 + |rho|) <= 4   (non-strict)
 Both are written as smooth pairs of inequalities using (1+rho) and (1-rho).
 
 References
@@ -52,6 +53,17 @@ from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 _logger = logging.getLogger(__name__)
+
+# Margin applied to the two STRICT Gatheral-Jacquier condition-1
+# residuals.  GJ (2014) Theorem 4.2 makes condition 1 STRICT
+# (``theta*psi*(1+|rho|) < 4``) while condition 2 is non-strict
+# (``theta*psi^2*(1+|rho|) <= 4``).  scipy optimizer constraints are
+# closed sets — a bare ``> 0`` cannot be expressed, so an exact equality
+# with the condition-1 boundary would be accepted as feasible.  We
+# approximate the paper's strictness by requiring a small positive
+# margin (>= this eps) on the two condition-1 residuals in
+# ``_butterfly_constraints``.
+_GJ_CONDITION1_STRICT_EPS: float = 1e-9
 
 
 @dataclass
@@ -101,11 +113,21 @@ def _butterfly_constraints(
         4 - \\theta\\,p^2\\,(1+\\rho) \\ge 0, \\quad
         4 - \\theta\\,p^2\\,(1-\\rho) \\ge 0.
 
+    The first two residuals (linear in ``p``) are the smooth split of
+    Gatheral-Jacquier condition 1, ``theta*p*(1+|rho|) < 4``, which is
+    STRICT in Theorem 4.2; the last two (quadratic in ``p``) are the
+    split of condition 2, ``theta*p^2*(1+|rho|) <= 4``, which is
+    non-strict.  Because scipy constraints are closed sets (a bare
+    ``> 0`` cannot be expressed), the two condition-1 residuals are
+    shifted by ``_GJ_CONDITION1_STRICT_EPS`` so that an exact equality
+    with the condition-1 boundary is rejected as infeasible.  The two
+    condition-2 residuals are left unshifted — the boundary is allowed.
+
     Reference: Gatheral & Jacquier (2014), Theorem 4.2.
     """
     return np.array([
-        4.0 - theta * p * (1.0 + rho),
-        4.0 - theta * p * (1.0 - rho),
+        4.0 - theta * p * (1.0 + rho) - _GJ_CONDITION1_STRICT_EPS,
+        4.0 - theta * p * (1.0 - rho) - _GJ_CONDITION1_STRICT_EPS,
         4.0 - theta * p * p * (1.0 + rho),
         4.0 - theta * p * p * (1.0 - rho),
     ])

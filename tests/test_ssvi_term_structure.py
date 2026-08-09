@@ -1,13 +1,19 @@
-"""Tests for verify_hm_condition_breakdown and fitted_slices_prev.
+"""Tests for verify_hm_condition_breakdown, fitted_slices_prev, and the
+production Gatheral-Jacquier butterfly constraint (strict condition 1).
 
 These tests exercise the per-slice H&M Prop 3.1 sub-condition breakdown
-function and the new fitted_slices_prev tracking in SequentialFitResult.
+function, the new fitted_slices_prev tracking in SequentialFitResult,
+and the strict/non-strict split of the two GJ Theorem 4.2 butterfly
+conditions in ``_butterfly_constraints``.
 """
 
+import numpy as np
 import pytest
 
-from arbfree_vol.ssvi.model import SSVIParams
+from arbfree_vol.ssvi.model import SSVIParams, gatheral_jacquier_condition
 from arbfree_vol.ssvi.term_structure import (
+    _butterfly_constraints,
+    _GJ_CONDITION1_STRICT_EPS,
     verify_hm_condition_breakdown,
     SequentialFitResult,
 )
@@ -217,3 +223,97 @@ def test_fitted_slices_prev_populated() -> None:
         fitted_slices_prev=[None, 0.25],
     )
     assert result.fitted_slices_prev == [None, 0.25]
+
+
+# ── Gatheral-Jacquier strict condition-1 production constraint ────────
+
+def test_butterfly_constraints_condition1_strict_boundary() -> None:
+    """A slice at EXACT condition-1 equality must be rejected by the
+    production constraint: GJ Theorem 4.2 condition 1
+    (theta*psi*(1+|rho|) < 4) is STRICT.  The condition-1 residual is
+    shifted by the strict eps so it comes out negative at the boundary,
+    while the condition-2 residual stays at exactly 4 - lhs (non-strict).
+
+    rho=0.5, p=1.0, theta=4/(1+rho)/p makes theta*p*(1+rho) == 4.0
+    exactly, so the (1+rho) branch of condition 1 binds."""
+    rho, p = 0.5, 1.0
+    theta = 4.0 / ((1.0 + rho) * p)
+    res = _butterfly_constraints(theta, rho, p)
+
+    # Condition 1, (1+rho) branch: unshifted value is exactly 0, so the
+    # strict eps shift makes the residual exactly -eps (< 0, rejected).
+    unshifted_c1 = 4.0 - theta * p * (1.0 + rho)
+    assert unshifted_c1 == 0.0
+    assert res[0] == pytest.approx(
+        unshifted_c1 - _GJ_CONDITION1_STRICT_EPS, abs=1e-15
+    )
+    assert res[0] == pytest.approx(-_GJ_CONDITION1_STRICT_EPS, abs=1e-15)
+    assert res[0] < 0.0
+
+    # Condition 2, (1+rho) branch: theta*p^2*(1+rho) == 4.0 exactly too,
+    # but condition 2 is non-strict so the residual is exactly 0 (>= 0,
+    # accepted) — no eps shift.
+    unshifted_c2 = 4.0 - theta * p * p * (1.0 + rho)
+    assert unshifted_c2 == 0.0
+    assert res[2] == pytest.approx(unshifted_c2, abs=1e-15)
+    assert res[2] >= 0.0
+
+    # The residual delta vs the unshifted values is exactly the eps on
+    # both condition-1 residuals and exactly 0 on both condition-2 ones.
+    assert res[1] == pytest.approx(
+        4.0 - theta * p * (1.0 - rho) - _GJ_CONDITION1_STRICT_EPS, abs=1e-15
+    )
+    assert res[3] == pytest.approx(4.0 - theta * p * p * (1.0 - rho), abs=1e-15)
+    assert res[1] > 0.0
+    assert res[3] > 0.0
+
+
+def test_butterfly_constraints_condition2_nonstrict_boundary() -> None:
+    """A slice at EXACT condition-2 equality must be accepted (non-strict
+    in GJ Theorem 4.2), while condition 1 still holds with a positive
+    margin — this is the "condition 2 may touch the boundary, condition 1
+    may not" distinction.
+
+    rho=0.5, p=2.0, theta=4/((1+rho)*p^2) makes theta*p^2*(1+rho) == 4.0
+    exactly; condition 1 is then theta*p*(1+rho) == 2.0 < 4.0."""
+    rho, p = 0.5, 2.0
+    theta = 4.0 / ((1.0 + rho) * p * p)
+    res = _butterfly_constraints(theta, rho, p)
+
+    # Condition 2, (1+rho) branch: exactly 0 (>= 0, accepted, unshifted).
+    assert res[2] == pytest.approx(0.0, abs=1e-15)
+
+    # Condition 1 still strictly inside: theta*p*(1+rho) == 2.0 < 4.0, so
+    # even after the strict eps shift the residual stays positive.
+    assert res[0] == pytest.approx(2.0 - _GJ_CONDITION1_STRICT_EPS, abs=1e-12)
+    assert res[0] > 0.0
+
+    # The whole slice is feasible: every residual is >= 0.
+    assert np.min(res) >= 0.0
+
+
+def test_butterfly_constraints_strict_mode_matches_gj_diagnostic() -> None:
+    """The production residual signs agree with the approved strict-mode
+    diagnostic ``gatheral_jacquier_condition(strict=True)``: healthy and
+    condition-2-boundary slices are safe in both, and condition-1-boundary
+    slices are NOT safe in both (production residual negative)."""
+    cases = [
+        (0.04, -0.4, 0.5, "healthy"),
+        (8.0, 0.0, 0.5, "condition-1 equality, rho=0"),
+        (8.0 / 3.0, 0.5, 1.0, "condition-1 equality, (1+rho) branch"),
+        (1.0, 0.0, 2.0, "condition-2 equality, rho=0"),
+        (2.0 / 3.0, 0.5, 2.0, "condition-2 equality, (1+rho) branch"),
+    ]
+    for theta, rho, psi, label in cases:
+        prod = _butterfly_constraints(theta, rho, psi)
+        prod_safe = bool(np.min(prod) >= 0.0)
+        diag = gatheral_jacquier_condition(theta, rho, psi, strict=True)
+        assert prod_safe == (diag >= 0.0), (
+            f"{label}: production safe={prod_safe} but diagnostic "
+            f"strict={diag} (safe={diag >= 0.0})"
+        )
+        if label.startswith("condition-1"):
+            # The strict diagnostic must flag the boundary as not safe and
+            # the production condition-1 residual must be negative.
+            assert diag < 0.0
+            assert np.min(prod) < 0.0
