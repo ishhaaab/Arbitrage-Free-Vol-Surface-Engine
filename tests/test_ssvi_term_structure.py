@@ -10,10 +10,12 @@ conditions in ``_butterfly_constraints``.
 import numpy as np
 import pytest
 
-from arbfree_vol.ssvi.model import SSVIParams, gatheral_jacquier_condition
+from arbfree_vol.ssvi.model import SSVIParams, gatheral_jacquier_condition, ssvi_w
 from arbfree_vol.ssvi.term_structure import (
     _butterfly_constraints,
     _GJ_CONDITION1_STRICT_EPS,
+    _hard_fit_is_degenerate_corner,
+    _slice_rmse,
     verify_hm_condition_breakdown,
     SequentialFitResult,
 )
@@ -317,3 +319,106 @@ def test_butterfly_constraints_strict_mode_matches_gj_diagnostic() -> None:
             # the production condition-1 residual must be negative.
             assert diag < 0.0
             assert np.min(prod) < 0.0
+
+
+# ── Post-fit margin check for degenerate H&M boundary corners (m66) ──────
+# docs/code_review_findings.md §6.7: a hard fit pinned exactly on the H&M
+# Prop 3.1 boundary (theta_delta ~ eps_theta, chi_delta ~ eps_chi,
+# ratio ~ 0.9998) with an anomalously bad RMSE must be routed to the
+# fallback path.  These unit tests pin the helper's two-signal logic
+# (boundary proximity AND bad RMSE must AGREE).
+
+
+def _m66_corner_params(prev: SSVIParams) -> SSVIParams:
+    """Build params pinned at ``prev`` on the H&M boundary, reproducing
+    the m66 corner: theta_delta ~ 1e-9, chi_delta ~ 1e-6, ratio ~ 0.9998."""
+    chi_prev = prev.theta * prev.psi
+    theta = prev.theta + 1e-9
+    chi = chi_prev + 1e-6
+    psi = chi / theta
+    rho = (prev.rho * chi_prev + 0.9998 * 1e-6) / chi
+    return SSVIParams(theta=theta, rho=rho, psi=psi)
+
+
+def test_hard_fit_is_degenerate_corner_m66_scenario() -> None:
+    """The m66 corner must be flagged: a hard fit pinned at the H&M eps
+    floors whose per-slice RMSE (~0.05) is orders of magnitude worse than
+    the unconstrained fit's (~1e-13), over points whose true w(k) is the
+    DIP truth (theta=0.07)."""
+    prev = SSVIParams(theta=0.119252, rho=0.08325, psi=0.47565)
+    params = _m66_corner_params(prev)
+
+    # Sanity: the constructed params really are the m66 corner.
+    theta_delta = params.theta - prev.theta
+    chi_delta = params.theta * params.psi - prev.theta * prev.psi
+    ratio = abs(
+        params.rho * params.theta * params.psi
+        - prev.rho * prev.theta * prev.psi
+    ) / max(chi_delta, 1e-6)
+    assert theta_delta == pytest.approx(1e-9, rel=1e-6)
+    assert chi_delta == pytest.approx(1e-6, rel=1e-6)
+    assert ratio == pytest.approx(0.9998, abs=1e-4)
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [(float(k), ssvi_w(float(k), 0.07, 0.2, 0.55)) for k in ks]
+
+    assert _hard_fit_is_degenerate_corner(prev, params, points) is True
+
+
+def test_hard_fit_is_degenerate_corner_healthy_not_flagged() -> None:
+    """A healthy pair (theta well inside the boundary) with points
+    generated from the fit must NOT be flagged."""
+    prev = SSVIParams(theta=0.04, rho=-0.4, psi=0.5)
+    params = SSVIParams(theta=0.08, rho=-0.4, psi=0.5)
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [
+        (float(k), ssvi_w(float(k), params.theta, params.rho, params.psi))
+        for k in ks
+    ]
+
+    assert _hard_fit_is_degenerate_corner(prev, params, points) is False
+
+
+def test_hard_fit_near_boundary_but_good_rmse_not_flagged() -> None:
+    """A fit pinned on the H&M boundary whose RMSE is genuinely small
+    (points generated FROM the fit) must NOT be flagged: the RMSE
+    secondary signal prevents false positives on legitimate
+    boundary-adjacent fits."""
+    prev = SSVIParams(theta=0.04, rho=-0.3, psi=0.5)
+    params = _m66_corner_params(prev)
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [
+        (float(k), ssvi_w(float(k), params.theta, params.rho, params.psi))
+        for k in ks
+    ]
+
+    # Sanity: this fit really is near the H&M boundary.
+    theta_delta = params.theta - prev.theta
+    chi_delta = params.theta * params.psi - prev.theta * prev.psi
+    assert theta_delta <= 1e-8
+    assert chi_delta <= 1e-5
+    assert _slice_rmse(params, points) == pytest.approx(0.0, abs=1e-12)
+
+    assert _hard_fit_is_degenerate_corner(prev, params, points) is False
+
+
+def test_hard_fit_is_degenerate_corner_first_slice_not_flagged() -> None:
+    """prev=None must not be flagged: a first slice has no H&M
+    predecessor boundary to sit on."""
+    params = SSVIParams(theta=0.08, rho=-0.3, psi=0.5)
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [(float(k), ssvi_w(float(k), 0.07, 0.2, 0.55)) for k in ks]
+
+    assert _hard_fit_is_degenerate_corner(None, params, points) is False
+
+
+def test_slice_rmse_zero_on_exact_fit() -> None:
+    """_slice_rmse returns ~0 when params reproduce the points exactly."""
+    params = SSVIParams(theta=0.08, rho=-0.4, psi=0.5)
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [
+        (float(k), ssvi_w(float(k), params.theta, params.rho, params.psi))
+        for k in ks
+    ]
+
+    assert _slice_rmse(params, points) == pytest.approx(0.0, abs=1e-12)

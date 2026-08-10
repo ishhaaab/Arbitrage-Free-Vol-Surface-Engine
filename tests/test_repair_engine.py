@@ -639,6 +639,51 @@ def test_repair_essvi_real_fallback_on_incompatible_data() -> None:
     )
 
 
+def test_repair_essvi_routes_degenerate_corner_to_fallback() -> None:
+    """The m66 post-fit margin check must route degenerate H&M boundary
+    corners to the fallback path (docs/code_review_findings.md §6.7).
+
+    Same dip fixture as the xfail tripwire above.  With the fix, BOTH
+    theta-dipping slices converge to degenerate corners pinned at the
+    H&M eps floors (theta_delta=eps_theta, chi_delta=eps_chi,
+    ratio~1.0) with anomalously bad per-slice RMSE:
+
+    - T=0.5 flattened onto T=0.25 (hard RMSE ~0.0519 vs the
+      unconstrained fit's ~1.3e-11), and
+    - T=2.0 flattened onto T=1.0 (hard RMSE ~0.0499 vs ~1.1e-13).
+
+    The margin check routes BOTH to fallback_slices; the unconstrained
+    per-slice fallback then recovers the true theta dips (0.03 at
+    T=0.5, 0.07 at T=2.0), and the report honestly flags the remaining
+    calendar violations (repair_infeasible=True,
+    n_violations_after >= 1).  Pre-fix, both corners were silently
+    certified arb-free (fallback_slices=[], repair_infeasible=False).
+    """
+    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
+
+    assert 2.0 in report.fallback_slices, (
+        f"expected T=2.0 in fallback_slices, got {report.fallback_slices}"
+    )
+    assert 0.5 in report.fallback_slices, (
+        f"expected T=0.5 in fallback_slices (also a degenerate corner), "
+        f"got {report.fallback_slices}"
+    )
+    assert report.failed_slices == [], (
+        f"expected no failed slices, got {report.failed_slices}"
+    )
+    # Every slice still gets a fit (hard or fallback).
+    assert report.metrics.n_slices_fitted == 4, (
+        f"expected 4 fitted slices, got {report.metrics.n_slices_fitted}"
+    )
+    assert len(report.fitted_ssvi_slices) == 4
+    assert report.repair_infeasible is True, (
+        "repair_infeasible must be True when corners route to fallback"
+    )
+    assert report.metrics.n_violations_after >= 1, (
+        "the remaining calendar violation must be surfaced, not hidden"
+    )
+
+
 def test_repair_essvi_skips_slice_with_few_points() -> None:
     """A slice with fewer than 5 (k,w) points is skipped from the eSSVI
     fit with a warning — not fitted, not failed, no crash."""

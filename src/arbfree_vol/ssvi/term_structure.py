@@ -44,6 +44,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from math import sqrt
+from statistics import mean
 
 import numpy as np
 from numpy.typing import NDArray
@@ -64,6 +66,29 @@ _logger = logging.getLogger(__name__)
 # margin (>= this eps) on the two condition-1 residuals in
 # ``_butterfly_constraints``.
 _GJ_CONDITION1_STRICT_EPS: float = 1e-9
+
+# Floors applied to the two Hendriks-Martini calendar constraints in
+# ``_fit_slice`` (non-decreasing theta, non-decreasing chi).  Hoisted to
+# named module constants so the post-fit H&M margin check below can
+# reference the same eps values it must sit 10x away from.
+_EPS_THETA: float = 1e-9
+_EPS_CHI: float = 1e-6
+
+# ── Post-fit margin check for degenerate H&M boundary corners (m66) ──
+# docs/code_review_findings.md §6.7: a hard eSSVI fit can converge to a
+# feasible-but-wrong corner pinned exactly ON the H&M Prop 3.1 boundary
+# (theta_delta = eps_theta, chi_delta = eps_chi, ratio ~ 1.0) with an
+# anomalously bad per-slice RMSE, and the optimizer reports it as a
+# successful certified arb-free fit.  Measured m66 corner (mutmut_66 /
+# the dip fixture): theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
+# ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
+# These thresholds are provisional and pending review — see
+# docs/code_review_findings.md §6.7 "Proposed fix direction".
+_HM_BOUNDARY_MARGIN_THETA: float = 1e-8   # 10x eps_theta
+_HM_BOUNDARY_MARGIN_CHI: float = 1e-5     # 10x eps_chi
+_HM_BOUNDARY_MARGIN_RATIO: float = 1e-3
+_HM_RMSE_RATIO_MAX: float = 5.0
+_HM_RMSE_FLOOR: float = 1e-9
 
 
 @dataclass
@@ -137,8 +162,8 @@ def _fit_slice(
     points: list[tuple[float, float]],
     prev: SSVIParams | None = None,
     *,
-    eps_theta: float = 1e-9,
-    eps_chi: float = 1e-6,
+    eps_theta: float = _EPS_THETA,
+    eps_chi: float = _EPS_CHI,
 ) -> SSVIParams:
     """Fit a single SSVI slice subject to hard no-arbitrage constraints.
 
@@ -324,6 +349,105 @@ def _fit_slice(
     )
 
 
+def _slice_rmse(
+    params: SSVIParams, points: list[tuple[float, float]],
+) -> float:
+    """Root-mean-square total-variance error of ``params`` over ``points``.
+
+    ``sqrt(mean((ssvi_w(k, theta, rho, psi) - w)^2))`` over every
+    ``(k, w)`` in ``points``.  Used by the post-fit H&M margin check to
+    compare the hard-constrained fit's per-slice residual with the
+    unconstrained fit's baseline.
+    """
+    return sqrt(mean(
+        (ssvi_w(k, params.theta, params.rho, params.psi) - w) ** 2
+        for k, w in points
+    ))
+
+
+def _hard_fit_is_degenerate_corner(
+    prev: SSVIParams | None,
+    params: SSVIParams,
+    points: list[tuple[float, float]],
+) -> bool:
+    """Detect a hard eSSVI fit pinned on the H&M Prop 3.1 boundary.
+
+    Two signals must AGREE before a fit is flagged:
+
+    1. **Boundary proximity** — the hard fit landed within a small
+       margin of the H&M calendar-arb boundary that ``_fit_slice``
+       enforces with its eps floors:
+
+       - ``theta_delta <= _HM_BOUNDARY_MARGIN_THETA`` (10x eps_theta)
+       - ``chi_delta   <= _HM_BOUNDARY_MARGIN_CHI`` (10x eps_chi)
+       - ``ratio >= 1 - _HM_BOUNDARY_MARGIN_RATIO``
+
+       where ``theta_delta``/``chi_delta`` are the deltas vs ``prev`` and
+       ``ratio`` is ``|rho*chi - rho_prev*chi_prev| / chi_delta``.
+
+    2. **Bad per-slice RMSE** — the hard fit's RMSE over ``points``
+       exceeds ``max(_HM_RMSE_RATIO_MAX * unconstrained_rmse,
+       _HM_RMSE_FLOOR)``.  The unconstrained per-slice fit
+       (:func:`fit_ssvi_slice`) is the RMSE baseline: a
+       boundary-adjacent fit that genuinely matches the data (e.g. a
+       legitimate near-flat chi pair) has a small RMSE and is NOT
+       flagged.
+
+    A fit flagged here is not a genuine arb-free solution — it is an
+    optimizer knife-edge that converged to a feasible-but-wrong corner.
+    This is the m66 / mutmut_66 pattern (docs/code_review_findings.md
+    §6.7): measured corner theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
+    ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
+    ``fit_ssvi_surface_sequential`` routes flagged fits to the
+    unconstrained fallback.
+
+    The first slice has no H&M predecessor boundary to sit on, so
+    ``prev=None`` is never flagged.
+
+    If the unconstrained baseline fit itself fails, the hard fit is
+    conservatively NOT flagged: the fit failed the H&M constraints by
+    the normal route anyway, and the existing fallback machinery already
+    reports fit failures honestly.
+
+    Returns
+    -------
+    bool
+        ``True`` iff the fit is within the boundary margin AND its RMSE
+        is anomalously bad relative to the unconstrained fit.
+    """
+    if prev is None:
+        return False
+
+    theta_delta = params.theta - prev.theta
+    chi_delta = params.theta * params.psi - prev.theta * prev.psi
+    ratio = abs(
+        params.rho * params.theta * params.psi
+        - prev.rho * prev.theta * prev.psi
+    ) / max(chi_delta, _EPS_CHI)
+
+    near_boundary = (
+        theta_delta <= _HM_BOUNDARY_MARGIN_THETA
+        and chi_delta <= _HM_BOUNDARY_MARGIN_CHI
+        and ratio >= 1.0 - _HM_BOUNDARY_MARGIN_RATIO
+    )
+    if not near_boundary:
+        # Fast path: far from the boundary, no need for the unconstrained
+        # baseline fit.
+        return False
+
+    hard_rmse = _slice_rmse(params, points)
+    try:
+        unconstrained = fit_ssvi_slice(points)
+    except (RuntimeError, ValueError):
+        # Conservative: without a baseline we do not flag.
+        return False
+    unconstrained_rmse = _slice_rmse(unconstrained, points)
+    bad_rmse = hard_rmse > max(
+        _HM_RMSE_RATIO_MAX * unconstrained_rmse, _HM_RMSE_FLOOR
+    )
+    return near_boundary and bad_rmse
+
+
 def fit_ssvi_surface_sequential(
     slices_data: list[tuple[float, list[tuple[float, float]]]],
 ) -> SequentialFitResult:
@@ -343,6 +467,15 @@ def fit_ssvi_surface_sequential(
     fallback result is NOT used as ``prev`` for the next slice's
     constraints — ``prev`` remains the last *hard-constrained*
     successful fit.
+
+    A hard-constrained fit that the optimizer reports as successful is
+    additionally checked by :func:`_hard_fit_is_degenerate_corner`: a
+    fit pinned within eps of the H&M Prop 3.1 boundary whose per-slice
+    RMSE is anomalously bad relative to the unconstrained fit (the m66
+    degenerate-corner pattern, docs/code_review_findings.md §6.7) is
+    routed through the same ``RuntimeError`` fallback path, so a
+    feasible-but-wrong boundary corner is never silently certified
+    arb-free.
 
     Parameters
     ----------
@@ -377,6 +510,12 @@ def fit_ssvi_surface_sequential(
 
         try:
             params = _fit_slice(pts, prev=last_valid_prev)
+            if last_valid_prev is not None and _hard_fit_is_degenerate_corner(last_valid_prev, params, pts):
+                _theta_delta = params.theta - last_valid_prev.theta
+                _chi_delta = params.theta * params.psi - last_valid_prev.theta * last_valid_prev.psi
+                _ratio = abs(params.rho * params.theta * params.psi - last_valid_prev.rho * last_valid_prev.theta * last_valid_prev.psi) / max(_chi_delta, _EPS_CHI)
+                _logger.warning("eSSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback", expiry, _theta_delta, _chi_delta, _ratio, _slice_rmse(params, pts))
+                raise RuntimeError("hard fit is a degenerate H&M boundary corner")
             last_valid_prev = params  # update only on hard-constrained success
             last_valid_prev_T = expiry  # update for NEXT slice
             fitted.append((expiry, params))
