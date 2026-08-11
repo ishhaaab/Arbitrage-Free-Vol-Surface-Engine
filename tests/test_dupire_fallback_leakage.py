@@ -317,7 +317,14 @@ class TestDupireFallbackLeakage:
                 )
 
     def test_plot_dupire_heatmap_uses_nan_masking(self) -> None:
-        """plot_dupire_heatmap correctly grays out NaN rows from grid."""
+        """plot_dupire_heatmap masks exactly the NaN cells of lv.grid.
+
+        The plotted mesh array must match the NaN positions in the
+        supplied grid cell-for-cell (same shape, same masked positions) —
+        a fallback row that fails to mask, or an extra masked cell that
+        is finite in the grid, fails the test.
+        """
+        import numpy as np
         import matplotlib
         matplotlib.use("Agg")
 
@@ -330,20 +337,59 @@ class TestDupireFallbackLeakage:
         lv = dupire(fs, strikes, maturities, fallback_slices=fallback_Ts)
 
         fig = plot_dupire_heatmap(lv, symbol="TEST", fallback_slices=fallback_Ts)
-        assert fig.axes is not None
+        mesh = fig.axes[0].collections[0]
+        plotted = mesh.get_array()
+
+        grid_np = np.array(lv.grid)
+        assert plotted.shape == grid_np.shape, (
+            f"plotted array shape {plotted.shape} != grid shape {grid_np.shape}"
+        )
+        expected_mask = np.isnan(grid_np)
+        actual_mask = np.ma.getmaskarray(plotted)
+        assert np.array_equal(actual_mask, expected_mask), (
+            f"plotted mask must match the NaN cells of lv.grid exactly:\n"
+            f"  grid NaN:\n{expected_mask}\n"
+            f"  plotted mask:\n{actual_mask}"
+        )
 
     def test_plot_dupire_heatmap_no_fallback_still_works(self) -> None:
-        """plot_dupire_heatmap works without fallback_slices."""
+        """plot_dupire_heatmap with no fallback must not mask any cell.
+
+        Uses a uniformly flat surface (all slices at the same sigma) so
+        no calendar-arb NaN leaks into the grid either: every cell is
+        finite and the plotted mesh is fully unmasked.
+        """
+        import numpy as np
         import matplotlib
         matplotlib.use("Agg")
 
         from arbfree_vol.viz.local_vol import plot_dupire_heatmap
 
-        fs, _ = _five_slice_surface()
+        spot, r, q = 100.0, 0.05, 0.0
+        sigma = 0.20
+        Ts = [0.1, 0.3, 0.5, 0.7, 0.9]
+        slices = []
+        fwd_curve = []
+        for T in Ts:
+            slices.append(_make_slice(T, sigma, spot, r, q))
+            fwd_curve.append((T, _forward(T, spot, r, q)))
+
+        fs = FittedSurface(
+            spot=spot, risk_free=r, div_yield=q,
+            forward_curve=tuple(fwd_curve),
+            fitted_slices=tuple(slices),
+        )
         strikes = [90.0, 95.0, 100.0, 105.0, 110.0]
         maturities = [0.1, 0.3, 0.5, 0.7, 0.9]
 
         lv = dupire(fs, strikes, maturities)
 
         fig = plot_dupire_heatmap(lv, symbol="TEST")
-        assert fig.axes is not None
+        mesh = fig.axes[0].collections[0]
+        plotted = mesh.get_array()
+
+        assert plotted.shape == (len(maturities), len(strikes))
+        assert not np.ma.getmaskarray(plotted).any(), (
+            "no cells may be masked when no fallback exists and the "
+            "surface is calendar-arb-free"
+        )

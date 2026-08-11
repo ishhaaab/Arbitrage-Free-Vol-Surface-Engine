@@ -90,21 +90,57 @@ def test_estimate_index_dividend_yield_empty_slice() -> None:
     assert q_est is None
 
 
-def test_estimate_index_dividend_yield_zero_expiry() -> None:
-    """Zero expiry time → returns None."""
+def test_estimate_index_dividend_yield_near_zero_expiry_returns_float() -> None:
+    """A near-zero-expiry boundary case with a valid parity pair must
+    return a valid float consistent with the true dividend yield.
+
+    The documented contract (_index_rates._estimate_index_dividend_yield,
+    "Returns the MEDIAN q across all usable ATM pairs, or None if
+    estimation fails") guards only ``expiry_time <= 0``; a genuine
+    positive near-zero expiry with a consistent call/put pair is
+    estimable — put-call parity recovers q from the tiny C-P gap.
+    """
     from arbfree_vol.ingestion.yfinance import _estimate_index_dividend_yield
+    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.pricing.black_scholes import price
+
+    S, r, T, K = 100.0, 0.05, 0.001, 100.0
+    q_true = 0.013  # 1.3% dividend yield
+
+    contract_c = OptionContract(
+        symbol="X", option_type=OptionType.CALL, strike=K,
+        expiry_date=date(2030, 1, 1),
+    )
+    C = price(BlackScholesInput(
+        contract=contract_c, spot=S, expiry_time=T,
+        risk_free=r, div_yield=q_true, volatility=0.2,
+    ))
+    contract_p = OptionContract(
+        symbol="X", option_type=OptionType.PUT, strike=K,
+        expiry_date=date(2030, 1, 1),
+    )
+    P = price(BlackScholesInput(
+        contract=contract_p, spot=S, expiry_time=T,
+        risk_free=r, div_yield=q_true, volatility=0.2,
+    ))
 
     slice_ = ExpirySlice(
-        expiry_time=0.001,  # effectively zero
+        expiry_time=T,
         quotes=[
-            Quote(strike=100.0, option_type=OptionType.CALL, price=5.0),
-            Quote(strike=100.0, option_type=OptionType.PUT, price=5.0),
+            Quote(strike=K, option_type=OptionType.CALL, price=C),
+            Quote(strike=K, option_type=OptionType.PUT, price=P),
         ],
     )
 
-    q_est = _estimate_index_dividend_yield(slice_, 100.0, 0.05)
-    # With T very small, the parity formula may or may not work; just ensure no crash
-    # The function should return None or a valid float
+    q_est = _estimate_index_dividend_yield(slice_, S, r)
+    assert q_est is not None, (
+        "a valid parity pair at near-zero expiry must yield an estimate, "
+        "not None (only expiry_time <= 0 or missing pairs return None)"
+    )
+    assert isinstance(q_est, float)
+    assert abs(q_est - q_true) < 0.002, (
+        f"Estimated q={q_est:.6f} differs from true q={q_true} by > 20bps"
+    )
 
 
 # ── _get_representative_dividend_yield tests ─────────────────────────

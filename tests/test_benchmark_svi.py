@@ -2,9 +2,10 @@
 
 Verifies the no-arbitrage and known-value identities that hold for ANY
 valid SVI parameter set.  The module-level ``TRUE`` fixture is a
-repo-internal parameter set (see the comment below), NOT a paper value;
-the paper-verified Gatheral (2004) base case is asserted separately in
-``test_benchmark_svi_gatheral2004_base_case_known_values``.
+repo-internal parameter set (see the comment below), NOT a paper value.
+The reconstructed Gatheral (2004) base case is exercised only through
+algebraic self-consistency identities — ``test_benchmark_svi_gatheral2004_identity_checks``
+— which are NOT independently verified published outputs.
 """
 
 from math import sqrt
@@ -66,8 +67,15 @@ def test_benchmark_svi_asymptotic_slope() -> None:
     assert w_left == approx(TRUE.a + expected_slope_left * abs(k_neg - TRUE.m), rel=1e-4)
 
 
-def test_benchmark_svi_gatheral2004_base_case_known_values() -> None:
-    """Gatheral (2004) base case, reconstructed from Gatheral (2004) 'A parsimonious arbitrage-free implied volatility parameterization' (Global Derivatives & Risk Management 2004, Madrid), 'What the SVI parameters mean' slides (source PDF text layer is scrambled); cross-checked against the paper's own parameter-sensitivity slide for internal consistency only, not independently verified against a second source. Values: a=0.04, b=0.4, rho=-0.4, sigma=0.1, m=0.
+def test_benchmark_svi_gatheral2004_identity_checks() -> None:
+    """Self-consistency identities for the reconstructed Gatheral (2004)
+    base case (a=0.04, b=0.4, rho=-0.4, sigma=0.1, m=0).
+
+    IMPORTANT: these are ALGEBRAIC IDENTITY checks derived from the
+    parameter tuple itself (the closed-form min-total-variance value, the
+    ATM value a + b*sigma, and the no-butterfly-arb grid check).  They
+    are NOT independently verified published outputs — no second source
+    was cross-checked, so they certify internal consistency only.
     """
     base = SVIParams(a=0.04, b=0.4, rho=-0.4, m=0.0, sigma=0.1)
 

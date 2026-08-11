@@ -43,8 +43,11 @@ def test_narrow_spread_kept() -> None:
     assert _check_wide_spread(q, max_ratio=0.5) is None
 
 
-def test_intrinsic_violation_call_otm() -> None:
-    # spot=100, strike=110 (OTM call), price=0.5 -> below intrinsic (0)
+def test_intrinsic_violation_call_otm_is_not_a_violation() -> None:
+    # spot=100, strike=110 (OTM call), price=0.5 -> intrinsic is 0, so any
+    # positive price is fine.  This is the NON-violation side of the OTM
+    # case; the genuine violation side (ITM call priced below intrinsic)
+    # is covered by test_intrinsic_violation_call_itm below.
     sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
     q = Quote(strike=110.0, option_type=OptionType.CALL, price=0.5)
     rec = _check_intrinsic_violation(sl, q, SPOT)

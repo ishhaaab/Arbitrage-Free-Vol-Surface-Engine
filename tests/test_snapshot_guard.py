@@ -3,8 +3,6 @@
 from datetime import date, datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 
 
@@ -38,25 +36,36 @@ class TestSnapshotGuard:
         assert "outside safe window" in result
 
     def test_snapshot_guard_warns_on_exclusion_date(self):
-        """A snapshot on a known event day returns a warning string."""
+        """A snapshot on a known event day returns a warning string.
+
+        The date is hard-coded from the built-in ``_EXCLUSION_DATES``
+        set, and its membership is asserted unconditionally: if the set
+        ever lost this date (or became empty), the test FAILS loudly
+        instead of skipping.
+        """
         from arbfree_vol.data.snapshot_guard import _EXCLUSION_DATES
-        # Pick a date that IS in the exclusion set
         sample_date_str = "2026-07-29"  # FOMC day
-        if sample_date_str in _EXCLUSION_DATES:
-            dt = datetime(2026, 7, 29, 12, 0, 0, tzinfo=_EASTERN)
-            result = check_snapshot_time(now=dt)
-            assert result is not None
-            assert "event day" in result
-        else:
-            pytest.skip("2026-07-29 not in exclusion set")
+        assert sample_date_str in _EXCLUSION_DATES, (
+            f"{sample_date_str} must be in _EXCLUSION_DATES for this "
+            "test to be meaningful"
+        )
+        dt = datetime(2026, 7, 29, 12, 0, 0, tzinfo=_EASTERN)
+        result = check_snapshot_time(now=dt)
+        assert result is not None
+        assert "event day" in result
+        assert sample_date_str in result
 
     def test_snapshot_guard_warns_on_known_exclusion_date(self):
-        """Use a date that is definitely in the exclusion set."""
+        """A second hard-coded exclusion date (CPI day) also warns, with
+        the date named in the message."""
         from arbfree_vol.data.snapshot_guard import _EXCLUSION_DATES
-        # Pick the first exclusion date
-        sample_date_str = next(iter(_EXCLUSION_DATES))
-        y, m, d = map(int, sample_date_str.split("-"))
+        sample_date_str = "2026-08-12"  # CPI day
+        assert sample_date_str in _EXCLUSION_DATES, (
+            f"{sample_date_str} must be in _EXCLUSION_DATES for this "
+            "test to be meaningful"
+        )
         # Use a time inside the safe window so only the date check triggers
+        y, m, d = map(int, sample_date_str.split("-"))
         dt = datetime(y, m, d, 12, 0, 0, tzinfo=_EASTERN)
         result = check_snapshot_time(now=dt)
         assert result is not None

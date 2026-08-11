@@ -240,44 +240,36 @@ class TestPCA:
     """Properties of the PCA decomposition."""
 
     def test_pca_returns_requested_n_components(self) -> None:
-        """PCA returns exactly n_components requested (capped by rank)."""
-        base_params = SVIParams(a=0.0, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
+        """PCA returns exactly the requested count, capped by the SVD
+        dimensions ``min(n_components, n_features, n_snapshots - 1)``.
 
-        # Build 10 snapshots with small random perturbations so SVD has rank
-        rng = np.random.RandomState(42)
-        surfaces: list[tuple[date, VolSurface]] = []
-        for i in range(10):
-            eps = rng.uniform(-0.01, 0.01, 5)
-            p = SVIParams(
-                a=base_params.a + eps[0],
-                b=base_params.b + eps[1],
-                rho=base_params.rho + eps[2],
-                m=base_params.m + eps[3],
-                sigma=base_params.sigma + eps[4],
-            )
-            surfaces.append((date(2030, 1, i + 1), _surface_from_svi_params(p)))
+        The input is a deterministic known-rank matrix (6 snapshots x 10
+        features, rank 2), so the returned counts are exact and cannot
+        drift with calibration noise:
+        - a request above the rank AND above the ``n_snapshots - 1`` cap
+          returns exactly ``min(7, 10, 5) = 5`` components;
+        - a request below the rank returns exactly that count.
+        """
+        rng = np.random.RandomState(7)
+        basis = rng.normal(size=(2, 10))      # two independent directions
+        weights = rng.normal(size=(6, 2))     # each row is a combination
+        matrix = weights @ basis              # shape (6, 10), rank 2
 
-        series = fit_surface_series(surfaces)
-        matrix, _, _ = parameter_matrix(series)
+        result_7 = pca_deformations(matrix, n_components=7)
+        assert len(result_7.components) == 5, (
+            f"expected exactly min(7, 10, 5) = 5 components, got "
+            f"{len(result_7.components)}"
+        )
+        assert len(result_7.explained_variance_ratio) == 5
+        assert len(result_7.scores[0]) == 5
+        # Only the two nonzero singular values explain variance.
+        assert result_7.explained_variance_ratio[2] == pytest.approx(0.0, abs=1e-20)
+        assert result_7.explained_variance_ratio[3] == pytest.approx(0.0, abs=1e-20)
 
-        result_3 = pca_deformations(matrix, n_components=3)
-        assert len(result_3.components) == 3
-        assert len(result_3.explained_variance_ratio) == 3
-        assert len(result_3.scores[0]) == 3
-
-        result_2 = pca_deformations(matrix, n_components=2)
-        assert len(result_2.components) == 2
-        assert len(result_2.explained_variance_ratio) == 2
-        assert len(result_2.scores[0]) == 2
-
-        result_5 = pca_deformations(matrix, n_components=5)
-        n_actual = len(result_5.components)
-        # With 10 rows and 5 features, rank <= 5, so we should get min(5, 5, 9) = 5
-        if n_actual < 5:
-            # If the repair pipeline's fitted params have lower effective rank,
-            # accept whatever we get — it just shouldn't error.
-            pass
-        assert n_actual > 0
+        result_1 = pca_deformations(matrix, n_components=1)
+        assert len(result_1.components) == 1
+        assert len(result_1.explained_variance_ratio) == 1
+        assert len(result_1.scores[0]) == 1
 
     def test_single_parameter_drift_first_component_dominates(self) -> None:
         """A drift in rho across 20 snapshots yields a dominant first PC.

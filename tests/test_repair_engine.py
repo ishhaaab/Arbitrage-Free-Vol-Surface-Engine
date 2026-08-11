@@ -971,93 +971,48 @@ def _flat_bs_surface(expiries: list[float], n_strikes: int = 7) -> VolSurface:
     return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
-@pytest.mark.slow
-# Slow: runs the real SABR->SVI mapping (sabr_to_raw_svi_params), which
-# burns thousands of optimizer evals per slice (~65s).
-def test_sabr_mapping_adversarial_params_no_crash(monkeypatch) -> None:
-    """The adversarial SABR combo (alpha=3.0, rho=0.995, nu=0.2) must not
-    crash repair(): at max_nfev=50000 the mapping converges (adversarial
-    scan: nfev ~10389) and every slice lands in fitted_sabr_slices.
+def test_sabr_mapping_success_records_slices_in_fitted_outputs(monkeypatch) -> None:
+    """When the SABR->SVI mapping succeeds, every slice must appear in
+    the fitted outputs and none may be recorded as failed-mapping.
 
-    The primary contract is "never crashes"; the fitted/failed accounting
-    is asserted robustly so the test survives future budget changes.
+    Deterministic by construction: the SABR term-structure fit and the
+    SABR->SVI mapping are both monkeypatched with cheap stubs, so the
+    outcome cannot depend on optimizer budgets.  This is the SUCCESS
+    counterpart to the failure-accounting tests below (RuntimeError /
+    ValueError mapping raises), which together replace the old
+    all-succeeded-or-all-failed conditional pair.
     """
     import arbfree_vol.repair.engine as engine_mod
 
     expiries = [0.25, 0.5, 1.0]
-    adversarial = [SABRParams(alpha=3.0, beta=0.5, rho=0.995, nu=0.2)
-                   for _ in expiries]
+    params = [SABRParams(alpha=0.1, beta=0.5, rho=0.0, nu=0.5)
+              for _ in expiries]
+
+    def _cheap_mapping(sabr_params, forward_price, expiry_time):
+        # Valid raw-SVI tuple (a, b, rho, m, sigma).
+        return (0.04, 0.4, -0.4, 0.0, 0.1)
 
     monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
-                        lambda slices_data: adversarial)
+                        lambda slices_data: params)
+    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _cheap_mapping)
 
     report = repair(_flat_bs_surface(expiries), use_sabr=True)
 
-    # Primary contract: no exception propagates out of repair().
-    # Every slice must be accounted for — fitted or failed-mapping.
-    assert len(report.fitted_sabr_slices) + len(report.sabr_mapping_failed_slices) == len(expiries), (
-        f"expected {len(expiries)} slices accounted for, got fitted="
-        f"{len(report.fitted_sabr_slices)}, failed={report.sabr_mapping_failed_slices}"
+    # Every slice accounted for as fitted; no mapping failures.
+    assert report.sabr_mapping_failed_slices == [], (
+        f"expected no failed-mapping slices, got "
+        f"{report.sabr_mapping_failed_slices}"
     )
-    if report.fitted_sabr_slices:
-        # Strong expectation: the adversarial scan converges at
-        # nfev=10389 (< 50000), so every slice should be fitted and
-        # nothing should be recorded as failed-mapping.
-        assert len(report.fitted_sabr_slices) == len(expiries), (
-            f"expected all slices fitted, got {len(report.fitted_sabr_slices)}"
-        )
-        assert report.sabr_mapping_failed_slices == [], (
-            f"expected no failed-mapping slices, got {report.sabr_mapping_failed_slices}"
-        )
-    else:
-        # Robustness guard: if the mapping budget is ever lowered below
-        # what this combo needs, every slice must be recorded as
-        # failed-mapping rather than silently dropped.
-        assert len(report.sabr_mapping_failed_slices) == len(expiries), (
-            f"expected all expiries in sabr_mapping_failed_slices, got "
-            f"{report.sabr_mapping_failed_slices}"
-        )
-
-
-@pytest.mark.slow
-# Slow: runs the real SABR->SVI mapping (sabr_to_raw_svi_params), which
-# burns thousands of optimizer evals per slice (~55s).
-def test_sabr_mapping_real_data_params_no_crash(monkeypatch) -> None:
-    """The real-data SABR combo (alpha=0.00243, rho=-0.484, nu=2.72) must
-    not crash repair(): it needs 13,685 evaluations — the documented case
-    that used to crash at the old 10,000 budget — and now succeeds at
-    max_nfev=50000.
-
-    Same primary contract as the adversarial test: never crash, and keep
-    the fitted/failed accounting robust.
-    """
-    import arbfree_vol.repair.engine as engine_mod
-
-    expiries = [0.25, 0.5, 1.0]
-    real_data = [SABRParams(alpha=0.00243, beta=0.5, rho=-0.484, nu=2.72)
-                 for _ in expiries]
-
-    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
-                        lambda slices_data: real_data)
-
-    report = repair(_flat_bs_surface(expiries), use_sabr=True)
-
-    assert len(report.fitted_sabr_slices) + len(report.sabr_mapping_failed_slices) == len(expiries), (
-        f"expected {len(expiries)} slices accounted for, got fitted="
-        f"{len(report.fitted_sabr_slices)}, failed={report.sabr_mapping_failed_slices}"
+    assert len(report.fitted_sabr_slices) == len(expiries), (
+        f"expected all {len(expiries)} slices in fitted_sabr_slices, got "
+        f"{len(report.fitted_sabr_slices)}"
     )
-    if report.fitted_sabr_slices:
-        # Strong expectation: this is the documented 13,685-eval case
-        # that used to crash at max_nfev=10000; at 50000 it fits.
-        assert len(report.fitted_sabr_slices) == len(expiries), (
-            f"expected all slices fitted, got {len(report.fitted_sabr_slices)}"
-        )
-        assert report.sabr_mapping_failed_slices == []
-    else:
-        assert len(report.sabr_mapping_failed_slices) == len(expiries), (
-            f"expected all expiries in sabr_mapping_failed_slices, got "
-            f"{report.sabr_mapping_failed_slices}"
-        )
+    assert len(report.fitted_slices) == len(expiries), (
+        f"expected all {len(expiries)} slices in fitted_slices, got "
+        f"{len(report.fitted_slices)}"
+    )
+    fitted_Ts = sorted(fs.expiry_time for fs in report.fitted_sabr_slices)
+    assert fitted_Ts == expiries
 
 
 def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:

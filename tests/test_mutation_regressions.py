@@ -124,19 +124,45 @@ def test_check_wide_spread_skips_partial_bid_ask() -> None:
 
 
 # ── _check_parity: mixed bid/ask must use the fallback threshold ──────
-def test_check_parity_partial_bid_ask_uses_fallback() -> None:
+def test_check_parity_partial_bid_ask_uses_fallback_threshold() -> None:
+    """A mixed bid/ask quote must be judged against the FIXED fallback
+    threshold (0.05), not the half-spread threshold.
+
+    The call carries a wide ±0.5 quote (half-spread 0.5) but the put has
+    no bid/ask at all, so ``_check_parity`` takes the fallback branch.
+    The parity residual is placed STRICTLY between the two thresholds
+    (0.06 in (0.05, 0.5)): only the fallback threshold can decide the
+    outcome, so the test fails if the threshold-selection logic is
+    mutated — e.g. a loosened bid/ask condition routing this quote into
+    the half-spread branch (which would either crash on the put's None
+    bid/ask or, with a wider effective threshold, swallow the residual).
+    """
     call = _bs_price(OptionType.CALL, 100.0)
     put = _bs_price(OptionType.PUT, 100.0)
+    rhs = SPOT * _exp(-DIV_YIELD * T) - 100.0 * _exp(-RISK_FREE * T)
+
+    # Put price lowered by 0.06 so |C - P - rhs| = 0.06: strictly
+    # between the fallback threshold (0.05) and the call's half-spread
+    # threshold (0.5).
+    residual = 0.06
     surface = _surface([
         Quote(strike=100.0, option_type=OptionType.CALL,
               price=call, bid=call - 0.5, ask=call + 0.5),
-        Quote(strike=100.0, option_type=OptionType.PUT, price=put),
+        Quote(strike=100.0, option_type=OptionType.PUT, price=put - residual),
     ])
     violations: list = []
     _check_parity(surface, surface.slices[0], violations)
-    # Parity holds with model prices, so no violation — the point is the
-    # mixed bid/ask quote must not crash or take the half-spread branch.
-    assert violations == []
+
+    # 0.06 > fallback threshold 0.05 -> a PARITY violation is recorded.
+    # If the fallback threshold were loosened to >= 0.06 or the mixed
+    # quote wrongly took the half-spread branch, this assertion fails.
+    assert len(violations) == 1, (
+        f"expected exactly one parity violation, got {len(violations)}"
+    )
+    assert violations[0].kind == ViolationType.PARITY
+    assert violations[0].magnitude == approx(residual, abs=1e-9)
+    assert violations[0].magnitude > 0.05
+    assert violations[0].magnitude < 0.5
 
 
 # ── _check_min_variance: violation metadata for negative w_min ────────

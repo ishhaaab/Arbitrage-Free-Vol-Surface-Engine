@@ -375,13 +375,36 @@ def test_fit_slice_slsqp_mode8_linesearch_failure_raises(monkeypatch) -> None:
         ts._fit_slice(_fit_points())
 
 
-def test_fit_slice_slsqp_success_status_accepted(monkeypatch) -> None:
-    """A converged fit (success=True, status 1/2 for trust-constr) still
-    returns fitted parameters."""
+def test_fit_slice_trust_constr_success_status_accepted(monkeypatch) -> None:
+    """A converged trust-constr fit (success=True, status 1) returns
+    fitted parameters without ever reaching the SLSQP retry."""
     from math import exp
 
     ts, fake_minimize = _scripted_minimize([
         _opt_result(1, "Optimization terminated successfully", success=True),
+    ])
+    monkeypatch.setattr(ts, "minimize", fake_minimize)
+
+    params = ts._fit_slice(_fit_points())
+    assert params.theta == pytest.approx(0.1)
+    assert params.rho == pytest.approx(0.0)
+    assert params.psi == pytest.approx(exp(-0.5))
+
+
+def test_fit_slice_slsqp_success_status_zero_accepted(monkeypatch) -> None:
+    """A converged SLSQP retry (success=True, exit mode 0) must be
+    accepted as a hard-constrained fit.
+
+    The trust-constr attempt fails (status 4, max f-evals); the SLSQP
+    retry converges with exit mode 0 ("Optimization terminated
+    successfully") — the ONLY SLSQP mode that counts as convergence.
+    This genuinely reaches the SLSQP branch, unlike a scripted
+    trust-constr-only success."""
+    from math import exp
+
+    ts, fake_minimize = _scripted_minimize([
+        _opt_result(4, "The maximum number of function evaluations is exceeded."),
+        _opt_result(0, "Optimization terminated successfully", success=True),
     ])
     monkeypatch.setattr(ts, "minimize", fake_minimize)
 
@@ -453,48 +476,59 @@ def test_hard_constraint_or_fallback_on_incompatible_data() -> None:
     Deleting the hard constraints in _fit_slice makes the unconstrained
     fit recover the theta dips → verify_hm_condition() is False with an
     empty fallback_slices → this test fails.
+
+    Deterministic concrete outcome for ``_DIP_TRUTH`` (verified): the
+    theta-dipping slices T=0.5 and T=2.0 land on the H&M boundary corner
+    (theta_delta=1e-9, chi_delta=1e-6, ratio≈1) and are routed to the
+    unconstrained fallback; T=0.25 and T=1.0 fit hard.  The fallback set
+    is asserted exactly, not conditionally.
     """
     result = fit_ssvi_surface_sequential(_dip_slices_data())
 
     assert result.failed_slices == []
+    assert result.fallback_slices == [0.5, 2.0], (
+        f"expected the theta-dipping slices to fall back exactly once "
+        f"(T=0.5 and T=2.0), got {result.fallback_slices}"
+    )
+    fitted_Ts = [T for T, _ in result.fitted_slices]
+    assert fitted_Ts == [0.25, 0.5, 1.0, 2.0], (
+        f"expected all four slices fitted, got {fitted_Ts}"
+    )
     params_only = [p for _, p in result.fitted_slices]
-    hm_ok = verify_hm_condition(params_only)
-    if not hm_ok:
-        assert len(result.fallback_slices) > 0, (
-            "verify_hm_condition reports a violation but no slice is "
-            "recorded in fallback_slices — the H&M hard constraints "
-            "appear to be missing from _fit_slice"
-        )
+    assert not verify_hm_condition(params_only), (
+        "the two fallback slices are not arb-free by construction, so "
+        "verify_hm_condition must report a violation"
+    )
 
 
 def test_fitted_slices_prev_threads_last_hard_constrained_predecessor() -> None:
     """fitted_slices_prev must point at the last HARD-CONSTRAINED slice
     before each fitted slice, skipping fallback slices.
 
-    On the current dataset slice T=2.0 really falls back (the
-    'Positive directional derivative for linesearch' failure also seen
-    on live data), giving prev=[None, 0.25, 0.5, 1.0, 1.0]: the T=3.0
-    slice anchors to T=1.0, NOT to the fallback slice T=2.0.  A
-    regression where a fallback slice wrongly becomes the predecessor
-    of the next slice would make the recomputed expectation differ.
+    Deterministic concrete outcome for ``_DIP_TRUTH`` + the T=3.0 tail
+    (verified across repeated runs): T=0.5, T=2.0 and T=3.0 all route to
+    the unconstrained fallback via the degenerate H&M boundary-corner
+    check, so the predecessor chain skips them:
+
+        prev = [None, 0.25, 0.25, 1.0, 1.0]
+
+    T=1.0 fits hard and anchors both T=2.0 (fallback) and T=3.0
+    (fallback) — a regression where a fallback slice wrongly becomes the
+    predecessor of the next slice changes this exact sequence.
     """
     result = fit_ssvi_surface_sequential(_dip_slices_data(with_tail=True))
 
     assert len(result.fitted_slices_prev) == len(result.fitted_slices)
-    assert result.fitted_slices_prev[0] is None
-
-    expected_prev: list[float | None] = []
-    last_valid_T: float | None = None
-    for T, _ in result.fitted_slices:
-        expected_prev.append(last_valid_T)
-        if T not in result.fallback_slices:
-            last_valid_T = T
-
-    assert result.fitted_slices_prev == expected_prev, (
-        "fitted_slices_prev threading drifted from the documented "
-        "last-hard-constrained-predecessor rule:\n"
+    assert [T for T, _ in result.fitted_slices] == [0.25, 0.5, 1.0, 2.0, 3.0]
+    assert result.fallback_slices == [0.5, 2.0, 3.0], (
+        f"expected T=0.5, T=2.0 and T=3.0 to fall back, got "
+        f"{result.fallback_slices}"
+    )
+    assert result.fitted_slices_prev == [None, 0.25, 0.25, 1.0, 1.0], (
+        "fitted_slices_prev must point at the last HARD-CONSTRAINED "
+        "predecessor (skipping fallback slices):\n"
         f"  got      {result.fitted_slices_prev}\n"
-        f"  expected {expected_prev}"
+        f"  expected [None, 0.25, 0.25, 1.0, 1.0]"
     )
 
 
