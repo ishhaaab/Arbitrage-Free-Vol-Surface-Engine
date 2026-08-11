@@ -175,3 +175,103 @@ def test_detect_svi_surface_empty_returns_empty() -> None:
     report = detect_svi_surface([])
 
     assert report.is_arbitrage_free
+
+
+# ---------------------------------------------------------------------------
+# Threshold-boundary sweeps for the SVI-level rules
+# ---------------------------------------------------------------------------
+
+
+def test_min_variance_just_inside_threshold_flagged() -> None:
+    """w_min = -0.01 - 1e-4 - 1e-6 = -1.01e-4, strictly below the -1e-4
+    tolerance -> flagged with metadata."""
+    p = SVIParams(a=-0.01 - 1e-4 - 1e-6, b=0.1, rho=0.0, m=0.0, sigma=0.1)
+
+    report = detect_svi(p)
+
+    v = next(v for v in report.violations if v.kind == ViolationType.NEGATIVE_VARIANCE)
+    assert v.magnitude == approx(1.01e-4, abs=1e-9)
+    assert "SVI min total variance is negative" in v.detail
+
+
+def test_min_variance_just_outside_threshold_clean() -> None:
+    """w_min = -0.01 + 1e-5 = -9.9e-5, safely above the -1e-4 tolerance."""
+    p = SVIParams(a=-0.01 + 1e-5, b=0.1, rho=0.0, m=0.0, sigma=0.1)
+
+    report = detect_svi(p)
+
+    assert all(v.kind != ViolationType.NEGATIVE_VARIANCE for v in report.violations)
+
+
+def test_min_variance_exact_threshold_lands_safe_side() -> None:
+    """w_min = -1e-4 in exact arithmetic; float rounding of
+    a = -1.0 - 1e-4 yields w_min = -9.999999999998899e-05, a hair ABOVE
+    the -1e-4 threshold, so the strict ``<`` comparison does NOT flag.
+    (The butterfly check is free to flag this extreme param set; we only
+    pin the min-variance side.)"""
+    p = SVIParams(a=-1.0 - 1e-4, b=1.0, rho=0.0, m=0.0, sigma=1.0)
+
+    w_min = min_total_variance(p)
+    assert -1e-4 < w_min < -9.9e-5, f"float rounding must sit above -1e-4, got {w_min}"
+
+    report = detect_svi(p)
+    assert all(v.kind != ViolationType.NEGATIVE_VARIANCE for v in report.violations)
+
+
+def test_calendar_just_inside_tolerance_flagged() -> None:
+    """w_earlier - w_later = 1.1e-4, strictly above the 1e-4 tolerance."""
+    earlier = SVIParams(a=0.04, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+    later = SVIParams(a=0.04 - 1.1e-4, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+
+    violations = _calendar_violations([(0.5, earlier), (1.0, later)])
+
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.kind == ViolationType.CALENDAR
+    assert v.magnitude == approx(1.1e-4, abs=1e-6)
+    assert "T=0.5 -> T=1.0" in v.detail
+
+
+def test_calendar_just_outside_tolerance_clean() -> None:
+    """w_earlier - w_later = 9e-5, safely inside the tolerance."""
+    earlier = SVIParams(a=0.04, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+    later = SVIParams(a=0.04 - 9e-5, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+
+    violations = _calendar_violations([(0.5, earlier), (1.0, later)])
+
+    assert violations == []
+
+
+def test_calendar_exact_tolerance_lands_violating_side() -> None:
+    """With b=0 both slices are flat in k, so the gap is the same float at
+    every grid point.  a2 = 0.04 - 1e-4 rounds the computed gap to
+    1.0000000000000029e-4 — a hair ABOVE the 1e-4 tolerance — so the
+    strict ``>`` comparison flags exactly one contiguous band."""
+    earlier = SVIParams(a=0.04, b=0.0, rho=0.0, m=0.0, sigma=0.1)
+    later = SVIParams(a=0.04 - 1e-4, b=0.0, rho=0.0, m=0.0, sigma=0.1)
+
+    violations = _calendar_violations([(0.5, earlier), (1.0, later)])
+
+    assert len(violations) == 1
+    assert violations[0].magnitude == approx(1e-4, rel=1e-6)
+
+
+def test_calendar_three_slices_pair_attribution() -> None:
+    """Only the (T=0.5, T=1.0) pair violates: every violation must name
+    that pair and none may name (T=1.0, T=2.0).  The magnitude is the
+    actual w1 - w2 gap (0.02), not a mere count >= 1."""
+    s1 = SVIParams(a=0.06, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+    s2 = SVIParams(a=0.04, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+    s3 = SVIParams(a=0.10, b=0.3, rho=-0.3, m=0.0, sigma=0.15)
+
+    violations = _calendar_violations([(0.5, s1), (1.0, s2), (2.0, s3)])
+
+    assert len(violations) >= 1
+    assert all("T=0.5 -> T=1.0" in v.detail for v in violations), (
+        "all calendar violations must be attributed to the violating "
+        "T=0.5 -> T=1.0 pair"
+    )
+    assert all("T=1.0 -> T=2.0" not in v.detail for v in violations), (
+        "the clean T=1.0 -> T=2.0 pair must not be flagged"
+    )
+    assert max(v.magnitude for v in violations) == approx(0.02, abs=1e-6)
