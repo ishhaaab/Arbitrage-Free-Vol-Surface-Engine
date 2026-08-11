@@ -208,13 +208,22 @@ class TestImpliedVolBranches:
         assert implied_vol(model, low=0.5, high=4.0) is None   # root 0.2 below low
         assert implied_vol(model, low=0.1, high=0.5) == approx(0.2, abs=1e-6)
 
-    def test_newton_fast_path_is_not_bracketed_by_high(self) -> None:
-        """Documented Newton behavior: a converged Newton solution can sit
-        above the ``high`` bound — ``high`` only guards against divergence
-        (via ``high * 1.5``), the bracket semantics apply to Brent."""
+    def test_newton_root_outside_custom_bounds_returns_none(self) -> None:
+        """The ``[low, high]`` contract applies to the Newton fast path
+        too: a converged Newton root above a custom ``high`` returns
+        None, and a deep-OTM Newton root below a custom ``low`` returns
+        None (no clamping, no silent out-of-bounds sigma)."""
+        # True sigma 0.2 > custom high 0.15: Newton converges to ~0.2
+        # (it is not bounded by high in the old sense), which is now
+        # out of bounds -> None.
         target = self._target_price(OptionType.CALL, 100.0, 0.2)
-        recovered = implied_vol(self._input(OptionType.CALL, target), high=0.15)
-        assert recovered == approx(0.2, abs=1e-6)
+        assert implied_vol(self._input(OptionType.CALL, target), high=0.15) is None
+
+        # Deep OTM Newton root ~1.86e-16 < custom low 1e-4 -> None.
+        target = self._target_price(OptionType.CALL, 500.0, 0.2)
+        assert implied_vol(
+            self._input(OptionType.CALL, target, strike=500.0), low=1e-4
+        ) is None
 
     def test_invalid_prices(self) -> None:
         """Negative price and zero time-to-expiry are rejected at the input
@@ -230,9 +239,12 @@ class TestImpliedVolBranches:
         assert implied_vol(self._input(OptionType.CALL, 200.0)) is None
 
     def test_edge_numerics(self) -> None:
-        """Small and large sigma round-trip; extreme-strike prices are flat
-        in sigma beyond double precision, so the solver honours its
-        price-driven tolerance rather than a unique sigma."""
+        """Small and large sigma round-trip; extreme-strike prices are
+        flat in sigma beyond double precision, so the solver honours its
+        price-driven tolerance: a deep-ITM strike returns an in-bounds
+        sigma that reproduces the price, while a deep-OTM strike whose
+        Newton root lands below the low bound returns None (see the
+        non-identifiability contract)."""
         for sigma in (0.02, 4.5):
             target = self._target_price(OptionType.CALL, 100.0, sigma)
             recovered = implied_vol(self._input(OptionType.CALL, target))
@@ -240,21 +252,87 @@ class TestImpliedVolBranches:
                 f"sigma={sigma}: got {recovered}"
             )
 
-        for strike in (5.0, 500.0):
-            target = self._target_price(OptionType.CALL, strike, 0.2)
-            recovered = implied_vol(
-                self._input(OptionType.CALL, target, strike=strike)
-            )
-            assert recovered is not None
+        # Deep ITM: the solver must return an in-bounds sigma that
+        # reproduces the target within the solver tolerance.
+        target = self._target_price(OptionType.CALL, 5.0, 0.2)
+        recovered = implied_vol(
+            self._input(OptionType.CALL, target, strike=5.0)
+        )
+        assert recovered is not None
+        assert 1e-6 <= recovered <= 5.0
+        bs = BlackScholesInput(
+            contract=self._contract(OptionType.CALL, 5.0),
+            spot=100,
+            expiry_time=1,
+            risk_free=0.05,
+            div_yield=0,
+            volatility=recovered,
+        )
+        assert abs(price(bs) - target) < 1e-8, (
+            f"strike=5.0: returned sigma {recovered} must reproduce "
+            f"the target price within the solver tolerance"
+        )
+
+        # Deep OTM: the Newton root ~1.86e-16 sits below the default low
+        # bound, so the contract returns None instead of an out-of-bounds
+        # sigma.
+        target = self._target_price(OptionType.CALL, 500.0, 0.2)
+        assert implied_vol(
+            self._input(OptionType.CALL, target, strike=500.0)
+        ) is None
+
+    def test_deep_otm_flat_price_root_below_low_returns_none(self) -> None:
+        """Regression pin for the review finding: a deep-OTM call at
+        K=500 priced at sigma=0.2 has a BS price of ~7.4e-15.  Newton's
+        starting point ~1.86e-16 sits below the default low bound and
+        the price is flat there (|price - target| < _NEWTON_TOL at
+        sigma ~ 0), so the old solver returned 1.86e-16 — OUTSIDE
+        [low, high].  The contract now returns None."""
+        target = self._target_price(OptionType.CALL, 500.0, 0.2)
+        recovered = implied_vol(self._input(OptionType.CALL, target, strike=500.0))
+        assert recovered is None
+
+    def test_deep_itm_flat_price_returns_in_bounds_sigma(self) -> None:
+        """A deep-ITM call (K=5, spot=100) is flat in sigma: the price
+        is intrinsic-dominated, so many sigmas reproduce it.  The solver
+        must return a sigma inside [low, high] that reproduces the
+        target within the solver price tolerance (the low endpoint
+        1e-6 does exactly that)."""
+        target = self._target_price(OptionType.CALL, 5.0, 0.2)
+        recovered = implied_vol(self._input(OptionType.CALL, target, strike=5.0))
+
+        assert recovered is not None
+        assert 1e-6 <= recovered <= 5.0
+        bs = BlackScholesInput(
+            contract=self._contract(OptionType.CALL, 5.0),
+            spot=100,
+            expiry_time=1,
+            risk_free=0.05,
+            div_yield=0,
+            volatility=recovered,
+        )
+        assert abs(price(bs) - target) < 1e-8
+
+    def test_flat_price_region_sigmas_are_not_unique(self) -> None:
+        """Pins the non-identifiability contract: in the deep-ITM K=5
+        flat region, sigma=1e-6 and sigma=0.2 are materially different
+        yet BOTH reproduce the target price within the solver's price
+        tolerance.  This documents that the solver may return any
+        in-bounds sigma that satisfies the price tolerance — non-
+        uniqueness here is the documented flat-price behaviour, not a
+        bug."""
+        target = self._target_price(OptionType.CALL, 5.0, 0.2)
+
+        for sigma in (1e-6, 0.2):
             bs = BlackScholesInput(
-                contract=self._contract(OptionType.CALL, strike),
+                contract=self._contract(OptionType.CALL, 5.0),
                 spot=100,
                 expiry_time=1,
                 risk_free=0.05,
                 div_yield=0,
-                volatility=recovered,
+                volatility=sigma,
             )
             assert abs(price(bs) - target) < 1e-8, (
-                f"strike={strike}: returned sigma {recovered} must reproduce "
-                f"the target price within the solver tolerance"
+                f"sigma={sigma} must reproduce the target within the "
+                "solver price tolerance"
             )

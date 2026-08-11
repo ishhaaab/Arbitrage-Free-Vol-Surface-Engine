@@ -20,27 +20,32 @@ def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -
     Uses Newton-Raphson (with analytic vega) as a fast-path, then falls
     back to Brent if Newton fails to converge.
 
-    Branch contract:
+    Return contract:
+
+    - Every returned sigma lies inside ``[low, high]``.  A computed root
+      that falls outside the bracket is treated exactly like "no root in
+      bracket": the function returns ``None`` — it never clamps.
+    - ``None`` is also returned when the price admits no root inside
+      ``[low, high]`` (``f(low) * f(high) > 0`` on the Brent path) or
+      when the price is unreachable at any sigma in the bracket (e.g. a
+      call priced at or beyond the discounted spot).
+    - Deep ITM/OTM prices: the BS price can be locally flat in sigma
+      beyond double precision (the vega contribution vanishes), so the
+      implied volatility is NOT identifiable there — many sigmas
+      reproduce the same price.  The function returns a root within
+      ``[low, high]`` when one exists, even if it is non-unique; when no
+      root exists within bounds (including a computed root that lands
+      outside bounds), it returns ``None``.
+
+    Branch notes:
 
     - Newton runs at most ``_NEWTON_ITERS`` iterations from the
       ``sqrt(2*pi/T) * price / S`` starting point and returns as soon as
-      ``|price(sigma) - target| < _NEWTON_TOL``.  It aborts (falling
-      through to Brent) when vega is non-positive, or when the iterate
-      leaves ``(0, high * 1.5]``.
-    - The ``low``/``high`` pair is the Brent bracket: if the price admits
-      no root inside ``[low, high]`` (``f(low) * f(high) > 0``), ``None``
-      is returned.  The Newton fast-path is NOT bracketed by ``low``/
-      ``high`` — it may return a converged value above ``high`` (or below
-      it) without consulting the bracket; ``high * 1.5`` only guards
-      against divergence.
-    - ``None`` is also returned for prices that are unreachable at any
-      sigma in the bracket (e.g. a call priced at or beyond the
-      discounted spot).
-    - For prices where the BS price is flat in sigma beyond double
-      precision (deep ITM/OTM quotes whose vega contribution vanishes),
-      the returned sigma is not unique; the solver returns whichever
-      value satisfies its price tolerance, which may be a bracket
-      endpoint.
+      ``|price(sigma) - target| < _NEWTON_TOL`` AND ``low <= sigma <=
+      high``.  It aborts (falling through to Brent) when vega is
+      non-positive, or when the iterate leaves ``(0, high * 1.5]``.
+    - The ``low``/``high`` pair brackets Brent; the ``brentq`` root is
+      re-checked against the bounds before being returned.
     """
     S = model.spot
     K = model.contract.strike
@@ -57,7 +62,9 @@ def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -
         p = price_floats(S, K, T, r, q, sigma, is_call)
         diff = p - target
         if abs(diff) < _NEWTON_TOL:
-            return sigma
+            if low <= sigma <= high:
+                return sigma
+            return None
         v = vega_floats(S, K, T, r, q, sigma)
         if v <= 0.0:
             break
@@ -73,4 +80,7 @@ def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -
     f_high = f(high)
     if f_low * f_high > 0:
         return None
-    return cast(float, brentq(f, low, high))
+    root = cast(float, brentq(f, low, high))
+    if low <= root <= high:
+        return root
+    return None
