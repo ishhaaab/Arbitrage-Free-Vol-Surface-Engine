@@ -138,9 +138,12 @@ def _expiry_to_date_str(x: Any) -> str:
     """
     to_date = getattr(x, "date", None)
     if callable(to_date):
-        # datetime / pandas.Timestamp / date all expose .date()
+        # datetime / pandas.Timestamp expose a callable .date() method.
+        # Plain ``date`` objects do NOT (``getattr`` returns None), so
+        # they fall through to the string branch below instead.
         return to_date().isoformat()
-    # String form: strip any trailing time component ("T" or space).
+    # String form (or a bare ``date`` object): strip any trailing time
+    # component ("T" or space).
     return str(x).strip().split("T")[0].split(" ")[0]
 
 

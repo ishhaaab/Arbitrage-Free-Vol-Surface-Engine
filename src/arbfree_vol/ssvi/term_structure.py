@@ -406,7 +406,9 @@ def _hard_fit_is_degenerate_corner(
 ) -> bool:
     """Detect a hard eSSVI fit pinned on the H&M Prop 3.1 boundary.
 
-    Two signals must AGREE before a fit is flagged:
+    A fit is flagged through either of two paths:
+
+    **Path A — baseline available: two signals must AGREE.**
 
     1. **Boundary proximity** — the hard fit landed within a small
        margin of the H&M calendar-arb boundary that ``_fit_slice``
@@ -427,6 +429,14 @@ def _hard_fit_is_degenerate_corner(
        legitimate near-flat chi pair) has a small RMSE and is NOT
        flagged.
 
+    **Path B — baseline unavailable: boundary proximity alone flags.**
+    When the unconstrained baseline fit raises, the RMSE comparison
+    cannot be computed — but a fit pinned within the boundary window is
+    exactly the knife-edge pattern this check exists to catch, so it IS
+    flagged and routed to the fallback rather than silently certified.
+    Fits outside the boundary window are never flagged, baseline or no
+    baseline.
+
     A fit flagged here is not a genuine arb-free solution — it is an
     optimizer knife-edge that converged to a feasible-but-wrong corner.
     This is the m66 / mutmut_66 pattern (docs/code_review_findings.md
@@ -437,13 +447,6 @@ def _hard_fit_is_degenerate_corner(
 
     The first slice has no H&M predecessor boundary to sit on, so
     ``prev=None`` is never flagged.
-
-    If the unconstrained baseline fit cannot be computed (raises), the
-    RMSE comparison is unavailable — but a fit pinned within the boundary
-    window is exactly the knife-edge pattern this check exists to catch,
-    so it IS flagged and routed to the fallback rather than silently
-    certified.  Fits outside the boundary window are never flagged,
-    baseline or no baseline.
 
     Returns
     -------
