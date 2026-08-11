@@ -156,12 +156,29 @@ def test_zero_bid_or_ask_exactly_rejected() -> None:
 
 
 def test_zero_bid_or_ask_missing_side_is_ok() -> None:
-    """Documented contract: a missing bid or ask is not a zero-bid/ask
-    violation — only an exactly-zero present side is."""
+    """Documented contract: a missing bid or ask short-circuits the rule
+    BEFORE the zero check, so a missing side is never a zero-bid/ask
+    violation regardless of the present side's value (see also the mixed
+    zero/missing case below)."""
     q_missing_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, ask=10.0)
     q_missing_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0)
     assert _check_zero_bid_or_ask(q_missing_bid) is None
     assert _check_zero_bid_or_ask(q_missing_ask) is None
+
+
+def test_zero_bid_or_ask_mixed_zero_and_missing_side_is_ok() -> None:
+    """Mixed zero/missing sides pass per the ACTUAL code: the
+    ``q.bid is None or q.ask is None`` early return fires before the
+    zero check, so bid=0/ask=None and bid=None/ask=0 are both kept —
+    a zero-bid/ask violation requires BOTH sides present."""
+    q_zero_bid_missing_ask = Quote(
+        strike=100.0, option_type=OptionType.CALL, price=5.0, bid=0.0
+    )
+    q_missing_bid_zero_ask = Quote(
+        strike=100.0, option_type=OptionType.CALL, price=5.0, ask=0.0
+    )
+    assert _check_zero_bid_or_ask(q_zero_bid_missing_ask) is None
+    assert _check_zero_bid_or_ask(q_missing_bid_zero_ask) is None
 
 
 def test_zero_bid_or_ask_small_positive_values_pass() -> None:

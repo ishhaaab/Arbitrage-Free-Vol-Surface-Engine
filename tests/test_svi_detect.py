@@ -205,11 +205,15 @@ def test_min_variance_just_outside_threshold_clean() -> None:
 
 def test_min_variance_exact_threshold_lands_safe_side() -> None:
     """w_min = -1e-4 in exact arithmetic; float rounding of
-    a = -1.0 - 1e-4 yields w_min = -9.999999999998899e-05, a hair ABOVE
-    the -1e-4 threshold, so the strict ``<`` comparison does NOT flag.
-    (The butterfly check is free to flag this extreme param set; we only
-    pin the min-variance side.)"""
-    p = SVIParams(a=-1.0 - 1e-4, b=1.0, rho=0.0, m=0.0, sigma=1.0)
+    a = -(0.03) - 1e-4 yields w_min = -9.99999999999994e-05, a hair
+    ABOVE the -1e-4 threshold, so the strict ``<`` comparison does NOT
+    flag.  Parameters are kept moderate (b=0.3, sigma=0.1) so the
+    butterfly bounded minimization performs clean arithmetic — the
+    earlier extreme fixture (a=-1.0001, b=1.0, sigma=1.0) emitted a
+    RuntimeWarning from ``minimize_scalar`` on the -inf g(k) region.
+    The butterfly check may still flag this param set (w0 dips below
+    zero at k=0); we only pin the min-variance side."""
+    p = SVIParams(a=-0.03 - 1e-4, b=0.3, rho=0.0, m=0.0, sigma=0.1)
 
     w_min = min_total_variance(p)
     assert -1e-4 < w_min < -9.9e-5, f"float rounding must sit above -1e-4, got {w_min}"
