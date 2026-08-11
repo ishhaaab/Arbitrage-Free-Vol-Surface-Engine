@@ -239,37 +239,116 @@ class TestParameterMatrix:
 class TestPCA:
     """Properties of the PCA decomposition."""
 
-    def test_pca_returns_requested_n_components(self) -> None:
-        """PCA returns exactly the requested count, capped by the SVD
-        dimensions ``min(n_components, n_features, n_snapshots - 1)``.
+    def test_pca_cap_is_dimensional_not_rank(self) -> None:
+        """The component cap is ``min(n_components, n_features,
+        n_snapshots - 1)`` — a DIMENSIONAL cap, not a rank cap.
 
-        The input is a deterministic known-rank matrix (6 snapshots x 10
-        features, rank 2), so the returned counts are exact and cannot
-        drift with calibration noise:
-        - a request above the rank AND above the ``n_snapshots - 1`` cap
-          returns exactly ``min(7, 10, 5) = 5`` components;
-        - a request below the rank returns exactly that count.
+        The 10 x 4 input below has rank 2, so a rank-based cap would
+        return at most 2 components.  The code instead caps by matrix
+        dimensions (``min(request, 4, 9)``):
+        - requesting more than the cap returns EXACTLY the cap (4);
+        - requesting the cap returns exactly the cap (4) — two of the
+          four components have zero variance because the rank is 2;
+        - requesting below the cap returns exactly the request (2).
         """
         rng = np.random.RandomState(7)
-        basis = rng.normal(size=(2, 10))      # two independent directions
-        weights = rng.normal(size=(6, 2))     # each row is a combination
-        matrix = weights @ basis              # shape (6, 10), rank 2
+        basis = rng.normal(size=(2, 4))   # two independent directions
+        weights = rng.normal(size=(10, 2))
+        matrix = weights @ basis          # shape (10, 4), rank 2
+        assert np.linalg.matrix_rank(matrix) == 2
 
-        result_7 = pca_deformations(matrix, n_components=7)
-        assert len(result_7.components) == 5, (
-            f"expected exactly min(7, 10, 5) = 5 components, got "
-            f"{len(result_7.components)}"
+        cap = min(10 - 1, 4)              # n_snapshots - 1, n_features
+        for requested in (7, 20, cap + 3):
+            result = pca_deformations(matrix, n_components=requested)
+            assert len(result.components) == cap, (
+                f"requesting {requested} > cap must return exactly "
+                f"min(requested, rows, cols) = {cap}, got "
+                f"{len(result.components)}"
+            )
+            assert len(result.explained_variance_ratio) == cap
+            assert all(len(s) == cap for s in result.scores)
+
+        result_at_cap = pca_deformations(matrix, n_components=cap)
+        assert len(result_at_cap.components) == cap
+        # The extra components beyond the rank carry zero variance.
+        assert result_at_cap.explained_variance_ratio[2] == pytest.approx(0.0, abs=1e-20)
+
+        result_below = pca_deformations(matrix, n_components=2)
+        assert len(result_below.components) == 2
+        assert len(result_below.explained_variance_ratio) == 2
+        assert all(len(s) == 2 for s in result_below.scores)
+
+    def test_pca_known_rank_reconstruction(self) -> None:
+        """A genuinely rank-2 matrix reconstructs exactly with k=2 via the
+        API's own reconstruction path (``scores @ components``) and does
+        NOT match with k=1 — proving two meaningful components.
+
+        The matrix is built as the sum of two outer products, so its
+        centred form lives in a 2-D subspace.  The module returns
+        components (rows of ``Vt``) and scores (``U * S``); the intended
+        reconstruction is ``scores @ components``, which equals the
+        centred matrix when k >= rank.
+        """
+        rng = np.random.RandomState(11)
+        v1 = rng.normal(size=4)
+        v2 = rng.normal(size=4)
+        u1 = rng.normal(size=10)
+        u2 = rng.normal(size=10)
+        matrix = np.outer(u1, v1) + np.outer(u2, v2)
+        assert np.linalg.matrix_rank(matrix) == 2
+
+        centred = matrix - matrix.mean(axis=0)
+
+        result_k2 = pca_deformations(matrix, n_components=2)
+        recon_k2 = np.asarray(result_k2.scores) @ np.vstack(result_k2.components)
+        assert np.allclose(recon_k2, centred, atol=1e-10), (
+            "k=2 reconstruction must reproduce the centred matrix"
         )
-        assert len(result_7.explained_variance_ratio) == 5
-        assert len(result_7.scores[0]) == 5
-        # Only the two nonzero singular values explain variance.
-        assert result_7.explained_variance_ratio[2] == pytest.approx(0.0, abs=1e-20)
-        assert result_7.explained_variance_ratio[3] == pytest.approx(0.0, abs=1e-20)
 
-        result_1 = pca_deformations(matrix, n_components=1)
-        assert len(result_1.components) == 1
-        assert len(result_1.explained_variance_ratio) == 1
-        assert len(result_1.scores[0]) == 1
+        result_k1 = pca_deformations(matrix, n_components=1)
+        recon_k1 = np.asarray(result_k1.scores) @ np.vstack(result_k1.components)
+        assert not np.allclose(recon_k1, centred, atol=1e-10), (
+            "k=1 reconstruction must NOT match: the matrix has two "
+            "meaningful components"
+        )
+
+    def test_pca_deterministic_output(self) -> None:
+        """Two calls with identical input return identical arrays."""
+        rng = np.random.RandomState(23)
+        matrix = rng.normal(size=(8, 6))
+        result_1 = pca_deformations(matrix, n_components=3)
+        result_2 = pca_deformations(matrix, n_components=3)
+
+        assert len(result_1.components) == len(result_2.components) == 3
+        for c1, c2 in zip(result_1.components, result_2.components):
+            assert np.array_equal(c1, c2)
+        assert result_1.explained_variance_ratio == result_2.explained_variance_ratio
+        assert result_1.scores == result_2.scores
+
+    def test_pca_degenerate_inputs_return_empty_result(self) -> None:
+        """Empty and all-NaN matrices follow the documented degenerate
+        contract: an empty PCAResult with no components."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+
+            # Empty (0 rows): zero snapshots, no columns survive the drop.
+            empty = pca_deformations(np.empty((0, 4)), n_components=3)
+            assert empty.n_snapshots == 0
+            assert len(empty.components) == 0
+            assert empty.explained_variance_ratio == ()
+            assert empty.scores == ()
+
+            # All-NaN (5 rows): every column is dropped by the 50 % NaN
+            # rule -> zero retained features, one empty score per row.
+            nan_matrix = pca_deformations(
+                np.full((5, 4), np.nan), n_components=3
+            )
+            assert nan_matrix.n_snapshots == 5
+            assert nan_matrix.n_features == 0
+            assert len(nan_matrix.components) == 0
+            assert nan_matrix.scores == ((), (), (), (), ())
 
     def test_single_parameter_drift_first_component_dominates(self) -> None:
         """A drift in rho across 20 snapshots yields a dominant first PC.

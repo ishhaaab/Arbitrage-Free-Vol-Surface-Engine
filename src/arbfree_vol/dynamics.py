@@ -188,8 +188,20 @@ def pca_deformations(
     PCA is then performed via ``numpy.linalg.svd`` on the centred matrix.
     The number of components returned is capped at
     ``min(n_components, n_features_retained, n_snapshots - 1)``.
-    Single-snapshot input (``n_snapshots < 2``) yields an empty
-    :class:`PCAResult` as no variance can be estimated from one observation.
+
+    The cap is purely dimensional — it depends only on the requested count
+    and the matrix shape (columns that survive the NaN drop, rows minus
+    one), NOT on the numerical rank of the input.  Requesting more
+    components than the rank therefore returns the full dimensional cap,
+    with trailing components carrying (approximately) zero explained
+    variance.
+
+    Degenerate inputs yield an empty :class:`PCAResult` (no components,
+    empty ``explained_variance_ratio``, one empty score tuple per row):
+    single-snapshot input (``n_snapshots < 2``) since no variance can be
+    estimated from one observation, an all-NaN matrix (every column is
+    dropped by the 50 % NaN rule), and an empty ``(0, n_features)`` matrix
+    (zero rows; the mean-of-empty-slice column drop retains no columns).
 
     Parameters
     ----------
