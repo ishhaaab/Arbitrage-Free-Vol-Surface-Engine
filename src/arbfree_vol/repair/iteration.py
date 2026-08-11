@@ -22,6 +22,8 @@ def iterative_repair(surface: VolSurface,
 
     Returns a list of RepairReport objects (one per iteration).
     The final element is the last repair result.
+
+    ``max_iters=0`` runs no iterations and returns an empty list.
     """
     reports: list[RepairReport]= []
     current= surface

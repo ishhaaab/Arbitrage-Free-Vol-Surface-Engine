@@ -81,3 +81,99 @@ def test_iterative_max_iters_respected() -> None:
     # Should iterate without crashing, even if no quotes can be fitted.
     assert len(reports) <= 3
     assert len(reports[-1].fitted_slices) == 0
+
+
+def test_iterative_max_iters_zero_returns_empty() -> None:
+    """``max_iters=0`` runs no iterations and returns an empty list
+    (documented contract in ``iterative_repair``)."""
+    surface = _clean_surface(n_strikes=7)
+
+    reports = iterative_repair(surface, max_iters=0)
+
+    assert reports == []
+
+
+def test_iterative_repair_fixpoint_stability() -> None:
+    """A run converges to a stable fixpoint: re-running
+    ``iterative_repair`` on the returned final cleaned surface yields
+    the SAME rejection outcome — no additional rejects and identical
+    final report key fields (arb-free, n_rejected, n_violations_after,
+    n_slices_fitted)."""
+    # A surface that needs one rejection (bad call at K=100 priced at 20).
+    quotes: list[Quote] = []
+    for K in [80, 90, 100, 110, 120]:
+        for o in [OptionType.CALL, OptionType.PUT]:
+            quotes.append(Quote(strike=K, option_type=o, price=_bp(o, K)))
+    quotes.append(Quote(strike=100.0, option_type=OptionType.CALL, price=20.0))
+    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q,
+                         slices=[ExpirySlice(expiry_time=T, quotes=quotes)])
+
+    reports = iterative_repair(surface, max_iters=5)
+    final_surface = reports[-1].cleaned_surface
+    assert final_surface is not None
+
+    reports2 = iterative_repair(final_surface, max_iters=5)
+    final2 = reports2[-1]
+
+    # No additional rejects: the fixpoint surface is stable.
+    assert final2.metrics.n_rejected == 0, (
+        f"fixpoint run must reject nothing, got {final2.metrics.n_rejected}"
+    )
+    assert final2.remaining_violations.is_arbitrage_free
+    # Identical final report key fields.
+    assert final2.metrics.n_violations_after == 0
+    assert final2.metrics.n_slices_fitted == reports[-1].metrics.n_slices_fitted
+
+
+def test_iterative_repair_stops_after_two_zero_rejections(monkeypatch) -> None:
+    """The two-consecutive-zero-rejection stop branch is exercised: when
+    two iterations in a row reject ZERO quotes but the surface is NOT yet
+    arb-free (violations remain that cannot be rejected away), the loop
+    stops after the second zero-rejection iteration instead of running to
+    ``max_iters``.
+
+    The repair step is monkeypatched with a canned non-arb-free report so
+    the branch is deterministic (the real pipeline would converge to
+    arb-free before reaching it)."""
+    import arbfree_vol.repair.iteration as it_mod
+    from arbfree_vol.arbitrage.report import (
+        ArbitrageReport,
+        ArbitrageViolation,
+        ViolationType,
+    )
+    from arbfree_vol.repair.report import RepairReport, RepairMetrics
+
+    surface = _clean_surface(n_strikes=7)
+    cleaned = surface  # the fake repair never changes the surface
+
+    def _fake_report() -> RepairReport:
+        return RepairReport(
+            rejected=(),
+            fitted_slices=(),
+            remaining_violations=ArbitrageReport(violations=[
+                ArbitrageViolation(
+                    kind=ViolationType.CALENDAR,
+                    detail="fake remaining violation",
+                    magnitude=0.1,
+                ),
+            ]),
+            metrics=RepairMetrics(
+                n_rejected=0, n_total_quotes=0,
+                n_slices_input=0, n_slices_fitted=0,
+                n_violations_before=0, n_violations_after=1,
+            ),
+            cleaned_surface=cleaned,
+        )
+
+    monkeypatch.setattr(it_mod, "repair", lambda _surface: _fake_report())
+
+    reports = iterative_repair(surface, max_iters=5)
+
+    # Two zero-rejection iterations, then the documented stop condition
+    # (two consecutive n_rejected == 0) fires.
+    assert len(reports) == 2, (
+        f"expected the loop to stop after 2 zero-rejection iterations, "
+        f"got {len(reports)} reports"
+    )
+    assert all(r.metrics.n_rejected == 0 for r in reports)
+    assert all(not r.remaining_violations.is_arbitrage_free for r in reports)
