@@ -127,6 +127,27 @@ def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:
     ------
     ValueError
         If *T* is outside the bracketed range of the surface.
+
+    Edge behaviour
+    --------------
+    - Only the *expiry* dimension is range-checked.  *T* outside
+      ``[T_min, T_max]`` raises ``ValueError`` (with a
+      ``_EXACT_EXPIRY_TOL`` slack at each end).  A single-slice surface
+      therefore evaluates exactly at its expiry and rejects every other
+      *T*.
+    - Strikes are NOT range-checked: the SVI smile is evaluated at
+      ``log(K / F)``, so wing extrapolation in the strike dimension is
+      inherent — any positive *K* produces the smile's extrapolated
+      value.  A non-positive *K* raises ``ValueError`` (math domain
+      error from ``log``).
+    - The interpolated total variance is returned as-is; no
+      non-negativity check is applied (a non-arbitrage-free fit can
+      produce negative *w*).  ``iv_at`` raises ``ValueError`` from
+      ``math.sqrt`` when *w* is negative.
+    - Duplicate expiry times in ``fitted_slices`` are resolved by
+      first-slice precedence: the earliest slice in the tuple whose
+      expiry matches *T* is used (the exact-match loop returns on the
+      first hit).
     """
     slices = fs.fitted_slices
     n = len(slices)
@@ -216,6 +237,13 @@ def iv_at(fs: FittedSurface, K: float, T: float) -> float:
     -------
     float
         Annualised implied volatility.
+
+    Raises
+    ------
+    ValueError
+        If *T* is outside the bracketed range (propagated from
+        ``total_variance_at``), or if the interpolated total variance is
+        negative (math domain error from ``sqrt``).
     """
     w = total_variance_at(fs, K, T)
     return sqrt(w / T)
