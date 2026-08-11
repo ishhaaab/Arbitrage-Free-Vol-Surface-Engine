@@ -5,6 +5,8 @@ from arbfree_vol.ingestion.cleaning import (
     RejectionRule,
     clean_quotes,
     _check_negative_price,
+    _check_zero_price,
+    _check_zero_bid_or_ask,
     _check_crossed_market,
     _check_wide_spread,
     _check_intrinsic_violation,
@@ -119,3 +121,112 @@ def test_clean_quotes_keeps_clean_and_rejects_bad() -> None:
     rules = {r.rule for r in rejected}
     assert RejectionRule.CROSSED_MARKET in rules
     assert RejectionRule.NEGATIVE_PRICE in rules
+
+
+# ---------------------------------------------------------------------------
+# Exact-boundary tests for the remaining cleaning rules
+# ---------------------------------------------------------------------------
+
+
+def test_zero_price_exactly_rejected() -> None:
+    """The zero-price rule rejects only price == 0 exactly."""
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=0.0)
+    rec = _check_zero_price(q)
+    assert rec is not None
+    assert rec.rule == RejectionRule.ZERO_PRICE
+
+
+def test_tiny_positive_price_kept() -> None:
+    """Any positive price — even 1e-12 — passes the zero-price rule."""
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1e-12)
+    assert _check_zero_price(q) is None
+
+
+def test_zero_bid_or_ask_exactly_rejected() -> None:
+    """bid == 0 or ask == 0 violates; missing sides are fine (only the
+    price check is mandatory) and small-but-positive values pass."""
+    q_zero_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=0.0, ask=10.0)
+    rec = _check_zero_bid_or_ask(q_zero_bid)
+    assert rec is not None
+    assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
+    assert "bid=0.0" in rec.detail
+
+    q_zero_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0, ask=0.0)
+    assert _check_zero_bid_or_ask(q_zero_ask) is not None
+
+
+def test_zero_bid_or_ask_missing_side_is_ok() -> None:
+    """Documented contract: a missing bid or ask is not a zero-bid/ask
+    violation — only an exactly-zero present side is."""
+    q_missing_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, ask=10.0)
+    q_missing_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0)
+    assert _check_zero_bid_or_ask(q_missing_bid) is None
+    assert _check_zero_bid_or_ask(q_missing_ask) is None
+
+
+def test_zero_bid_or_ask_small_positive_values_pass() -> None:
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=0.02, bid=0.01, ask=0.02)
+    assert _check_zero_bid_or_ask(q) is None
+
+
+def test_negative_bid_or_ask_flagged_with_detail() -> None:
+    """Negative bid/ask are NEGATIVE_PRICE violations naming the field."""
+    q_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=-1.0, ask=10.0)
+    rec = _check_negative_price(q_bid)
+    assert rec is not None
+    assert rec.rule == RejectionRule.NEGATIVE_PRICE
+    assert "bid=-1.0" in rec.detail
+
+    q_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0, ask=-1.0)
+    rec = _check_negative_price(q_ask)
+    assert rec is not None
+    assert rec.rule == RejectionRule.NEGATIVE_PRICE
+    assert "ask=-1.0" in rec.detail
+
+
+def test_near_expiry_exact_cutoff_kept() -> None:
+    """The rule rejects only expiry_time < min_T: equality at the cutoff
+    is kept."""
+    min_T = 7.0 / 365.0
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)
+    sl = ExpirySlice(expiry_time=min_T, quotes=[q])
+    assert _check_near_expiry(sl, q, min_T) is None
+
+
+def test_near_expiry_just_below_cutoff_rejected() -> None:
+    """One floating-point step below the cutoff is rejected."""
+    min_T = 7.0 / 365.0
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)
+    sl = ExpirySlice(expiry_time=min_T - 1e-9, quotes=[q])
+    rec = _check_near_expiry(sl, q, min_T)
+    assert rec is not None
+    assert rec.rule == RejectionRule.NEAR_EXPIRY
+
+
+def test_wide_spread_exact_boundary_kept() -> None:
+    """bid=3, ask=5 -> mid=4 -> ratio = (5-3)/4 = 0.5 == max_ratio.  The
+    rule rejects only ratio > max_ratio, so equality is kept."""
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=4.0, bid=3.0, ask=5.0)
+    assert _check_wide_spread(q, max_ratio=0.5) is None
+
+
+def test_wide_spread_just_above_boundary_rejected() -> None:
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=4.0, bid=2.99, ask=5.0)
+    rec = _check_wide_spread(q, max_ratio=0.5)
+    assert rec is not None
+    assert rec.rule == RejectionRule.WIDE_SPREAD
+
+
+def test_intrinsic_violation_exact_tolerance_boundary() -> None:
+    """spot=100, strike=80 -> intrinsic=20; the rule rejects only
+    price < intrinsic - 1e-6.  Just above the tolerance: kept; just
+    below: rejected."""
+    sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
+
+    q_above = Quote(strike=80.0, option_type=OptionType.CALL, price=20.0 - 5e-7)
+    assert _check_intrinsic_violation(sl, q_above, SPOT) is None
+
+    q_below = Quote(strike=80.0, option_type=OptionType.CALL, price=20.0 - 2e-6)
+    rec = _check_intrinsic_violation(sl, q_below, SPOT)
+    assert rec is not None
+    assert rec.rule == RejectionRule.INTRINSIC_VIOLATION
