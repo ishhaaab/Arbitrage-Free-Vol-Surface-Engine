@@ -13,8 +13,12 @@ from math import sqrt
 
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, to_raw_svi_params
 from arbfree_vol.ssvi.term_structure import (
+    _GJ_CONDITION1_STRICT_EPS,
+    _butterfly_constraints,
     fit_ssvi_surface_sequential,
     verify_hm_condition,
+    verify_hm_condition_breakdown,
+    verify_ssvi_calendar_free,
     SequentialFitResult,
 )
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
@@ -547,13 +551,116 @@ def test_verify_ssvi_calendar_free_passes_benign_fit() -> None:
 def test_verify_ssvi_calendar_free_near_equal_chi() -> None:
     """The gate passes on the near-flat (near-equal-chi) surface and does
     not false-positive on numerical noise around chi_2 ~ chi_1."""
-    from arbfree_vol.ssvi.term_structure import verify_ssvi_calendar_free
-
     flat_w = 0.04
     pts = [(float(k), flat_w) for k in np.linspace(-1.0, 1.0, 9)]
     result = fit_ssvi_surface_sequential([(0.25, pts), (0.50, pts)])
     params = [p for _, p in result.fitted_slices]
     assert verify_ssvi_calendar_free(params)
+
+
+# ── Mutation-testing regressions (term_structure.py) ─────────────────
+# These pin the exact constraint arithmetic and boundary semantics that
+# the end-to-end fit tests only exercise through an interior optimum,
+# so constraint-function mutations otherwise survive.
+def test_butterfly_constraints_exact_values() -> None:
+    """The four GJ butterfly residuals must equal their closed-form
+    expressions exactly (pins the arb-check arithmetic, not just the
+    fitted outcome).  rho != 0 so the (1+rho)/(1-rho) split is
+    distinguishable.
+
+    The first two residuals (condition 1, ``theta*psi*(1+|rho|) < 4``,
+    STRICT in GJ Theorem 4.2) are shifted by
+    ``_GJ_CONDITION1_STRICT_EPS`` so scipy's closed constraint sets
+    reject an exact equality with the boundary; the last two (condition
+    2, non-strict) are unshifted.  ``rtol=0`` pins the nudge — the
+    default rtol would hide it."""
+    for theta, rho, psi in [
+        (0.5, -0.3, 1.2),
+        (0.2, 0.6, 2.0),
+    ]:
+        res = _butterfly_constraints(theta, rho, psi)
+        expected = np.array([
+            4.0 - theta * psi * (1.0 + rho) - _GJ_CONDITION1_STRICT_EPS,
+            4.0 - theta * psi * (1.0 - rho) - _GJ_CONDITION1_STRICT_EPS,
+            4.0 - theta * psi * psi * (1.0 + rho),
+            4.0 - theta * psi * psi * (1.0 - rho),
+        ])
+        assert np.allclose(res, expected, atol=1e-12, rtol=0)
+
+
+def test_verify_hm_condition_empty_and_single_slice() -> None:
+    """Degenerate inputs are arb-free by convention (no pair to check)."""
+    assert verify_hm_condition([]) is True
+    assert verify_hm_condition([SSVIParams(theta=0.1, rho=0.0, psi=1.0)]) is True
+    assert verify_ssvi_calendar_free(None) is True
+    assert verify_ssvi_calendar_free(
+        [SSVIParams(theta=0.1, rho=0.0, psi=1.0)]
+    ) is True
+
+
+def test_verify_hm_condition_detects_two_slice_theta_dip() -> None:
+    """A two-slice pair whose theta decreases must be rejected (kills
+    mutations that only check the first slice or skip the n<=2 case)."""
+    p1 = SSVIParams(theta=0.08, rho=-0.3, psi=0.5)
+    p2 = SSVIParams(theta=0.03, rho=-0.2, psi=0.35)
+    assert verify_hm_condition([p1, p2]) is False
+
+
+def test_verify_hm_condition_detects_violation_on_last_pair() -> None:
+    """A three-slice surface whose FINAL adjacent pair violates must be
+    rejected (kills range(n-2) that drops the last pair)."""
+    good = SSVIParams(theta=0.08, rho=-0.3, psi=0.5)
+    dip = SSVIParams(theta=0.05, rho=-0.1, psi=0.5)
+    assert verify_hm_condition([good, good, dip]) is False
+
+
+def test_verify_hm_condition_ratio_boundary() -> None:
+    """A pair with |ratio| strictly in (1, 2) must be rejected: kills the
+    threshold loosening (> 1 -> > 2) and the denominator arithmetic
+    mutations (chi[i+1]-chi[i] -> +, / denom -> * denom)."""
+    p1 = SSVIParams(theta=1.0, rho=0.90, psi=1.0)
+    p2 = SSVIParams(theta=1.05, rho=0.95, psi=1.0)
+    # chi1=1.0, chi2=1.05, numerator=|0.95*1.05 - 0.90*1.0|=0.0975,
+    # denom=0.05 => ratio=1.95 in (1, 2).
+    assert verify_hm_condition([p1, p2]) is False
+
+
+def test_verify_hm_condition_breakdown_schema() -> None:
+    """The breakdown dicts must expose the documented keys and flag a
+    ratio strictly above 1 (kills key renames and threshold loosening in
+    the diagnostic output)."""
+    p1 = SSVIParams(theta=1.0, rho=0.90, psi=1.0)
+    p2 = SSVIParams(theta=1.05, rho=0.95, psi=1.0)
+    rows = verify_hm_condition_breakdown(
+        [(0.25, p1), (1.00, p2)], [None],
+    )
+    # Only slices with a valid predecessor get a row.
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["slice_T"] == 1.00
+    assert set(row.keys()) == {
+        "slice_T", "prev_T", "theta_self", "theta_prev", "theta_ok",
+        "chi_self", "chi_prev", "chi_ok", "rho_chi_self",
+        "rho_chi_prev", "ratio_value", "ratio_ok", "failing_conditions",
+    }
+    assert row["ratio_value"] == pytest.approx(1.95, abs=1e-6)
+    assert row["ratio_ok"] is False
+    assert "ratio" in row["failing_conditions"]
+
+
+def test_fit_ssvi_surface_sequential_recovers_ground_truth() -> None:
+    """The hard-constrained fit must recover the (feasible) ground-truth
+    parameters, not merely produce a monotone surface.  This pins the
+    optimizer bounds/objective: a mutation that breaks the variable
+    bounds or the objective would move the optimum away from truth."""
+    result = fit_ssvi_surface_sequential(_make_slices_data())
+    assert result.fallback_slices == []
+    fitted_by_T = dict(result.fitted_slices)
+    for T, truth in zip(_EXPIRIES, _TRUTH):
+        p = fitted_by_T[T]
+        assert p.theta == pytest.approx(truth["theta"], rel=0.02)
+        assert p.rho == pytest.approx(truth["rho"], abs=0.02)
+        assert p.psi == pytest.approx(truth["psi"], rel=0.05)
 
 
 # ── Mutation-testing regressions: seed block & fallback routing ──────
@@ -747,27 +854,23 @@ def test_fallback_slice_fitted_slices_prev_keeps_predecessor(monkeypatch) -> Non
     "within eps of the H&M boundary is silently certified without a margin check"
 )
 def test_hard_fit_within_eps_of_boundary_not_silently_certified(monkeypatch) -> None:
-    """Desired invariant: a hard-fit that lands within eps of the H&M
-    monotonicity/ratio boundary must NOT be silently certified as
-    arb-free without a margin check — it must either fall back or be
-    flagged (repair_infeasible).
+    """Desired invariant: a hard-fit pinned within eps of the H&M Prop 3.1
+    boundary (the m66 degenerate corner) must be routed to fallback, not
+    silently certified arb-free.
 
-    The m66 scenario forces a high seed (p0 = 1.000001) so the real
-    optimizer can converge to a feasible-but-wrong corner (theta pinned
-    at prev, RMSE ~0.05).  Currently that corner is silently certified;
-    this test is xfail-marked until a post-fit margin check lands, then
-    it flips to XPASS and self-confirms the fix.
+    Deterministic: `ts._fit_slice` is scripted to land on the measured m66
+    corner for the theta-dipping slice, `ts.fit_ssvi_slice` is scripted to
+    the true dip params for the RMSE baseline, and the real
+    `fit_ssvi_surface_sequential` routing logic runs.  Before the m66 fix
+    this test fails (the corner is accepted as hard); with the fix it
+    XPASSes (the corner is routed to fallback), self-confirming the fix.
     """
-    from scipy.optimize import OptimizeResult
     import arbfree_vol.ssvi.term_structure as ts
 
-    def _high_seed_ls(fun, x0=None, bounds=None, **kwargs):
-        return OptimizeResult(
-            x=np.array([0.08, -0.3, 1.000001], dtype=np.float64),
-            success=True, status=1, message="scripted high seed",
-        )
-
-    monkeypatch.setattr("scipy.optimize.least_squares", _high_seed_ls)
+    # m66 measured corner (docs/code_review_findings.md §6.7), pinned to its prev.
+    prev_params = SSVIParams(theta=0.1192518709, rho=0.08325035, psi=0.47564518)
+    corner = SSVIParams(theta=0.119251872, rho=0.083266515, psi=0.475653565)
+    truth2 = SSVIParams(theta=0.07, rho=0.2, psi=0.55)
 
     ks = np.linspace(-1.0, 1.0, 9)
     slices_data = [
@@ -776,16 +879,21 @@ def test_hard_fit_within_eps_of_boundary_not_silently_certified(monkeypatch) -> 
         (2.00, [(float(k), ssvi_w(float(k), 0.07, 0.2, 0.55)) for k in ks]),
     ]
 
-    result = fit_ssvi_surface_sequential(slices_data)
-    fitted_by_T = dict(result.fitted_slices)
+    real_fit_slice = ts._fit_slice
 
-    if 2.00 in fitted_by_T:
-        theta_delta = fitted_by_T[2.00].theta - fitted_by_T[1.00].theta
-        assert theta_delta > 1e-4, (
-            "hard-fit sits within eps of the H&M monotonicity boundary "
-            f"(theta delta {theta_delta:.3e}); must not be silently "
-            "certified without a margin check"
-        )
+    def _scripted_fit_slice(points, prev=None, **kwargs):
+        k0, w0 = points[0]
+        if abs(w0 - ssvi_w(k0, 0.07, 0.2, 0.55)) < 1e-8:
+            return corner        # T=2.0 dip slice -> m66 corner
+        if abs(w0 - ssvi_w(k0, 0.12, 0.1, 0.4)) < 1e-8:
+            return prev_params   # T=1.0 slice -> the prev that pins the corner
+        return real_fit_slice(points, prev=prev, **kwargs)
+
+    monkeypatch.setattr(ts, "_fit_slice", _scripted_fit_slice)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", lambda points: truth2)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
     assert 2.00 in result.fallback_slices, (
-        "the theta-dipping slice must be honestly recorded in fallback_slices"
+        "the m66 corner hard-fit must be routed to fallback, not silently certified"
     )

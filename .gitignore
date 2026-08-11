@@ -8,3 +8,5 @@ __pycache__/
 .coverage.*
 !roadmap.md
 !issues.md
+/mutants
+setup.cfg
