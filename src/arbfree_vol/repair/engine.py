@@ -410,6 +410,20 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
                             )
                             sabr_mapping_failed.append(sl.expiry_time)
                             continue
+                        except ValueError as exc:
+                            # scipy.optimize.least_squares can also raise
+                            # ValueError directly (e.g. non-finite residuals
+                            # in the SABR->SVI fit).  Same degradation as the
+                            # RuntimeError wrap: log and record the slice,
+                            # never abort repair().
+                            _logger.warning(
+                                "SABR->SVI mapping failed for slice T=%.4f "
+                                "(alpha=%.6f beta=%.6f rho=%.6f nu=%.6f) with "
+                                "ValueError: %s; slice recorded as failed-mapping",
+                                sl.expiry_time, a, b, r, n, exc,
+                            )
+                            sabr_mapping_failed.append(sl.expiry_time)
+                            continue
                         raw_svi_params = SVIParams(
                             a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi,
                         )

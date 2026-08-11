@@ -1095,6 +1095,42 @@ def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
     assert "SABR->SVI mapping failed for slice" in caplog.text
 
 
+def test_sabr_mapping_wrap_records_failed_slices_on_value_error(caplog, monkeypatch) -> None:
+    """The wrap around ``sabr_to_raw_svi_params`` must also catch the
+    ValueError that scipy's ``least_squares`` raises on non-finite
+    residuals.
+
+    Pre-fix, only RuntimeError was caught: a ValueError escaped the wrap
+    and aborted ``repair()`` entirely.  Post-fix the slice is logged and
+    recorded in ``sabr_mapping_failed_slices`` — same honest bookkeeping
+    as the RuntimeError path.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    expiries = [0.25, 0.5, 1.0]
+
+    def _raise_value_error(*args, **kwargs):
+        raise ValueError("array must not contain infs or NaNs")
+
+    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _raise_value_error)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(_flat_bs_surface(expiries), use_sabr=True)
+
+    # No exception propagates; every slice is recorded as failed-mapping.
+    assert sorted(report.sabr_mapping_failed_slices) == expiries, (
+        f"expected all expiries in sabr_mapping_failed_slices, got "
+        f"{report.sabr_mapping_failed_slices}"
+    )
+    # The mapping failure excludes the slices from both fitted outputs.
+    assert report.fitted_sabr_slices == ()
+    assert len(report.fitted_slices) == 0
+    # The failure is logged distinctly (mentions ValueError), not swallowed.
+    assert "array must not contain infs or NaNs" in caplog.text
+    assert "SABR->SVI mapping failed for slice" in caplog.text
+    assert "ValueError" in caplog.text
+
+
 # ── No-forward-estimate slice bookkeeping (all three repair paths) ──────
 # A slice whose forward price is missing from the estimated forward curve
 # (``fwd_curve.get(expiry) is None``) cannot be fitted at all.  The three
