@@ -258,3 +258,63 @@ class TestFilterOptionChain:
         assert len(drops) == 1
         assert "volume" in drops[0].missing_fields
         assert "vol" not in drops[0].reason
+
+    def test_absent_oi_column_treated_as_missing(self):
+        """A DataFrame with NO ``openInterest`` column (the provider
+        omitted the field entirely) must flag every row's OI as MISSING
+        — ``OI=missing<10`` with ``missing_fields=("open_interest",)`` —
+        never as an observed zero.
+
+        The pre-fix ``row.get("openInterest", 0)`` default conflated an
+        absent column with a real 0: a mass drop caused by a provider
+        omitting a column was mislabelled ``OI=0<10`` (illiquid strike)
+        instead of the honest missing-field reason."""
+        df = pd.DataFrame({
+            "strike": [100.0],
+            "volume": [10],
+            "bid": [9.0],
+            "ask": [11.0],
+            # no "openInterest" column at all
+        })
+        _, drops = filter_option_chain(df, "2026-08-15")
+        assert len(drops) == 1
+        assert "OI=missing<10" in drops[0].reason
+        assert drops[0].missing_fields == ("open_interest",)
+
+    def test_absent_bid_column_treated_as_missing(self):
+        """A DataFrame with NO ``bid`` column flags the bid side as
+        missing (one-sided quote drop naming 'bid') — not a fabricated
+        200% spread computed from an absent side treated as an observed
+        zero bid."""
+        df = pd.DataFrame({
+            "strike": [100.0],
+            "openInterest": [100],
+            "volume": [10],
+            "ask": [10.0],
+            # no "bid" column at all
+        })
+        _, drops = filter_option_chain(df, "2026-08-15")
+        assert len(drops) == 1
+        assert "spread=missing (missing: bid)" in drops[0].reason
+        assert drops[0].missing_fields == ("bid",)
+
+    def test_absent_column_distinct_from_present_zero(self):
+        """Side by side, an ABSENT OI column and a PRESENT OI=0 produce
+        distinct DropRecords — absent is missing, present-zero is an
+        observed zero."""
+        # Two DataFrames cannot share columns with different presence in
+        # one call, so pin the two outcomes separately and assert they
+        # differ in exactly the documented way.
+        df_zero = _make_chain_df(
+            strikes=[100.0], oi=[0], volume=[10], bid=[9.0], ask=[11.0],
+        )
+        _, drops_zero = filter_option_chain(df_zero, "2026-08-15")
+        assert "OI=0<10" in drops_zero[0].reason
+        assert drops_zero[0].missing_fields == ()
+
+        df_absent = pd.DataFrame({
+            "strike": [100.0], "volume": [10], "bid": [9.0], "ask": [11.0],
+        })
+        _, drops_absent = filter_option_chain(df_absent, "2026-08-15")
+        assert "OI=missing<10" in drops_absent[0].reason
+        assert drops_absent[0].missing_fields == ("open_interest",)

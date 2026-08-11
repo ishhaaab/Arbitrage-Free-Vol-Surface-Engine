@@ -115,6 +115,13 @@ def filter_option_chain(
     <side>)`` instead of passing with a mid fabricated from the
     available side.  Missing ``volume`` is recorded in
     ``missing_fields`` only — volume is never a criterion.
+
+    An absent COLUMN (the provider omitted the field entirely) is
+    treated the same as a missing value: the market-data fields are read
+    with ``row.get(key)`` and NO zero default, so a DataFrame without an
+    ``openInterest`` column flags every row's OI as missing rather than
+    as an observed zero.  ``strike`` keeps its 0.0 default — a row with
+    no strike is unpriceable either way.
     """
     import math
 
@@ -129,28 +136,32 @@ def filter_option_chain(
 
         missing: list[str] = []
 
-        raw_oi = row.get("openInterest", 0)
+        # No zero default on the market-data fields: an ABSENT column
+        # (``row.get(key)`` returns None) is a missing value, exactly
+        # like None/NaN/pd.NA in a present column — never an observed
+        # zero (the old ``row.get(key, 0)`` conflated the two).
+        raw_oi = row.get("openInterest")
         if _is_missing(raw_oi):
             missing.append("open_interest")
             oi = 0
         else:
             oi = int(raw_oi)
 
-        raw_vol = row.get("volume", 0)
+        raw_vol = row.get("volume")
         if _is_missing(raw_vol):
             missing.append("volume")
             vol = 0
         else:
             vol = int(raw_vol)
 
-        raw_bid = row.get("bid", 0)
+        raw_bid = row.get("bid")
         if _is_missing(raw_bid):
             missing.append("bid")
             bid = 0.0
         else:
             bid = float(raw_bid)
 
-        raw_ask = row.get("ask", 0)
+        raw_ask = row.get("ask")
         if _is_missing(raw_ask):
             missing.append("ask")
             ask = 0.0
