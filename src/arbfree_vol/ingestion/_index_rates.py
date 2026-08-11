@@ -109,15 +109,21 @@ def _get_representative_dividend_yield(symbol: str) -> float | None:
     yield — it is an approximation.  Per-expiry put-call parity is
     preferred because it uses the actual options data.
 
+    The optional ``yfinance`` dependency is imported LAZILY, inside the
+    guarded try/failure boundary and AFTER the representative mapping is
+    checked: a symbol with no representative ETF (``^VIX``-style) never
+    imports ``yfinance``, and a missing ``yfinance`` installation makes
+    this function return ``None`` (like any other fetch failure) instead
+    of raising ``ModuleNotFoundError``.
+
     Returns None if no representative is mapped, or the representative
     ticker's dividend yield cannot be fetched.
     """
-    import yfinance as yf
-
     rep = _INDEX_REPRESENTATIVE.get(symbol)
     if rep is None:
         return None
     try:
+        import yfinance as yf
         rep_ticker = yf.Ticker(rep)
         info = rep_ticker.info or {}
         q = info.get("dividendYield")

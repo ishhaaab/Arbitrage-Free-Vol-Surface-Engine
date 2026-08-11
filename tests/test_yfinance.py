@@ -246,3 +246,53 @@ def test_representative_dividend_yield_handles_exception(mock_ticker_class) -> N
 
     q = _get_representative_dividend_yield("^SPX")
     assert q is None
+
+
+def test_representative_returns_none_when_yfinance_unavailable(monkeypatch) -> None:
+    """A missing ``yfinance`` installation must make the function return
+    ``None`` — NOT raise ``ModuleNotFoundError``.
+
+    The lazy ``import yfinance`` sits inside the guarded failure
+    boundary, so an import failure degrades exactly like any other fetch
+    failure (returns None).  The pre-fix code imported yfinance BEFORE
+    the try block, so a missing installation propagated an exception
+    through the fallback path.
+    """
+    import sys
+
+    # Load the parent module first so its top-level yfinance import has
+    # already happened; then simulate yfinance being absent for the
+    # function's own lazy import.
+    from arbfree_vol.ingestion.yfinance import _get_representative_dividend_yield
+
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+
+    q = _get_representative_dividend_yield("^SPX")
+    assert q is None
+
+
+def test_representative_no_mapping_does_not_attempt_yfinance_import(monkeypatch) -> None:
+    """A symbol with no representative ETF (``^VIX``) must not import
+    ``yfinance`` at all: the representative mapping is checked BEFORE
+    the lazy import, so a ``^VIX``-style symbol never touches the
+    optional dependency."""
+    import builtins
+
+    calls = {"yfinance_imports": 0}
+    real_import = builtins.__import__
+
+    def _recording_import(name, *args, **kwargs):
+        if name == "yfinance" or name.startswith("yfinance."):
+            calls["yfinance_imports"] += 1
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _recording_import)
+
+    from arbfree_vol.ingestion.yfinance import _get_representative_dividend_yield
+
+    q = _get_representative_dividend_yield("^VIX")
+    assert q is None
+    assert calls["yfinance_imports"] == 0, (
+        "a symbol with no representative ETF must not import yfinance; "
+        "the mapping check must run before the lazy import"
+    )
