@@ -208,22 +208,52 @@ class TestImpliedVolBranches:
         assert implied_vol(model, low=0.5, high=4.0) is None   # root 0.2 below low
         assert implied_vol(model, low=0.1, high=0.5) == approx(0.2, abs=1e-6)
 
-    def test_newton_root_outside_custom_bounds_returns_none(self) -> None:
-        """The ``[low, high]`` contract applies to the Newton fast path
-        too: a converged Newton root above a custom ``high`` returns
-        None, and a deep-OTM Newton root below a custom ``low`` returns
-        None (no clamping, no silent out-of-bounds sigma)."""
+    def test_newton_root_outside_custom_bounds_falls_through_to_brent(self) -> None:
+        """A Newton root outside a custom ``[low, high]`` is
+        untrustworthy: the solver must neither return it nor return
+        None — it falls through to the Brent search over the custom
+        bracket.  ``None`` is returned only when the custom bracket
+        itself contains no root."""
         # True sigma 0.2 > custom high 0.15: Newton converges to ~0.2
-        # (it is not bounded by high in the old sense), which is now
-        # out of bounds -> None.
+        # (it is not bounded by high during iteration), which is out of
+        # the custom bracket -> Brent over [1e-6, 0.15] finds no root
+        # (f(low) < 0 and f(0.15) < 0) -> None.
         target = self._target_price(OptionType.CALL, 100.0, 0.2)
         assert implied_vol(self._input(OptionType.CALL, target), high=0.15) is None
 
-        # Deep OTM Newton root ~1.86e-16 < custom low 1e-4 -> None.
+        # Deep OTM K=500: Newton's starting point ~1.86e-16 is below the
+        # default low, so the Newton iterate is out of bounds; the true
+        # root 0.2 is inside the DEFAULT bracket.  With a custom low
+        # above the root (0.3), the Brent search over [0.3, 5] finds no
+        # root -> None.  (With custom low=1e-4 the root stays inside the
+        # custom bracket and the fall-through recovers it — see the
+        # deep-OTM regression tests.)
         target = self._target_price(OptionType.CALL, 500.0, 0.2)
         assert implied_vol(
-            self._input(OptionType.CALL, target, strike=500.0), low=1e-4
+            self._input(OptionType.CALL, target, strike=500.0), low=0.3
         ) is None
+
+    def test_no_root_when_target_outside_bracket_attainable_range(self) -> None:
+        """A target price that no sigma in ``[low, high]`` can reach has
+        no implied vol: a call priced above the maximum attainable price
+        within the bracket (the price at sigma=high) — or below the
+        minimum attainable (the price at sigma=low) — must return
+        ``None``."""
+        # Above the bracket maximum: call prices increase in sigma
+        # (vega > 0), so price(high) is the largest value attainable in
+        # the bracket; any larger target is unreachable.
+        max_price = self._target_price(OptionType.CALL, 100.0, 5.0)
+        assert implied_vol(
+            self._input(OptionType.CALL, max_price + 0.5)
+        ) is None
+
+        # Below the bracket minimum: for the ATM call the intrinsic value
+        # at sigma=low (~4.88) is the smallest attainable price in the
+        # bracket; targets below it are unreachable.
+        min_price = self._target_price(OptionType.CALL, 100.0, 1e-6)
+        assert min_price > 1.0
+        assert implied_vol(self._input(OptionType.CALL, 1.0)) is None
+        assert implied_vol(self._input(OptionType.CALL, min_price - 0.1)) is None
 
     def test_invalid_prices(self) -> None:
         """Negative price and zero time-to-expiry are rejected at the input
@@ -243,7 +273,8 @@ class TestImpliedVolBranches:
         flat in sigma beyond double precision, so the solver honours its
         price-driven tolerance: a deep-ITM strike returns an in-bounds
         sigma that reproduces the price, while a deep-OTM strike whose
-        Newton root lands below the low bound returns None (see the
+        Newton root lands below the low bound falls through to Brent and
+        returns the in-bounds root near the true sigma (see the
         non-identifiability contract)."""
         for sigma in (0.02, 4.5):
             target = self._target_price(OptionType.CALL, 100.0, sigma)
@@ -273,24 +304,64 @@ class TestImpliedVolBranches:
             f"the target price within the solver tolerance"
         )
 
-        # Deep OTM: the Newton root ~1.86e-16 sits below the default low
-        # bound, so the contract returns None instead of an out-of-bounds
-        # sigma.
+        # Deep OTM: Newton's starting point ~1.86e-16 sits below the
+        # default low bound, so Newton's converged iterate is out of
+        # bounds and the solver falls through to the bounded Brent
+        # search, which recovers an in-bounds root near the true
+        # sigma=0.2 (the BS price is flat there beyond double precision,
+        # so the recovered root lies in the flat band rather than
+        # exactly at 0.2).
         target = self._target_price(OptionType.CALL, 500.0, 0.2)
-        assert implied_vol(
+        recovered = implied_vol(
             self._input(OptionType.CALL, target, strike=500.0)
-        ) is None
+        )
+        assert recovered is not None
+        assert 1e-6 <= recovered <= 5.0
+        assert recovered == approx(0.2, abs=0.05), (
+            f"strike=500.0: expected a root near 0.2, got {recovered}"
+        )
+        bs = BlackScholesInput(
+            contract=self._contract(OptionType.CALL, 500.0),
+            spot=100,
+            expiry_time=1,
+            risk_free=0.05,
+            div_yield=0,
+            volatility=recovered,
+        )
+        assert abs(price(bs) - target) < 1e-8, (
+            f"strike=500.0: returned sigma {recovered} must reproduce "
+            f"the target price within the solver tolerance"
+        )
 
-    def test_deep_otm_flat_price_root_below_low_returns_none(self) -> None:
-        """Regression pin for the review finding: a deep-OTM call at
+    def test_deep_otm_falls_through_to_brent_and_recovers_root(self) -> None:
+        """Regression pin for the over-correction: a deep-OTM call at
         K=500 priced at sigma=0.2 has a BS price of ~7.4e-15.  Newton's
         starting point ~1.86e-16 sits below the default low bound and
         the price is flat there (|price - target| < _NEWTON_TOL at
-        sigma ~ 0), so the old solver returned 1.86e-16 — OUTSIDE
-        [low, high].  The contract now returns None."""
+        sigma ~ 0), so the over-corrected solver returned None — a
+        missed valid root.  The out-of-bounds Newton iterate is
+        untrustworthy, so the solver must fall through to the bounded
+        Brent search over [low, high] and recover the in-bounds root
+        (~0.2; the BS price is flat beyond double precision in this
+        region, so the recovered root lies in the flat band rather than
+        exactly at 0.2) — never None and never the spurious 1.86e-16."""
         target = self._target_price(OptionType.CALL, 500.0, 0.2)
         recovered = implied_vol(self._input(OptionType.CALL, target, strike=500.0))
-        assert recovered is None
+
+        assert recovered is not None
+        assert 1e-6 <= recovered <= 5.0
+        assert recovered == approx(0.2, abs=0.05), (
+            f"expected the true IV ~0.2, got {recovered}"
+        )
+        bs = BlackScholesInput(
+            contract=self._contract(OptionType.CALL, 500.0),
+            spot=100,
+            expiry_time=1,
+            risk_free=0.05,
+            div_yield=0,
+            volatility=recovered,
+        )
+        assert abs(price(bs) - target) < 1e-8
 
     def test_deep_itm_flat_price_returns_in_bounds_sigma(self) -> None:
         """A deep-ITM call (K=5, spot=100) is flat in sigma: the price

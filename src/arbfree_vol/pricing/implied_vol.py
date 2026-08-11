@@ -1,4 +1,4 @@
-"""Implied volatility solver with Newton fast-path and Brent fallback."""
+"""Implied volatility solver with a Newton fast path and bounded Brent fallback."""
 
 from typing import cast
 from math import sqrt, pi
@@ -17,33 +17,38 @@ _NEWTON_TOL = 1e-8
 def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -> float | None:
     """Solve implied volatility from a market price.
 
-    Uses Newton-Raphson (with analytic vega) as a fast-path, then falls
-    back to Brent if Newton fails to converge.
+    Newton fast path; out-of-bounds roots fall through to a bounded
+    Brent search; ``None`` is returned only when no root exists within
+    ``[low, high]``.
 
     Return contract:
 
-    - Every returned sigma lies inside ``[low, high]``.  A computed root
-      that falls outside the bracket is treated exactly like "no root in
-      bracket": the function returns ``None`` — it never clamps.
-    - ``None`` is also returned when the price admits no root inside
-      ``[low, high]`` (``f(low) * f(high) > 0`` on the Brent path) or
-      when the price is unreachable at any sigma in the bracket (e.g. a
-      call priced at or beyond the discounted spot).
+    - Every returned sigma lies inside ``[low, high]``.  A Newton root
+      that leaves the bracket is UNTRUSTWORTHY — it is never clamped and
+      never returned; instead the solver falls through to the Brent
+      bracket search over ``[low, high]``.
+    - ``None`` is returned only when the bracketed search finds no root
+      inside ``[low, high]`` (``f(low) * f(high) > 0`` on the Brent path)
+      or when the price is unreachable at any sigma in the bracket (e.g.
+      a call priced at or beyond the discounted spot).
     - Deep ITM/OTM prices: the BS price can be locally flat in sigma
       beyond double precision (the vega contribution vanishes), so the
       implied volatility is NOT identifiable there — many sigmas
-      reproduce the same price.  The function returns a root within
-      ``[low, high]`` when one exists, even if it is non-unique; when no
-      root exists within bounds (including a computed root that lands
-      outside bounds), it returns ``None``.
+      reproduce the same price.  A returned root reproduces the target
+      price within the solver's tolerance; in flat regions Newton may
+      land at a boundary.  When no root exists within ``[low, high]``,
+      the function returns ``None``.
 
     Branch notes:
 
     - Newton runs at most ``_NEWTON_ITERS`` iterations from the
       ``sqrt(2*pi/T) * price / S`` starting point and returns as soon as
       ``|price(sigma) - target| < _NEWTON_TOL`` AND ``low <= sigma <=
-      high``.  It aborts (falling through to Brent) when vega is
-      non-positive, or when the iterate leaves ``(0, high * 1.5]``.
+      high`` (a root exactly on a boundary counts as in-bounds).  If the
+      converged iterate lies outside ``[low, high]`` it is discarded and
+      the solver proceeds to Brent.  Newton also aborts (falling through
+      to Brent) when vega is non-positive, or when the iterate leaves
+      ``(0, high * 1.5]``.
     - The ``low``/``high`` pair brackets Brent; the ``brentq`` root is
       re-checked against the bounds before being returned.
     """
@@ -64,7 +69,9 @@ def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -
         if abs(diff) < _NEWTON_TOL:
             if low <= sigma <= high:
                 return sigma
-            return None
+            # Root converged outside the bounds: the iterate is
+            # untrustworthy, so fall through to the Brent bracket search.
+            break
         v = vega_floats(S, K, T, r, q, sigma)
         if v <= 0.0:
             break
