@@ -232,3 +232,73 @@ def test_greeks_heatmap_returns_figure() -> None:
         assert arr.shape == (2, 3)
         assert not np.ma.getmaskarray(arr).any()
         assert np.isfinite(arr.data).all()
+
+
+def test_greeks_heatmap_fallback_masking_content() -> None:
+    """The fallback masking must match the expected masked cells EXACTLY.
+
+    With fallback_slices=[0.5] on a [0.5, 1.0] maturity grid,
+    make_fallback_mask marks row 0 (T=0.5) and row 0 only; every Greek
+    heatmap must carry that mask cell-for-cell and keep the unmasked
+    content equal to the bucketed Greek grid.
+    """
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.surface.greeks import bucketed_greeks
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+    strikes = [90, 100, 110]
+    maturities = [0.5, 1.0]
+
+    fig = plot_greeks_heatmap(fs, strikes, maturities, fallback_slices=[0.5])
+    subplot_axes = [
+        ax for ax in fig.axes
+        if ax.get_title() in {"Delta", "Gamma", "Vega"}
+    ]
+    assert len(subplot_axes) == 3
+
+    expected_mask = np.zeros((2, 3), dtype=bool)
+    expected_mask[0, :] = True  # T=0.5 row is the fallback row
+
+    greeks = bucketed_greeks(
+        fs, strikes, maturities, OptionType.CALL,
+        r=fs.risk_free, q=fs.div_yield,
+    )
+    for ax in subplot_axes:
+        name = ax.get_title().lower()
+        mesh = ax.collections[0]
+        arr = mesh.get_array()
+        assert arr.shape == (2, 3)
+        actual_mask = np.ma.getmaskarray(arr)
+        assert np.array_equal(actual_mask, expected_mask), (
+            f"{name}: masked cells must equal the fallback maturity row "
+            f"exactly:\nexpected:\n{expected_mask}\ngot:\n{actual_mask}"
+        )
+        # Unmasked content must be the untouched bucketed Greek grid.
+        assert np.array_equal(arr.data[~expected_mask], greeks[name].T[~expected_mask]), (
+            f"{name}: unmasked cells must match bucketed_greeks output"
+        )
+
+
+def test_greeks_heatmap_no_fallback_masks_nothing() -> None:
+    """Without fallback slices on a clean surface, no heatmap cell may be
+    masked."""
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+
+    fig = plot_greeks_heatmap(fs, [90, 100, 110], [0.5, 1.0])
+    subplot_axes = [
+        ax for ax in fig.axes
+        if ax.get_title() in {"Delta", "Gamma", "Vega"}
+    ]
+    assert len(subplot_axes) == 3
+    for ax in subplot_axes:
+        arr = ax.collections[0].get_array()
+        assert not np.ma.getmaskarray(arr).any(), (
+            "no cells may be masked when no fallback slices are supplied"
+        )
+        assert np.isfinite(arr.data).all()
