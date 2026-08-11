@@ -279,9 +279,11 @@ def fetch_chain(
             yf_ticker = yf.Ticker(symbol)
             info = yf_ticker.info or {}
             div = info.get("dividendYield")
-            if div is not None and isinstance(div, (int, float)) and div > 0:
+            if div is not None and isinstance(div, (int, float)):
                 q = float(div)
-                if q > 0.50:
+                if math.isnan(q):
+                    q = None
+                elif q > 0.50:
                     q /= 100.0
         except Exception:
             _logger.warning("Failed to fetch dividend yield", exc_info=True)
@@ -300,6 +302,15 @@ def fetch_chain(
             symbol,
         )
         q = 0.0
+    elif q == 0.0:
+        # An observed zero is a real observation, not a substitution:
+        # the value is used as-is, but the provenance is logged so a
+        # zero-yield surface is never silent about where q came from.
+        _logger.warning(
+            "Dividend yield for %s observed as zero (dividendYield "
+            "present as 0.0 in ticker info); using q=0.0 as observed",
+            symbol,
+        )
 
     # ── Normalise columns ────────────────────────────────────────────
     df = _normalise_columns(raw_df)

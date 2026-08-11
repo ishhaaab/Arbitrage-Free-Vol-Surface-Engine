@@ -1,5 +1,6 @@
 """Tests for the OpenBB ingestion module."""
 
+import logging
 import sys
 import types
 from datetime import date, timedelta
@@ -335,6 +336,42 @@ class TestOpenBBFetchChainMainPath:
         assert surface.div_yield == pytest.approx(0.011)
         assert isinstance(rejected, list)
         assert isinstance(quality_drops, list)
+
+    def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """An OBSERVED zero dividend yield (SPY info carries
+        ``dividendYield=0.0``) is preserved as q=0.0 and the warning says
+        it was observed as zero — NOT substituted as missing (the pre-fix
+        bug conflated q==0 with a missing field)."""
+        fake_openbb = types.ModuleType("openbb")
+        fake_obb = MagicMock()
+        fake_obb.derivatives.options.chains.return_value.to_df.return_value = (
+            _chains_df()
+        )
+        fake_openbb.obb = fake_obb
+        monkeypatch.setitem(sys.modules, "openbb", fake_openbb)
+
+        class _ZeroYieldTicker(_FakeTicker):
+            _INFO = {
+                "^IRX": {"regularMarketPrice": 5.0},
+                "SPY": {"dividendYield": 0.0},  # observed zero, present
+                "^SPX": {},
+            }
+
+        monkeypatch.setattr("yfinance.Ticker", _ZeroYieldTicker)
+
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.openbb"):
+            surface, _, _ = openbb_mod.fetch_chain("SPY")
+
+        assert surface.div_yield == 0.0
+        assert "observed as zero" in caplog.text, (
+            f"expected the observed-zero warning, got: {caplog.text}"
+        )
+        assert "substituting q=0.0" not in caplog.text, (
+            f"an observed zero must NOT be logged as a substitution, got: "
+            f"{caplog.text}"
+        )
 
     def test_fetch_chain_disable_quality_filter(self, monkeypatch) -> None:
         """disable_quality_filter=True skips the filter entirely."""

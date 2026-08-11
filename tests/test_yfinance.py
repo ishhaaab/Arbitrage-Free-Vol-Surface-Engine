@@ -13,6 +13,49 @@ from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote
 
 
+# ── _get_dividend_yield tests ────────────────────────────────────────
+
+def test_get_dividend_yield_observed_zero_is_preserved() -> None:
+    """An observed ``dividendYield == 0.0`` (the field is PRESENT with
+    value zero) must be returned as 0.0 — NOT treated as missing.
+
+    The audit found both ingestion paths treated ``q == 0`` as missing
+    (only ``q > 0`` counted as present), so an observed zero was
+    silently substituted with the fallback.  A present-zero is a real
+    observation and must flow through unchanged."""
+    from arbfree_vol.ingestion.yfinance import _get_dividend_yield
+
+    ticker = MagicMock()
+    ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.0}
+
+    q = _get_dividend_yield(ticker)
+    assert q == 0.0
+
+
+def test_get_dividend_yield_missing_returns_none() -> None:
+    """A MISSING dividendYield (field absent, None, or NaN) returns
+    None — the caller's fallback path is the only one that may
+    substitute q=0.0."""
+    from arbfree_vol.ingestion.yfinance import _get_dividend_yield
+
+    # Field absent entirely
+    ticker_absent = MagicMock()
+    ticker_absent.info = {"regularMarketPrice": 450.0}
+    assert _get_dividend_yield(ticker_absent) is None
+
+    # Field present but None
+    ticker_none = MagicMock()
+    ticker_none.info = {"regularMarketPrice": 450.0, "dividendYield": None}
+    assert _get_dividend_yield(ticker_none) is None
+
+    # Field present but NaN (float('nan')) — missing, not zero
+    ticker_nan = MagicMock()
+    ticker_nan.info = {
+        "regularMarketPrice": 450.0, "dividendYield": float("nan"),
+    }
+    assert _get_dividend_yield(ticker_nan) is None
+
+
 # ── _estimate_index_dividend_yield tests ─────────────────────────────
 
 def test_estimate_index_dividend_yield_via_parity() -> None:

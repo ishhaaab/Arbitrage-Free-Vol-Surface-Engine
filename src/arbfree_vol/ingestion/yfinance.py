@@ -56,13 +56,19 @@ def _get_dividend_yield(ticker: yf.Ticker) -> float | None:
     """Fetch the dividend yield from a yfinance ticker info.
 
     yfinance returns it as a fraction (e.g. 0.013 for 1.3%).
-    Returns None if unavailable.
+    Returns None only when the field is genuinely MISSING (absent,
+    ``None`` or NaN).  An observed zero (``dividendYield == 0.0``
+    present in the info dict) is a real observation and is returned as
+    ``0.0`` — the caller must NOT treat it as a missing value and
+    substitute the fallback.
     """
     try:
         info = ticker.info or {}
         q = info.get("dividendYield")
-        if q is not None and isinstance(q, (int, float)) and q > 0:
+        if q is not None and isinstance(q, (int, float)):
             q = float(q)
+            if math.isnan(q):
+                return None
             # yfinance sometimes returns percent (1.01 for 1.01%) and
             # sometimes fraction (0.0101).  A yield above 50% is
             # definitely in percent then divide by 100.
@@ -191,6 +197,15 @@ def fetch_chain(
                 symbol,
             )
             q = 0.0
+        elif q == 0.0:
+            # An observed zero is a real observation, not a substitution:
+            # the value is used as-is, but the provenance is logged so a
+            # zero-yield surface is never silent about where q came from.
+            _logger.warning(
+                "Dividend yield for %s observed as zero (dividendYield "
+                "present as 0.0 in ticker info); using q=0.0 as observed",
+                symbol,
+            )
 
     # get the underlying spot price
     spot = None

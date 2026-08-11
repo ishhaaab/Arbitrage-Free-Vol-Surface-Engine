@@ -210,6 +210,59 @@ def _mock_index_chain(mock_ticker_class, symbol="^SPX"):
 
 @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
 @patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
+    mock_date_class, mock_ticker_class, caplog,
+) -> None:
+    """An OBSERVED zero dividend yield (dividendYield present as 0.0 in
+    the ticker info) must be preserved as q=0.0 — and the warning must
+    say the yield was observed as zero, NOT that it was missing and
+    substituted (the pre-fix bug conflated q==0 with missing)."""
+    import pandas as pd
+    from datetime import date as real_date
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    # dividendYield present with value 0.0: observed zero, not missing
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.0}
+    mock_ticker.options = ["2030-08-15", "2030-09-15"]
+
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    strikes = [440, 450, 460]
+    cols = {"strike": strikes, "lastPrice": [20, 15, 10],
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+
+    from arbfree_vol.ingestion.yfinance import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, _, _ = fetch_chain("SPY", max_expiries=2)
+
+    # q=0.0 is used as OBSERVED (the value is unchanged), and the warning
+    # reflects the observation rather than a substitution.
+    assert surface.div_yield == 0.0
+    assert "observed as zero" in caplog.text, (
+        f"expected the observed-zero warning, got: {caplog.text}"
+    )
+    assert "substituting q=0.0" not in caplog.text, (
+        f"an observed zero must NOT be logged as a substitution, got: "
+        f"{caplog.text}"
+    )
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
 def test_fetch_chain_index_q_mix_is_logged(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:
