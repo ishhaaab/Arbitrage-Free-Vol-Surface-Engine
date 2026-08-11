@@ -317,6 +317,13 @@ class TestImpliedVolBranches:
         )
         assert recovered is not None
         assert 1e-6 <= recovered <= 5.0
+        # NON-IDENTIFIABILITY REPRODUCTION CHECK, not a solver-quality
+        # assertion: at K=500 the BS price is flat at machine scale over
+        # the whole root region (the vega contribution vanishes), so the
+        # recovered root is ANY sigma in the flat band that satisfies the
+        # price tolerance — "near 0.2" reproduces the documented
+        # flat-price behaviour, it is NOT a tight-solver-quality bound.
+        # The binding assertion is the price-reproduction tolerance below.
         assert recovered == approx(0.2, abs=0.05), (
             f"strike=500.0: expected a root near 0.2, got {recovered}"
         )
@@ -350,6 +357,13 @@ class TestImpliedVolBranches:
 
         assert recovered is not None
         assert 1e-6 <= recovered <= 5.0
+        # NON-IDENTIFIABILITY REPRODUCTION CHECK (see the class docstring
+        # and ``implied_vol``'s return contract): the deep-OTM price is
+        # flat at machine scale in the root region, so the recovered root
+        # lies anywhere in the flat band.  The ``approx(0.2, abs=0.05)``
+        # assertion reproduces the documented non-unique-root behaviour —
+        # it is NOT a tight solver-quality bound; the binding assertion
+        # is the price-reproduction tolerance below.
         assert recovered == approx(0.2, abs=0.05), (
             f"expected the true IV ~0.2, got {recovered}"
         )
@@ -362,6 +376,37 @@ class TestImpliedVolBranches:
             volatility=recovered,
         )
         assert abs(price(bs) - target) < 1e-8
+
+    def test_deep_otm_custom_low_bound_recovers_root(self) -> None:
+        """Deep-OTM recovery with a custom ``low`` bound: with
+        ``low=1e-4`` the solver must return an in-bounds root (the true
+        root ~0.1955 sits inside ``[1e-4, 5]``) — never None and never a
+        boundary clamp — and the returned sigma must reproduce the target
+        price within the documented price tolerance.
+
+        The default ``low=1e-6`` case is covered by
+        ``test_deep_otm_falls_through_to_brent_and_recovers_root``; this
+        pins the same fall-through with a NON-default bound so a change
+        that only honours the default bounds cannot silently pass."""
+        target = self._target_price(OptionType.CALL, 500.0, 0.2)
+        recovered = implied_vol(
+            self._input(OptionType.CALL, target, strike=500.0), low=1e-4
+        )
+
+        assert recovered is not None
+        assert 1e-4 <= recovered <= 5.0
+        bs = BlackScholesInput(
+            contract=self._contract(OptionType.CALL, 500.0),
+            spot=100,
+            expiry_time=1,
+            risk_free=0.05,
+            div_yield=0,
+            volatility=recovered,
+        )
+        assert abs(price(bs) - target) < 1e-8, (
+            f"strike=500.0 (low=1e-4): returned sigma {recovered} must "
+            f"reproduce the target price within the solver tolerance"
+        )
 
     def test_deep_itm_flat_price_returns_in_bounds_sigma(self) -> None:
         """A deep-ITM call (K=5, spot=100) is flat in sigma: the price

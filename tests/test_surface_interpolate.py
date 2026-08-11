@@ -292,9 +292,18 @@ class TestInterpolationEdges:
         """Strikes far outside the fitted moneyness range are NOT
         rejected: the SVI smile is evaluated at log(K/F), so the value
         equals the smile's wing extrapolation at the slice (documented
-        in ``total_variance_at``)."""
-        fs = _flat_fitted_surface(sigma=0.2)
-        sl = fs.fitted_slices[0]
+        in ``total_variance_at``).
+
+        The surface is NON-FLAT (``b=0.3, rho=-0.3``) on purpose: with
+        ``b=0`` the smile is constant in log-moneyness, so a mutation
+        that broke the ``log(K/F)`` moneyness handling in the wing path
+        (e.g. using the spot or a wrong forward) could never be caught.
+        On this surface the expected wing value is recomputed
+        independently from the SVI formula at the slice's OWN forward,
+        so any moneyness-handling mutation in the wing path changes the
+        extrapolated value and FAILS the test."""
+        fs = self._smile_surface()
+        sl = fs.fitted_slices[0]  # T=0.5 slice, b=0.3, rho=-0.3
         K_far = 300.0
         w_direct = svi_total_variance(
             math.log(K_far / sl.forward_price),
