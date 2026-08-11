@@ -50,6 +50,15 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
     the forward via C - P = e^{-rT} (F - K).  Returns a dict mapping
     expiry_time to forward_price.  Slices with zero pairs fall
     back to F = spot * exp((r - q) * T).
+
+    The ``default substitution`` provenance suffix attached to the
+    no-pair fallback warning is a HEURISTIC, not a provenance record:
+    r/q matching the ingestion-layer default constants (0.05 / 0.0) is
+    INFERRED to indicate a substituted (not observed) rate, but the same
+    values can be genuinely observed.  The log wording says so explicitly
+    ("this may be an observed value — provenance is inferred by this
+    heuristic") and never asserts provenance.  Full provenance tracking
+    (a flag recorded at the r/q source) is a larger, out-of-scope change.
     """
     spot = surface.spot
     curve: dict[float, float] = {}
@@ -61,8 +70,9 @@ def estimate_forward_curve(surface: VolSurface) -> dict[float, float]:
         if F is None:
             default_sub = abs(r - 0.05) < 1e-9 and abs(q) < 1e-9
             suffix = (
-                " (r/q are the default substitution values — check "
-                "ingestion logs for provenance)"
+                " (r/q match the default substitution constants "
+                "(0.05/0.0); this may be an observed value — provenance "
+                "is inferred by this heuristic, not recorded)"
                 if default_sub
                 else " (r/q are non-default values)"
             )

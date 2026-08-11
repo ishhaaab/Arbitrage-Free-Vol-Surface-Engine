@@ -138,6 +138,12 @@ def test_fwd_curve_fallback_logs_default_substitution(caplog) -> None:
     the theoretical forward uses whatever r/q the surface carries.  If
     those are the ingestion-layer substitution defaults, a reader must
     not mistake them for genuinely observed rates.
+
+    The wording is a documented HEURISTIC (see
+    ``estimate_forward_curve``): r/q matching the default constants is
+    INFERRED to indicate substitution, but the same values can be
+    genuinely observed — the log says "may be an observed value" and
+    never asserts provenance.
     """
     slice_ = ExpirySlice(
         expiry_time=T,
@@ -152,6 +158,10 @@ def test_fwd_curve_fallback_logs_default_substitution(caplog) -> None:
         estimate_forward_curve(surface)
 
     assert "default substitution" in caplog.text
+    # The heuristic wording: the values MATCH the defaults but may be
+    # observed — provenance is inferred, not recorded.
+    assert "may be an observed value" in caplog.text
+    assert "provenance is inferred by this heuristic" in caplog.text
 
 
 def test_fwd_curve_fallback_logs_non_default_values(caplog) -> None:
