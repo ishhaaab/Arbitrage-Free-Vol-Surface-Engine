@@ -74,20 +74,71 @@ class TestOpenBBRowToQuote:
         assert q.price == pytest.approx(1.5)
         assert q.strike == 100.0
 
-    def test_fallback_to_last_trade_price(self):
-        """Falls back to last_trade_price when bid/ask missing."""
-        row = {"strike": 100, "bid": None, "ask": None, "last_trade_price": 3.0}
+    def test_fallback_to_last_price(self):
+        """Falls back to the normalized lastPrice when bid/ask missing."""
+        row = {"strike": 100, "bid": None, "ask": None, "lastPrice": 3.0}
         from arbfree_vol.models.option import OptionType
         q = openbb_mod._row_to_quote(row, OptionType.PUT)
         assert q is not None
         assert q.price == pytest.approx(3.0)
 
+    def test_normalized_row_missing_bid_ask_falls_back_to_last_price(self):
+        """A REAL normalized OpenBB row (missing/NaN bid AND ask but a
+        valid lastPrice) must produce a quote via the last-price fallback,
+        not be silently dropped.
+
+        End-to-end regression for the pre-fix bug: ``_normalise_columns``
+        renames ``last_trade_price`` → ``lastPrice``, but
+        ``_row_to_quote`` read the pre-normalization key, so a normalized
+        row with missing bid/ask fell through the mid-price branch and
+        returned None.  Drives the same normalise-then-convert path the
+        fetch pipeline uses for row conversion."""
+        import math
+        import pandas as pd
+        from arbfree_vol.models.option import OptionType
+
+        raw = pd.DataFrame({
+            "strike": [100.0],
+            "bid": [float("nan")],
+            "ask": [None],
+            "last_trade_price": [3.0],
+        })
+        normalized = openbb_mod._normalise_columns(raw)
+        q = openbb_mod._row_to_quote(normalized.iloc[0], OptionType.PUT)
+        assert q is not None
+        assert q.price == pytest.approx(3.0)
+
     def test_returns_none_when_no_price(self):
         """Returns None when no valid price source exists."""
-        row = {"strike": 100, "bid": None, "ask": None, "last_trade_price": None}
+        row = {"strike": 100, "bid": None, "ask": None, "lastPrice": None}
         from arbfree_vol.models.option import OptionType
         q = openbb_mod._row_to_quote(row, OptionType.CALL)
         assert q is None
+
+
+class TestOpenBBExpirationParsing:
+    """Test the expiration → date-string normalization used by the
+    fetch_chain sort/parse path."""
+
+    def test_expiration_datetime_parses_to_date_string(self):
+        """A datetime/pandas.Timestamp expiration must be normalized to a
+        date-only string so ``date.fromisoformat`` (used by fetch_chain's
+        sort/parse path) cannot be broken by a time component."""
+        from datetime import datetime as dt_cls
+        import pandas as pd
+
+        df = pd.DataFrame({
+            "expiration": [
+                pd.Timestamp("2026-08-11 09:30:00"),
+                dt_cls(2026, 9, 15, 16, 0, 0),
+                "2026-10-01T00:00:00",
+            ],
+        })
+        parsed = df["expiration"].apply(openbb_mod._expiry_to_date_str)
+        assert list(parsed) == ["2026-08-11", "2026-09-15", "2026-10-01"]
+        # The sort/parse path in fetch_chain must accept every value.
+        for s in parsed:
+            date.fromisoformat(s)
 
 
 class TestSafeConversions:

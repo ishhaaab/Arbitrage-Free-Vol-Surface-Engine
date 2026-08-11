@@ -75,13 +75,14 @@ def _row_to_quote(row: Any, otype: OptionType) -> Quote | None:
 
     Uses the **mid price** (``(bid + ask) / 2``) when both bid and ask
     are available — this reflects the live market, not stale
-    ``last_trade_price``.  Falls back to ``last_trade_price`` if either
+    ``lastPrice``.  Falls back to ``lastPrice`` (the normalized form of
+    OpenBB's ``last_trade_price``; see ``_normalise_columns``) if either
     bid or ask is missing.  Returns ``None`` when no valid price can be
     determined.
     """
     bid = _safe_float(row.get("bid"), None)
     ask = _safe_float(row.get("ask"), None)
-    last = _safe_float(row.get("last_trade_price"), None)
+    last = _safe_float(row.get("lastPrice"), None)
 
     if bid is not None and ask is not None:
         price = (bid + ask) / 2.0
@@ -123,6 +124,24 @@ def _normalise_columns(df):
     if "strike" in out.columns:
         out["strike"] = out["strike"].apply(lambda x: _safe_float(x, 0.0))
     return out
+
+
+def _expiry_to_date_str(x: Any) -> str:
+    """Normalize an OpenBB expiration value to a date-only ISO string.
+
+    OpenBB providers hand back expirations as ``date``, ``datetime``,
+    ``pandas.Timestamp`` or ISO-format strings — sometimes carrying a
+    time component (e.g. ``2026-08-11T00:00:00``).  The sort/parse path
+    in ``fetch_chain`` feeds these straight into ``date.fromisoformat``,
+    which only accepts date-only strings, so the time component must be
+    stripped here.
+    """
+    to_date = getattr(x, "date", None)
+    if callable(to_date):
+        # datetime / pandas.Timestamp / date all expose .date()
+        return to_date().isoformat()
+    # String form: strip any trailing time component ("T" or space).
+    return str(x).strip().split("T")[0].split(" ")[0]
 
 
 # ── Main entry point ─────────────────────────────────────────────────
@@ -288,12 +307,12 @@ def fetch_chain(
     slices: list[ExpirySlice] = []
     ref_date = date.today()
 
-    # OpenBB 'expiration' column may be datetime.date or string
+    # OpenBB 'expiration' column may be date/datetime/Timestamp or a
+    # string (sometimes carrying a time component).  Normalize to a
+    # date-only string so the sort and ``date.fromisoformat`` parse path
+    # cannot be broken by a time component.
     if "expiration" in df.columns:
-        # Convert to string for uniformity
-        df["_expiry_str"] = df["expiration"].apply(
-            lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x)
-        )
+        df["_expiry_str"] = df["expiration"].apply(_expiry_to_date_str)
     else:
         raise ValueError("OpenBB chain DataFrame missing 'expiration' column")
 
