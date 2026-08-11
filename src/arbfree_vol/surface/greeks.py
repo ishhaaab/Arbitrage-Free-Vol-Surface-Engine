@@ -62,6 +62,13 @@ def portfolio_greeks(
     Returns
     -------
     PortfolioGreeks
+
+    Notes
+    -----
+    - An empty position list returns a ``PortfolioGreeks`` with all-zero
+      totals.
+    - Raises ``ValueError`` if ``fs`` has no fitted slices (propagated
+      from ``iv_at``).
     """
     rate = r if r is not None else fs.risk_free
     div = q if q is not None else fs.div_yield

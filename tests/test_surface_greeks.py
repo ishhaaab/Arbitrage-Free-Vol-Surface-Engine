@@ -141,6 +141,100 @@ class TestPortfolioGreeks:
         assert pg.total_delta < 0.0
 
 
+class TestPortfolioGreeksEdges:
+    """Edge behaviour of ``portfolio_greeks`` (documented in its
+    docstring): empty positions, multi-position aggregation, and empty
+    surfaces."""
+
+    def test_empty_positions_return_zero_greeks(self) -> None:
+        """An empty position list aggregates to zero Greeks."""
+        fs = _flat_fs()
+        pg = portfolio_greeks(fs, [])
+        assert pg.total_delta == 0.0
+        assert pg.total_gamma == 0.0
+        assert pg.total_vega == 0.0
+        assert pg.total_theta == 0.0
+        assert pg.total_rho == 0.0
+
+    def test_multi_position_aggregation_matches_analytic_sum(self) -> None:
+        """Two positions (long call at K=90, long put at K=110) on the
+        flat surface: the aggregate Greeks equal the sum of the
+        individual positions' Greeks.  Delta is checked against an
+        INDEPENDENT closed-form expectation via math.erf; the remaining
+        Greeks against the per-position direct computations."""
+        fs = _flat_fs()
+        T = 0.5
+        r = fs.risk_free
+        q = fs.div_yield
+        sigma = 0.2
+        S = fs.spot
+
+        call = OptionContract(
+            symbol="X", option_type=OptionType.CALL, strike=90.0,
+            expiry_date=_DUMMY_DATE,
+        )
+        put = OptionContract(
+            symbol="Y", option_type=OptionType.PUT, strike=110.0,
+            expiry_date=_DUMMY_DATE,
+        )
+        positions = [(call, T, 1.0), (put, T, 1.0)]
+        pg = portfolio_greeks(fs, positions)
+
+        # Independent closed-form delta:
+        #   delta_call = e^{-qT} * N(d1)
+        #   delta_put  = -e^{-qT} * N(-d1) = e^{-qT} * (N(d1) - 1)
+        def _n_d1(strike: float) -> float:
+            d1 = (
+                math.log(S / strike) + (r - q + 0.5 * sigma ** 2) * T
+            ) / (sigma * math.sqrt(T))
+            return 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+
+        expected_delta = (
+            math.exp(-q * T) * _n_d1(90.0)
+            + math.exp(-q * T) * (_n_d1(110.0) - 1.0)
+        )
+        assert pg.total_delta == approx(expected_delta, abs=1e-9)
+
+        # Per-position sum for the remaining Greeks (aggregation contract).
+        expected_gamma = 0.0
+        expected_vega = 0.0
+        expected_theta = 0.0
+        expected_rho = 0.0
+        for contract, expiry, qty in positions:
+            sigma_pos = iv_at(fs, contract.strike, expiry)
+            bsi = BlackScholesInput(
+                contract=contract, spot=S, expiry_time=expiry,
+                risk_free=r, div_yield=q, volatility=sigma_pos,
+            )
+            g = _compute_greeks(bsi)
+            expected_gamma += qty * g.gamma
+            expected_vega += qty * g.vega
+            expected_theta += qty * g.theta
+            expected_rho += qty * g.rho
+
+        assert pg.total_gamma == approx(expected_gamma, abs=1e-9)
+        assert pg.total_vega == approx(expected_vega, abs=1e-9)
+        assert pg.total_theta == approx(expected_theta, abs=1e-9)
+        assert pg.total_rho == approx(expected_rho, abs=1e-9)
+
+    def test_empty_surface_with_positions_raises(self) -> None:
+        """A FittedSurface with no slices cannot supply implied vols:
+        iv_at raises ValueError, propagated by portfolio_greeks."""
+        fs = FittedSurface(
+            spot=100.0,
+            risk_free=0.05,
+            div_yield=0.0,
+            forward_curve=(),
+            fitted_slices=(),
+        )
+        contract = OptionContract(
+            symbol="X", option_type=OptionType.CALL, strike=100.0,
+            expiry_date=_DUMMY_DATE,
+        )
+        with pytest.raises(ValueError, match="no slices"):
+            portfolio_greeks(fs, [(contract, 0.5, 1.0)])
+
+
 class TestBucketedGreeks:
     """Tests for ``bucketed_greeks``."""
 
