@@ -1,8 +1,9 @@
 """Snapshot-time guard for option chain fetching.
 
 Warns when fetching data outside a "safe window" (US/Eastern market
-hours) or on known event days (FOMC, CPI, opex).  The guard does NOT
-block — it returns a warning string and the caller decides what to do.
+hours), on weekends (the market is closed regardless of clock time), or
+on known event days (FOMC, CPI, opex).  The guard does NOT block — it
+returns a warning string and the caller decides what to do.
 
 Usage::
 
@@ -84,8 +85,8 @@ def check_snapshot_time(
     safe_window_end: time = time(15, 30),
     exclusion_dates: set[str] | None = None,
 ) -> str | None:
-    """Return a warning string if outside the safe window or on an
-    exclusion date, else ``None``.
+    """Return a warning string if outside the safe window, on a weekend,
+    or on an exclusion date, else ``None``.
 
     Parameters
     ----------
@@ -102,14 +103,28 @@ def check_snapshot_time(
     Returns
     -------
     str or None
-        A warning string if the snapshot is outside the safe window or
-        on an exclusion date.  ``None`` if everything looks fine.
+        A warning string if the snapshot is outside the safe window, on
+        a weekend, or on an exclusion date.  ``None`` if everything
+        looks fine.
+
+    Contract
+    --------
+    The guard warns on ANY of the following, independent of the others:
+
+    - **Outside the clock window** — ``now`` is before
+      ``safe_window_start`` or after ``safe_window_end``.
+    - **Weekend** — ``now`` falls on a Saturday or Sunday, regardless
+      of the clock time (the market is closed all day; a weekend time
+      inside the clock window still warns).
+    - **Event dates** — ``now.date().isoformat()`` is in
+      ``exclusion_dates`` (checked before the clock window).
 
     Notes
     -----
     This function does NOT block — the caller decides what to do with
     the warning.  The intent is to flag snapshots that may have stale
-    or noisy quotes (e.g. pre-market, after-hours, or event days).
+    or noisy quotes (e.g. pre-market, after-hours, weekends, or event
+    days).
     """
     if exclusion_dates is None:
         exclusion_dates = _EXCLUSION_DATES
@@ -131,6 +146,16 @@ def check_snapshot_time(
         return (
             f"Snapshot on known event day ({today_str}). "
             "Option data may be noisy or stale."
+        )
+
+    # Check weekend: the market is closed all day Saturday/Sunday, so a
+    # weekend snapshot warns regardless of the clock time (even inside
+    # the clock window).
+    if now.weekday() >= 5:
+        return (
+            f"Snapshot on {now.strftime('%A')} {today_str} at "
+            f"{current_time.strftime('%H:%M')} US/Eastern; weekend market "
+            "is closed and quotes may be stale."
         )
 
     # Check time window

@@ -80,18 +80,25 @@ class TestSnapshotGuard:
         assert result is None
 
     def test_snapshot_guard_custom_exclusion_dates(self):
-        """Custom exclusion dates override the built-in set."""
-        dt = datetime(2026, 3, 15, 12, 0, 0, tzinfo=_EASTERN)
+        """Custom exclusion dates override the built-in set.
+
+        The base date is a WEEKDAY (2026-03-16 is a Monday) so the only
+        thing that can trigger a warning under custom dates is the
+        custom exclusion set — the weekend check must not interfere with
+        this test's intent (2026-03-15, the old fixture, is a Sunday and
+        is now caught by the weekend check)."""
+        dt = datetime(2026, 3, 16, 12, 0, 0, tzinfo=_EASTERN)
+        assert dt.weekday() == 0, "test setup error: 2026-03-16 must be Monday"
         # Without custom dates — should pass (not an event day normally)
         result_normal = check_snapshot_time(now=dt, exclusion_dates=set())
         assert result_normal is None
 
         # With custom exclusion
         result_custom = check_snapshot_time(
-            now=dt, exclusion_dates={"2026-03-15"}
+            now=dt, exclusion_dates={"2026-03-16"}
         )
         assert result_custom is not None
-        assert "2026-03-15" in result_custom
+        assert "2026-03-16" in result_custom
 
     def test_snapshot_guard_boundary_at_start(self):
         """Exactly at safe_window_start (10:30) should pass."""
@@ -111,3 +118,36 @@ class TestSnapshotGuard:
         result = check_snapshot_time(now=dt)
         assert result is not None
         assert "outside safe window" in result
+
+    def test_snapshot_guard_warns_on_weekend_inside_window(self):
+        """A Saturday at 12:00 ET (INSIDE the clock window) must still
+        warn: the market is closed all day on weekends, so the weekend
+        check fires regardless of clock time.  2026-07-18 is a Saturday
+        (2026-07-15 is the Wednesday used by the weekday tests)."""
+        # 2026-07-18 is a Saturday (2026-07-15 is Wednesday).
+        sat = datetime(2026, 7, 18, 12, 0, 0, tzinfo=_EASTERN)
+        assert sat.weekday() == 5, "test setup error: 2026-07-18 must be Saturday"
+        result = check_snapshot_time(now=sat)
+        assert result is not None
+        assert "weekend" in result
+
+    def test_snapshot_guard_warns_on_weekend_outside_window(self):
+        """A Sunday at 08:00 ET (OUTSIDE the clock window) also warns:
+        the weekend check fires before the clock-window check, so the
+        documented contract (warns on weekends regardless of clock time)
+        holds in both the inside-window and outside-window cases."""
+        # 2026-07-19 is a Sunday.
+        sun = datetime(2026, 7, 19, 8, 0, 0, tzinfo=_EASTERN)
+        assert sun.weekday() == 6, "test setup error: 2026-07-19 must be Sunday"
+        result = check_snapshot_time(now=sun)
+        assert result is not None
+        assert "weekend" in result
+
+    def test_snapshot_guard_weekday_inside_window_no_warning(self):
+        """A weekday inside the clock window (Wednesday 12:00 ET, not an
+        event date) produces NO warning — the weekend check must not
+        false-positive on weekdays."""
+        wed = datetime(2026, 7, 15, 12, 0, 0, tzinfo=_EASTERN)
+        assert wed.weekday() == 2, "test setup error: 2026-07-15 must be Wednesday"
+        result = check_snapshot_time(now=wed)
+        assert result is None
