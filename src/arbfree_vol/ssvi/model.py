@@ -12,12 +12,21 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
-# Tolerance for the STRICT Gatheral-Jacquier condition 1 boundary
-# (theta*psi*(1+|rho|) < 4).  A residual at or below this is an exact
-# (within float precision) equality with the paper's boundary, which the
-# paper's strict inequality says is NOT safe.  Used only when
-# ``gatheral_jacquier_condition(..., strict=True)``.
-_GJ_STRICT_EPS: float = 1e-12
+# Canonical tolerance for the STRICT Gatheral-Jacquier condition 1
+# boundary (theta*psi*(1+|rho|) < 4).  A residual at or below this is an
+# exact (within float precision) equality with the paper's boundary, which
+# the paper's strict inequality says is NOT safe.
+#
+# This is the SINGLE source of truth shared by BOTH consumers:
+#   - the public diagnostic ``gatheral_jacquier_condition(..., strict=True)``
+#     (used only when strict=True), and
+#   - the production eSSVI optimizer constraint path in
+#     ``ssvi/term_structure.py`` (which imports this constant under the
+#     alias ``_GJ_CONDITION1_STRICT_EPS``).
+# The two paths can never diverge: strict mode applies to condition 1 ONLY
+# (the paper's ``theta*psi*(1+|rho|) < 4`` is strict; condition 2,
+# ``theta*psi^2*(1+|rho|) <= 4``, is non-strict and is never shifted).
+_GJ_STRICT_EPS: float = 1e-9
 
 
 class SSVIParams(BaseModel):
@@ -110,6 +119,12 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float,
         so an exact equality is reported "safe".  Condition 2 is
         non-strict in the paper and is treated identically in both
         modes.
+
+        ``_GJ_STRICT_EPS`` (1e-9) is the SAME canonical constant the
+        production eSSVI optimizer constraint path uses (it imports it
+        as ``_GJ_CONDITION1_STRICT_EPS`` in ``ssvi/term_structure.py``),
+        so this public diagnostic and the calibration path apply the
+        same strictness to condition 1 and cannot diverge.
 
     Reference
     ---------

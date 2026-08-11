@@ -51,7 +51,7 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import minimize, NonlinearConstraint, Bounds
 
-from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, _GJ_STRICT_EPS
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 _logger = logging.getLogger(__name__)
@@ -65,7 +65,12 @@ _logger = logging.getLogger(__name__)
 # approximate the paper's strictness by requiring a small positive
 # margin (>= this eps) on the two condition-1 residuals in
 # ``_butterfly_constraints``.
-_GJ_CONDITION1_STRICT_EPS: float = 1e-9
+#
+# This is an ALIAS of the canonical ``_GJ_STRICT_EPS`` defined once in
+# ``ssvi/model.py`` — the production constraint path and the public
+# strict-mode diagnostic ``gatheral_jacquier_condition(strict=True)``
+# share one constant and can never diverge.
+_GJ_CONDITION1_STRICT_EPS: float = _GJ_STRICT_EPS
 
 # Floors applied to the two Hendriks-Martini calendar constraints in
 # ``_fit_slice`` (non-decreasing theta, non-decreasing chi).  Hoisted to
