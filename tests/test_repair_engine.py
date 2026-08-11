@@ -1178,6 +1178,51 @@ def test_repair_essvi_records_slice_with_no_forward(caplog, monkeypatch) -> None
     assert "eSSVI path: no forward estimate for slice T=0.5000" in caplog.text
 
 
+def test_repair_essvi_failed_slices_sorted_with_no_forward(monkeypatch) -> None:
+    """``RepairReport.failed_slices`` must be SORTED by expiry and
+    deduplicated even when the no-forward expiry sorts BEFORE a
+    failed-fit expiry.
+
+    The eSSVI path reassigns ``failed_slices`` from the sequential fit
+    result (``[0.5]`` here: the 0.5 slice fails both fits) and then
+    appends the no-forward expiries (``[0.25]``: no forward estimate),
+    which produces ``[0.5, 0.25]`` without the ordering contract.  The
+    documented contract (``repair`` docstring) is chronological order,
+    so the report must carry ``[0.25, 0.5]``."""
+    import arbfree_vol.ssvi.term_structure as ts
+    import arbfree_vol.repair.engine as engine_mod
+
+    truth = [
+        (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
+        (0.50, dict(theta=0.12, rho=-0.2, psi=0.5)),
+    ]
+    surface = _ssvi_priced_surface(truth)
+
+    # T=0.25 has no forward estimate; T=0.5 fails both the hard and the
+    # unconstrained fallback fits.
+    monkeypatch.setattr(
+        engine_mod, "estimate_forward_curve", _forward_curve_missing(0.25),
+    )
+
+    def _always_raise(points, prev=None, **kwargs):
+        raise RuntimeError("simulated total fit failure")
+
+    def _no_fallback(points):
+        raise RuntimeError("simulated fallback failure")
+
+    monkeypatch.setattr(ts, "_fit_slice", _always_raise)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _no_fallback)
+
+    report = repair(surface, use_ssvi=True)
+
+    assert report.failed_slices == [0.25, 0.5], (
+        f"failed_slices must be sorted by expiry, got "
+        f"{report.failed_slices}"
+    )
+    assert report.metrics.n_slices_fitted == 0
+    assert len(report.fitted_ssvi_slices) == 0
+
+
 def test_repair_sabr_records_slice_with_no_forward(caplog, monkeypatch) -> None:
     """The SABR path must record a no-forward slice in failed_slices
     (this path never reassigns ``failed_slices``, so the append is

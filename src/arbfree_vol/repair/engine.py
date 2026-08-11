@@ -194,7 +194,12 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     unconstrained fallback fail, raw-SVI slices whose constrained
     calibration raises, and (in every path) slices for which the forward
     curve has no estimate.  The no-forward case is logged with a warning
-    and recorded, never silently skipped.
+    and recorded, never silently skipped.  The list is SORTED by expiry
+    and DEDUPLICATED before being stored in the report: the eSSVI path
+    reassigns ``failed_slices`` from the sequential fit result and then
+    appends the no-forward expiries, which can otherwise produce
+    non-chronological lists (a no-forward expiry sorting BEFORE a
+    failed-fit expiry).  Consumers may rely on chronological order.
 
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
@@ -497,6 +502,14 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         n_violations_before=n_violations_before,
         n_violations_after=len(remaining.violations),
     )
+
+    # Enforce the failed_slices ordering contract: the eSSVI path
+    # reassigns the list from the sequential fit result and then appends
+    # the no-forward expiries, which can produce non-chronological lists
+    # (a no-forward expiry sorting BEFORE a failed-fit expiry).  Every
+    # path's failures are merged, sorted by expiry and deduplicated
+    # before being stored in the report.
+    failed_slices = sorted(set(failed_slices))
 
     return RepairReport(
         rejected=tuple(rejected),
