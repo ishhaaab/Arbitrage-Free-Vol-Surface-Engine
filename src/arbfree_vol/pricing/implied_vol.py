@@ -19,6 +19,28 @@ def implied_vol(model: ImpliedVolInput, low: float = 1e-6, high: float = 5.0,) -
 
     Uses Newton-Raphson (with analytic vega) as a fast-path, then falls
     back to Brent if Newton fails to converge.
+
+    Branch contract:
+
+    - Newton runs at most ``_NEWTON_ITERS`` iterations from the
+      ``sqrt(2*pi/T) * price / S`` starting point and returns as soon as
+      ``|price(sigma) - target| < _NEWTON_TOL``.  It aborts (falling
+      through to Brent) when vega is non-positive, or when the iterate
+      leaves ``(0, high * 1.5]``.
+    - The ``low``/``high`` pair is the Brent bracket: if the price admits
+      no root inside ``[low, high]`` (``f(low) * f(high) > 0``), ``None``
+      is returned.  The Newton fast-path is NOT bracketed by ``low``/
+      ``high`` — it may return a converged value above ``high`` (or below
+      it) without consulting the bracket; ``high * 1.5`` only guards
+      against divergence.
+    - ``None`` is also returned for prices that are unreachable at any
+      sigma in the bracket (e.g. a call priced at or beyond the
+      discounted spot).
+    - For prices where the BS price is flat in sigma beyond double
+      precision (deep ITM/OTM quotes whose vega contribution vanishes),
+      the returned sigma is not unique; the solver returns whichever
+      value satisfies its price tolerance, which may be a bracket
+      endpoint.
     """
     S = model.spot
     K = model.contract.strike
