@@ -316,6 +316,31 @@ class TestDupireFallbackLeakage:
                     f"got {row[iK]}"
                 )
 
+    def test_single_fitted_slice_non_fallback_row_raises_clear_error(self) -> None:
+        """A one-fitted-slice surface requesting any non-fallback grid row
+        must raise a CLEAR ValueError, not the obscure out-of-range error
+        that used to leak from total_variance_at/_dw_dT."""
+        fs, _ = _five_slice_surface()
+        single = FittedSurface(
+            spot=fs.spot,
+            risk_free=fs.risk_free,
+            div_yield=fs.div_yield,
+            forward_curve=fs.forward_curve,
+            fitted_slices=(fs.fitted_slices[2],),
+        )
+        strikes = [90.0, 95.0, 100.0, 105.0, 110.0]
+
+        # T=0.5 is a fallback maturity; T=0.4 and T=0.6 are NOT, so the
+        # surface would need to be evaluated and must fail clearly.
+        maturities = [0.4, 0.5, 0.6]
+        with pytest.raises(ValueError, match="dupire requires at least 2 fitted slices"):
+            dupire(single, strikes, maturities, fallback_slices=[0.5])
+
+        # Without a fallback list every row would be evaluated — same
+        # clear error, no grid evaluation attempted.
+        with pytest.raises(ValueError, match="dupire requires at least 2 fitted slices"):
+            dupire(single, strikes, maturities)
+
     def test_plot_dupire_heatmap_uses_nan_masking(self) -> None:
         """plot_dupire_heatmap masks exactly the NaN cells of lv.grid.
 

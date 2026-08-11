@@ -317,7 +317,11 @@ def dupire(fs: FittedSurface,
     Raises
     ------
     ValueError
-        If grid dimensions are too small.
+        If grid dimensions are too small, or if the fitted surface has
+        fewer than two slices and any grid row would actually be
+        evaluated (a sub-2-slice surface cannot produce a Dupire time
+        derivative; the only such surface that is accepted is one whose
+        every grid row is masked as a fallback maturity).
     """
     if len(strikes) < 3:
         raise ValueError(
@@ -334,6 +338,23 @@ def dupire(fs: FittedSurface,
     if fallback_slices:
         fallback_set = set(fallback_slices)
         fitted_times = tuple(sorted(s.expiry_time for s in fs.fitted_slices))
+
+    # A sub-2-slice surface cannot produce a Dupire time derivative: the
+    # interpolation path (total_variance_at / _dw_dT) needs an interior
+    # interval to bracket, and a non-fallback grid row leaks an obscure
+    # out-of-range ValueError.  The only legitimate sub-2-slice grid is
+    # one whose EVERY row is masked as a fallback maturity (all-NaN
+    # without evaluation) — any other row must fail clearly here.
+    if len(fs.fitted_slices) < 2:
+        every_row_masked = bool(fallback_set) and all(
+            any(abs(T - fb) < _FB_TOL for fb in fallback_set)
+            for T in maturities
+        )
+        if not every_row_masked:
+            raise ValueError(
+                f"dupire requires at least 2 fitted slices; got "
+                f"{len(fs.fitted_slices)}"
+            )
 
     grid: list[tuple[float, ...]] = []
     for T in maturities:
