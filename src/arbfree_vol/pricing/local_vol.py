@@ -73,7 +73,8 @@ def _stencil_touches_fallback(
     fitted_times:
         Sorted tuple of all fitted slice expiry times.
     fallback_set:
-        Set of fallback T values (for O(1) lookup).
+        Set of fallback T values, scanned linearly for proximity to the
+        grid maturity and the stencil endpoints.
     dT:
         Finite-difference step used by ``_dw_dT``.
 
@@ -86,6 +87,13 @@ def _stencil_touches_fallback(
     for fb in fallback_set:
         if abs(T - fb) < _FB_TOL:
             return True
+
+    # No interior interval exists to contaminate: with fewer than two
+    # fitted slices there is no fitted_times[i+1] to bracket a stencil
+    # point, so a fallback slice cannot leak through this path.  (The
+    # fallback-maturity NaN row logic above is unchanged.)
+    if len(fitted_times) < 2:
+        return False
 
     # Check each FD stencil point: T - dT and T + dT
     n = len(fitted_times)

@@ -268,6 +268,54 @@ class TestDupireFallbackLeakage:
         for row in lv.grid:
             assert len(row) == len(strikes)
 
+    # ── Single-slice guard (regression for the one-slice IndexError) ──
+    # Pre-fix, ``_stencil_touches_fallback`` computed ``fitted_times[idx + 1]``
+    # on a single-element tuple: ``n - 2`` went negative and the clamped
+    # index resolved to ``fitted_times[1]``, raising IndexError whenever a
+    # grid row was not itself a fallback maturity.  dupire() only validated
+    # >= 3 grid maturities, not >= 2 fitted slices, so a surface with ONE
+    # fitted slice plus a non-empty fallback list crashed.
+
+    def test_stencil_helper_single_fitted_slice_returns_false(self) -> None:
+        """_stencil_touches_fallback with fewer than two fitted times must
+        return False (no interior interval exists to contaminate) instead
+        of IndexErroring on ``fitted_times[1]``."""
+        from arbfree_vol.pricing.local_vol import _stencil_touches_fallback
+
+        # T=0.4 is not itself a fallback maturity, so the pre-fix code
+        # reached the stencil-bracket loop with n=1 and crashed on
+        # fitted_times[1].
+        assert _stencil_touches_fallback(0.4, (0.5,), {0.5}, 1e-3) is False
+
+    def test_single_fitted_slice_with_fallback_does_not_raise(self) -> None:
+        """A FittedSurface with exactly ONE fitted slice plus a non-empty
+        fallback_slices list must not raise IndexError, and the fallback
+        maturity rows must still be NaN (grid tolerance behavior)."""
+        fs, _ = _five_slice_surface()
+        # Keep only the single fitted slice at T=0.5.
+        single = FittedSurface(
+            spot=fs.spot,
+            risk_free=fs.risk_free,
+            div_yield=fs.div_yield,
+            forward_curve=fs.forward_curve,
+            fitted_slices=(fs.fitted_slices[2],),
+        )
+        strikes = [90.0, 95.0, 100.0, 105.0, 110.0]
+        maturities = [0.5, 0.5, 0.5]
+
+        # Must not raise IndexError.
+        lv = dupire(single, strikes, maturities, fallback_slices=[0.5])
+
+        # Every grid maturity is a fallback maturity, so every row is
+        # masked NaN per the existing maturity-tolerance behavior.
+        assert len(lv.grid) == len(maturities)
+        for iT, row in enumerate(lv.grid):
+            for iK in range(len(strikes)):
+                assert math.isnan(row[iK]), (
+                    f"T={maturities[iT]}, K={strikes[iK]}: expected NaN, "
+                    f"got {row[iK]}"
+                )
+
     def test_plot_dupire_heatmap_uses_nan_masking(self) -> None:
         """plot_dupire_heatmap correctly grays out NaN rows from grid."""
         import matplotlib
