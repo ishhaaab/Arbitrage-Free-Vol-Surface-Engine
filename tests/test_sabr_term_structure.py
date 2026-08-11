@@ -146,3 +146,50 @@ def test_single_slice_calibration_failure_raises(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="calibration failed"):
         fit_sabr_term_structure(slices)
+
+
+# ---------------------------------------------------------------------------
+# Test: joint-fit nonconvergence falls back to per-slice calibrate_sabr
+# ---------------------------------------------------------------------------
+
+def test_joint_fit_nonconvergence_falls_back_to_per_slice(monkeypatch, caplog) -> None:
+    """When the joint B-spline least-squares fit reports
+    ``success == False``, ``fit_sabr_term_structure`` must log the
+    documented warning and return the per-slice ``calibrate_sabr``
+    results — the returned parameters must equal (within tolerance) an
+    independent direct ``calibrate_sabr`` call on the same slices.
+
+    The fallback is forced deterministically: the joint-fit call is
+    monkeypatched to return a non-converged result object, so the branch
+    does not depend on optimizer budgets.  This pins the documented
+    contract in the docstring: there is NO marker distinguishing a
+    fallback result from a converged joint fit — value-equals-per-slice
+    is the fallback contract."""
+    import logging
+    import arbfree_vol.sabr.term_structure as ts
+
+    slices = _make_synthetic_slices()
+
+    class _NonConverged:
+        success = False
+        message = "simulated joint-fit nonconvergence"
+
+    monkeypatch.setattr(ts, "least_squares", lambda *a, **k: _NonConverged())
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.sabr.term_structure"):
+        result = fit_sabr_term_structure(slices)
+
+    # Fallback contract: per-slice params equal a direct calibrate_sabr
+    # call on the same slices (within solver determinism).
+    assert len(result) == len(slices)
+    for i, (T, F, pts) in enumerate(slices):
+        direct = calibrate_sabr(pts, forward=F, expiry_time=T, beta_hint=0.5)
+        assert result[i].alpha == approx(direct.alpha, abs=1e-10)
+        assert result[i].rho == approx(direct.rho, abs=1e-10)
+        assert result[i].nu == approx(direct.nu, abs=1e-10)
+        assert result[i].beta == direct.beta
+
+    # The documented warning is emitted.
+    assert "falling back to per-slice calibrate_sabr" in caplog.text, (
+        f"expected the fallback warning, got: {caplog.text}"
+    )

@@ -132,6 +132,15 @@ def fit_sabr_term_structure(
       Decision vector ``p = [u_alpha_0.., u_nu_0.., u_rho_0..]`` where
       each group of coefficients is mapped through exp/tanh to keep the
       spline curve in the valid range by the convex-hull property.
+    - Joint-fit fallback: when the joint B-spline least-squares fit
+      reports ``success == False``, the function logs a WARNING
+      ("falling back to per-slice calibrate_sabr") and returns the
+      per-slice ``calibrate_sabr`` results computed during initialisation
+      (step A) EXACTLY as-is.  There is no marker distinguishing a
+      fallback result from a converged joint fit — callers pinning the
+      fallback contract must compare the returned parameters against an
+      independent direct ``calibrate_sabr`` call on the same slices
+      (they are equal within solver determinism).
     """
     # Sort by ascending expiry
     slices_data = sorted(slices_data, key=lambda sd: sd[0])
