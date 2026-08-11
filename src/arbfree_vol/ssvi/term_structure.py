@@ -365,6 +365,40 @@ def _slice_rmse(
     ))
 
 
+def _hm_boundary_deltas(
+    prev: SSVIParams, params: SSVIParams,
+) -> tuple[float, float, float]:
+    """Compute the H&M Prop 3.1 boundary deltas for a candidate hard fit.
+
+    Returns ``(theta_delta, chi_delta, ratio)`` where
+    ``theta_delta = theta - theta_prev``,
+    ``chi_delta = chi - chi_prev`` (``chi = theta * psi``) and
+    ``ratio = |rho*chi - rho_prev*chi_prev| / max(chi_delta, eps_chi)``.
+
+    Both the degenerate-corner predicate (:func:`_hard_fit_is_degenerate_corner`)
+    and its logging call site in ``fit_ssvi_surface_sequential`` must use
+    this single source of truth, so the decision and the log can never
+    disagree.
+    """
+    theta_delta = params.theta - prev.theta
+    chi_delta = params.theta * params.psi - prev.theta * prev.psi
+    ratio = abs(
+        params.rho * params.theta * params.psi
+        - prev.rho * prev.theta * prev.psi
+    ) / max(chi_delta, _EPS_CHI)
+    return theta_delta, chi_delta, ratio
+
+
+def _within_boundary_window(theta_delta: float, chi_delta: float,
+                            ratio: float) -> bool:
+    """True iff the hard fit sits within the H&M boundary margin window."""
+    return (
+        theta_delta <= _HM_BOUNDARY_MARGIN_THETA
+        and chi_delta <= _HM_BOUNDARY_MARGIN_CHI
+        and ratio >= 1.0 - _HM_BOUNDARY_MARGIN_RATIO
+    )
+
+
 def _hard_fit_is_degenerate_corner(
     prev: SSVIParams | None,
     params: SSVIParams,
@@ -404,33 +438,26 @@ def _hard_fit_is_degenerate_corner(
     The first slice has no H&M predecessor boundary to sit on, so
     ``prev=None`` is never flagged.
 
-    If the unconstrained baseline fit itself fails, the hard fit is
-    conservatively NOT flagged: the fit failed the H&M constraints by
-    the normal route anyway, and the existing fallback machinery already
-    reports fit failures honestly.
+    If the unconstrained baseline fit cannot be computed (raises), the
+    RMSE comparison is unavailable — but a fit pinned within the boundary
+    window is exactly the knife-edge pattern this check exists to catch,
+    so it IS flagged and routed to the fallback rather than silently
+    certified.  Fits outside the boundary window are never flagged,
+    baseline or no baseline.
 
     Returns
     -------
     bool
-        ``True`` iff the fit is within the boundary margin AND its RMSE
-        is anomalously bad relative to the unconstrained fit.
+        ``True`` iff the fit is within the boundary margin AND (its RMSE
+        is anomalously bad relative to the unconstrained fit, OR the
+        unconstrained baseline fit is unavailable).
     """
     if prev is None:
         return False
 
-    theta_delta = params.theta - prev.theta
-    chi_delta = params.theta * params.psi - prev.theta * prev.psi
-    ratio = abs(
-        params.rho * params.theta * params.psi
-        - prev.rho * prev.theta * prev.psi
-    ) / max(chi_delta, _EPS_CHI)
+    theta_delta, chi_delta, ratio = _hm_boundary_deltas(prev, params)
 
-    near_boundary = (
-        theta_delta <= _HM_BOUNDARY_MARGIN_THETA
-        and chi_delta <= _HM_BOUNDARY_MARGIN_CHI
-        and ratio >= 1.0 - _HM_BOUNDARY_MARGIN_RATIO
-    )
-    if not near_boundary:
+    if not _within_boundary_window(theta_delta, chi_delta, ratio):
         # Fast path: far from the boundary, no need for the unconstrained
         # baseline fit.
         return False
@@ -439,13 +466,16 @@ def _hard_fit_is_degenerate_corner(
     try:
         unconstrained = fit_ssvi_slice(points)
     except (RuntimeError, ValueError):
-        # Conservative: without a baseline we do not flag.
-        return False
+        # No baseline to compare against — but a fit pinned on the H&M
+        # boundary is precisely the m66 pattern that must never be
+        # silently certified, so flag it and let the caller route it to
+        # the honest fallback.
+        return True
     unconstrained_rmse = _slice_rmse(unconstrained, points)
     bad_rmse = hard_rmse > max(
         _HM_RMSE_RATIO_MAX * unconstrained_rmse, _HM_RMSE_FLOOR
     )
-    return near_boundary and bad_rmse
+    return bad_rmse
 
 
 def fit_ssvi_surface_sequential(
@@ -473,9 +503,10 @@ def fit_ssvi_surface_sequential(
     fit pinned within eps of the H&M Prop 3.1 boundary whose per-slice
     RMSE is anomalously bad relative to the unconstrained fit (the m66
     degenerate-corner pattern, docs/code_review_findings.md §6.7) is
-    routed through the same ``RuntimeError`` fallback path, so a
-    feasible-but-wrong boundary corner is never silently certified
-    arb-free.
+    routed through the same ``RuntimeError`` fallback path.  When the
+    unconstrained baseline fit is unavailable, the boundary proximity
+    alone is enough to flag the corner — either way, a feasible-but-wrong
+    boundary corner is never silently certified arb-free.
 
     Parameters
     ----------
@@ -511,9 +542,7 @@ def fit_ssvi_surface_sequential(
         try:
             params = _fit_slice(pts, prev=last_valid_prev)
             if last_valid_prev is not None and _hard_fit_is_degenerate_corner(last_valid_prev, params, pts):
-                _theta_delta = params.theta - last_valid_prev.theta
-                _chi_delta = params.theta * params.psi - last_valid_prev.theta * last_valid_prev.psi
-                _ratio = abs(params.rho * params.theta * params.psi - last_valid_prev.rho * last_valid_prev.theta * last_valid_prev.psi) / max(_chi_delta, _EPS_CHI)
+                _theta_delta, _chi_delta, _ratio = _hm_boundary_deltas(last_valid_prev, params)
                 _logger.warning("eSSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback", expiry, _theta_delta, _chi_delta, _ratio, _slice_rmse(params, pts))
                 raise RuntimeError("hard fit is a degenerate H&M boundary corner")
             last_valid_prev = params  # update only on hard-constrained success

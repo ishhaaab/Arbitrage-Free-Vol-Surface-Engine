@@ -897,3 +897,69 @@ def test_hard_fit_within_eps_of_boundary_not_silently_certified(monkeypatch) -> 
     assert 2.00 in result.fallback_slices, (
         "the m66 corner hard-fit must be routed to fallback, not silently certified"
     )
+
+
+def test_degenerate_corner_with_failed_baseline_routes_to_fallback(monkeypatch) -> None:
+    """A hard fit pinned within the H&M boundary window must be routed
+    to fallback even when the unconstrained baseline fit fails.
+
+    Scripts the m66 corner parameters (theta_delta ~1e-9, chi_delta
+    ~1e-6, ratio ~0.9998) AND makes the baseline ``fit_ssvi_slice`` call
+    inside the degenerate-corner check raise.  Pre-fix,
+    ``_hard_fit_is_degenerate_corner`` returned False when the baseline
+    raised ("conservative"), silently certifying the boundary-adjacent
+    hard fit.  Post-fix the boundary proximity alone flags the corner,
+    the caller raises RuntimeError, and the honest fallback recovers the
+    true dip params — so the slice lands in ``fallback_slices``.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    # m66 measured corner (docs/code_review_findings.md §6.7), pinned to its prev.
+    prev_params = SSVIParams(theta=0.1192518709, rho=0.08325035, psi=0.47564518)
+    corner = SSVIParams(theta=0.119251872, rho=0.083266515, psi=0.475653565)
+    truth2 = SSVIParams(theta=0.07, rho=0.2, psi=0.55)
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    slices_data = [
+        (0.25, [(float(k), ssvi_w(float(k), 0.08, -0.3, 0.5)) for k in ks]),
+        (1.00, [(float(k), ssvi_w(float(k), 0.12, 0.1, 0.4)) for k in ks]),
+        (2.00, [(float(k), ssvi_w(float(k), 0.07, 0.2, 0.55)) for k in ks]),
+    ]
+
+    real_fit_slice = ts._fit_slice
+
+    def _scripted_fit_slice(points, prev=None, **kwargs):
+        k0, w0 = points[0]
+        if abs(w0 - ssvi_w(k0, 0.07, 0.2, 0.55)) < 1e-8:
+            return corner        # T=2.0 dip slice -> m66 corner
+        if abs(w0 - ssvi_w(k0, 0.12, 0.1, 0.4)) < 1e-8:
+            return prev_params   # T=1.0 slice -> the prev that pins the corner
+        return real_fit_slice(points, prev=prev, **kwargs)
+
+    calls = {"n": 0}
+
+    def _baseline_fails_then_recovers(points):
+        # First call is the RMSE baseline inside the degenerate-corner
+        # check for T=2.0; it fails.  The fallback call after the corner
+        # is flagged must succeed so the slice is recorded as a fallback.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("unconstrained baseline fit failed")
+        return truth2
+
+    monkeypatch.setattr(ts, "_fit_slice", _scripted_fit_slice)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _baseline_fails_then_recovers)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    assert 2.00 in result.fallback_slices, (
+        "a boundary-window hard fit must be routed to fallback even when "
+        f"the baseline fit fails; got fallback_slices={result.fallback_slices}"
+    )
+    assert 2.00 not in result.failed_slices, (
+        f"the fallback must succeed; got failed_slices={result.failed_slices}"
+    )
+    fitted_by_T = dict(result.fitted_slices)
+    assert 2.00 in fitted_by_T
+    # The fallback recovers the true dip params.
+    assert fitted_by_T[2.00].theta == pytest.approx(0.07, rel=0.02)
