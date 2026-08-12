@@ -456,6 +456,34 @@ class TestOpenBBFetchChainMainPath:
         assert any(sl.div_yield is not None for sl in surface.slices) \
             or surface.div_yield != 0.0
 
+    def test_fetch_chain_index_placeholder_zero_not_logged_as_observed(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """Index symbols set a q=0.0 PLACEHOLDER before per-expiry
+        put-call parity estimation — not an observed dividend yield.  The
+        pre-loop log must say so (index-default path) and must NOT claim
+        the yield was "observed as zero".
+
+        Regression (pre-fix): the placeholder ``q = 0.0`` triggered the
+        ``q == 0.0`` observed-zero branch, so EVERY index symbol logged
+        "Dividend yield ... observed as zero (dividendYield present as
+        0.0 in ticker info)" even though the value never came from the
+        ticker's info (the yfinance path scopes that branch to non-index
+        tickers; the OpenBB path did not)."""
+        _fake_openbb(monkeypatch, _chains_df())
+
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.openbb"):
+            openbb_mod.fetch_chain("^SPX")
+
+        assert "observed as zero" not in caplog.text, (
+            f"an index placeholder q=0.0 must not be logged as an "
+            f"observed zero, got: {caplog.text}"
+        )
+        assert "index default" in caplog.text, (
+            f"expected the index-default message for the q=0.0 "
+            f"placeholder, got: {caplog.text}"
+        )
+
     def test_fetch_chain_missing_expiration_raises(self, monkeypatch) -> None:
         """A chain without an 'expiration' column raises ValueError."""
         df = _chains_df().drop(columns=["expiration"])

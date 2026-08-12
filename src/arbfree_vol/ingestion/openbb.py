@@ -273,6 +273,17 @@ def fetch_chain(
     _is_index = symbol.startswith("^")
     if _is_index:
         q = 0.0  # will be updated after slice loop
+        # The q=0.0 here is a PLACEHOLDER, not an observation — index
+        # symbols estimate q per-expiry via put-call parity after the
+        # slice loop.  It must never be logged as an observed zero (the
+        # pre-fix code hit the `q == 0.0` observed-zero branch for every
+        # index symbol because the placeholder triggered it).
+        _logger.warning(
+            "Dividend yield for %s starts at the index default q=0.0 "
+            "(placeholder); per-expiry put-call parity estimation runs "
+            "after the slice loop",
+            symbol,
+        )
     else:
         try:
             yf_ticker = yf.Ticker(symbol)
@@ -286,6 +297,22 @@ def fetch_chain(
                     q /= 100.0
         except Exception:
             _logger.warning("Failed to fetch dividend yield", exc_info=True)
+        if q is None:
+            _logger.warning(
+                "Dividend yield unavailable for %s (dividendYield missing "
+                "from ticker info); substituting q=0.0",
+                symbol,
+            )
+            q = 0.0
+        elif q == 0.0:
+            # An observed zero is a real observation, not a substitution:
+            # the value is used as-is, but the provenance is logged so a
+            # zero-yield surface is never silent about where q came from.
+            _logger.warning(
+                "Dividend yield for %s observed as zero (dividendYield "
+                "present as 0.0 in ticker info); using q=0.0 as observed",
+                symbol,
+            )
 
     if r is None:
         _logger.warning(
@@ -294,22 +321,6 @@ def fetch_chain(
             symbol,
         )
         r = 0.05
-    if q is None:
-        _logger.warning(
-            "Dividend yield unavailable for %s (dividendYield missing "
-            "from ticker info); substituting q=0.0",
-            symbol,
-        )
-        q = 0.0
-    elif q == 0.0:
-        # An observed zero is a real observation, not a substitution:
-        # the value is used as-is, but the provenance is logged so a
-        # zero-yield surface is never silent about where q came from.
-        _logger.warning(
-            "Dividend yield for %s observed as zero (dividendYield "
-            "present as 0.0 in ticker info); using q=0.0 as observed",
-            symbol,
-        )
 
     # ── Normalise columns ────────────────────────────────────────────
     df = _normalise_columns(raw_df)
@@ -427,6 +438,18 @@ def fetch_chain(
                     "Index %s: put-call parity q failed for all %d slices; "
                     "surface q from representative ETF yield (q=%.6f)",
                     symbol, len(slices), q,
+                )
+            elif rep_q is not None:
+                # The representative yield was PRESENT and observed as
+                # zero (the helper itself logs the observed-zero
+                # provenance).  This branch must not claim the yield was
+                # unavailable — an observed zero is an observation, not
+                # a substitution.
+                _logger.warning(
+                    "Index %s: put-call parity q failed for all %d slices; "
+                    "representative ETF yield observed as zero; surface "
+                    "q=0.0 as observed",
+                    symbol, len(slices),
                 )
             else:
                 _logger.warning(
