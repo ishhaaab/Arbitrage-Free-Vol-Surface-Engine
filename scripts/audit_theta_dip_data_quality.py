@@ -738,8 +738,13 @@ def write_findings_to_issues(results):
             f"{raw['theta_dips']} | {raw['theta_max_dip_pct']:.1f}% |"
         )
         if filt is None:
+            # Mirror the console's explanation (fixture mode has no raw
+            # chains, so the filtered comparison cannot be performed) in
+            # the generated Issue #15 table — a bare "N/A" would read as
+            # "not applicable" without saying why.
             lines.append(
-                f"| {label} (filtered) | N/A | N/A | N/A | N/A | N/A |"
+                f"| {label} (filtered) | N/A (fixture has no raw chains) | "
+                f"N/A | N/A | N/A | N/A |"
             )
         else:
             lines.append(
