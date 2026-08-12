@@ -22,6 +22,27 @@ where :math:`k = \\ln(K / F(T))` and all partial derivatives are
 approximated with finite differences.
 
 .. note::
+   The strike-space stencil steps in *absolute strike* (``K ± dK``); since
+   :math:`k = \\ln(K/F)` is nonlinear in :math:`K`, the resulting *k*-grid
+   is NON-UNIFORM (equal K-steps give unequal k-steps).  The first
+   derivative uses the standard central difference
+   ``(w⁺ − w⁻) / (k⁺ − k⁻)``, and the second derivative uses the
+   non-uniform central stencil ``2/(h⁺+h⁻) · [(w⁺−w⁰)/h⁺ − (w⁰−w⁻)/h⁻]``
+   (with ``h⁺ = k⁺ − k⁰``, ``h⁻ = k⁰ − k⁻``), which reduces to the
+   symmetric formula on a uniform grid.  Using the symmetric formula on
+   this asymmetric grid would inject a spurious ``−w′(k)`` term into
+   d²w/dk².
+
+.. note::
+   The time derivative ``_dw_dT`` is taken at FIXED log-moneyness
+   ``k = ln(K/F(T))``, not at a fixed absolute strike: each stencil point
+   is re-struck along the forward curve (``K' = K · F(T±dT)/F(T)``) so
+   that ``k`` does not drift across the stencil.  A fixed-*K* stencil
+   would inject a spurious ``(r-q)·∂w/∂k`` term into the numerator,
+   which is first-order in the smile slope and can be several percent of
+   the local vol for non-zero carry with a skewed smile.
+
+.. note::
    Finite-difference step sizes are module-level constants
    (``_FD_T_DEFAULT``, ``_FD_K_DEFAULT``).  Because
    ``total_variance_at`` is piecewise-linear in *T* with kinks at
@@ -136,25 +157,41 @@ def _dw_dT(fs: FittedSurface, K: float, T: float,
     """First partial derivative of total variance w.r.t. time *T*.
 
     Central difference where possible; forward/backward at boundaries.
+
+    The derivative is taken at FIXED log-moneyness ``k = ln(K/F(T))``,
+    as required by the Gatheral (2004) Eq 1.10 form of the Dupire
+    formula.  Because ``total_variance_at`` interpolates at a fixed
+    *absolute strike*, the stencil points must re-strike along the
+    forward curve: ``K' = K * F(T±dT) / F(T)``.  Holding *K* fixed
+    instead injects a spurious ``(r-q) * dw/dk`` term into the numerator
+    (``k`` drifts by ``-d ln F/dT * dT`` across the stencil); with a
+    non-zero carry and a skewed smile that bias is first-order in the
+    slope and can reach several percent of the local vol.
     """
     T_min = fs.fitted_slices[0].expiry_time
     T_max = fs.fitted_slices[-1].expiry_time
 
+    F_T = _forward_at(fs, T)
+
     # Near lower boundary — forward difference
     if T - dT < max(T_min, _T_MIN):
-        wp = total_variance_at(fs, K, T + dT)
+        K_p = K * _forward_at(fs, T + dT) / F_T
+        wp = total_variance_at(fs, K_p, T + dT)
         w0 = total_variance_at(fs, K, T)
         return (wp - w0) / dT
 
     # Near upper boundary — backward difference
     if T + dT > T_max:
+        K_m = K * _forward_at(fs, T - dT) / F_T
         w0 = total_variance_at(fs, K, T)
-        wm = total_variance_at(fs, K, T - dT)
+        wm = total_variance_at(fs, K_m, T - dT)
         return (w0 - wm) / dT
 
     # Interior — central difference
-    wp = total_variance_at(fs, K, T + dT)
-    wm = total_variance_at(fs, K, T - dT)
+    K_p = K * _forward_at(fs, T + dT) / F_T
+    K_m = K * _forward_at(fs, T - dT) / F_T
+    wp = total_variance_at(fs, K_p, T + dT)
+    wm = total_variance_at(fs, K_m, T - dT)
     return (wp - wm) / (2.0 * dT)
 
 
@@ -190,21 +227,38 @@ def _d2w_dk2(fs: FittedSurface, K: float, T: float, F_T: float,
              dK: float = _FD_K_DEFAULT) -> float:
     """Second partial derivative of total variance w.r.t. log-moneyness *k*.
 
-    Central difference formula: (w⁺ - 2·w₀ + w⁻) / dk².
+    Correct central second difference on the NON-UNIFORM k-grid produced
+    by equal absolute-strike steps (``k = ln(K/F)`` makes equal K-steps
+    give unequal k-steps).  With ``h⁺ = k⁺ - k⁰`` and ``h⁻ = k⁰ - k⁻``:
+
+    .. math::
+
+        w''(k_0) = \\frac{2}{h^+ + h^-}
+        \\left[ \\frac{w^+ - w^0}{h^+} - \\frac{w^0 - w^-}{h^-} \\right]
+
+    On a uniform grid (``h⁺ = h⁻ = h``) this reduces exactly to the
+    symmetric formula ``(w⁺ - 2·w⁰ + w⁻) / h²``.  The symmetric formula
+    applied to the asymmetric k-grid would inject a spurious ``-w'(k)``
+    first-derivative term (measured d²w = -b on a linear branch where the
+    true d²w = 0); this non-uniform stencil removes that bias.
     Returns *nan* if the strike step is too narrow for safe computation.
     """
     # Edge guard (can't do central second diff at boundary)
     if K - dK <= 0.0:
         return nan
 
-    dk = 0.5 * log((K + dK) / (K - dK))
-    if abs(dk) < 1e-15:
+    # k-space half-steps around the center point (F_T cancels in each ratio)
+    h_plus = log((K + dK) / K)
+    h_minus = log(K / (K - dK))
+    if abs(h_plus) < 1e-15 or abs(h_minus) < 1e-15:
         return nan
 
     wp = total_variance_at(fs, K + dK, T)
     w0 = total_variance_at(fs, K, T)
     wm = total_variance_at(fs, K - dK, T)
-    return (wp - 2.0 * w0 + wm) / (dk * dk)
+    return 2.0 / (h_plus + h_minus) * (
+        (wp - w0) / h_plus - (w0 - wm) / h_minus
+    )
 
 
 # Dupire local volatility (single point)

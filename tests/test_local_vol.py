@@ -19,6 +19,7 @@ from arbfree_vol.pricing.local_vol import (
     LocalVolSurface,
     dupire_at,
     dupire,
+    _d2w_dk2,
 )
 
 
@@ -331,19 +332,94 @@ class TestDupireNonFlatSmileExact:
             fitted_slices=(sl_low, sl_high),
         )
 
-        # Reference values computed independently via direct FD evaluation
-        # of total_variance_at using the corrected Dupire denominator formula.
+        # Reference values — INDEPENDENT provenance (not the repo's dupire_at):
+        # exact closed-form evaluation with CORRECTED derivatives on the
+        # ACTUAL interpolated surface.  Because total_variance_at
+        # interpolates at fixed absolute strike K (per-slice forwards differ
+        # when r != q), the surface is NOT exactly w = T*f(k); the reference
+        # uses the SVI analytic derivatives (svi_core w1/w2) of each slice,
+        # the exact T-derivative of the interpolated w at FIXED log-moneyness
+        # k = ln(K/F(T)), and Gatheral (2004) Eq 1.10 literally.  This
+        # closed form cross-validates against the model-independent
+        # price-space Dupire finite difference (Black-Scholes prices ->
+        # [dC/dT + mu*K dC/dK + (r-mu) C]/(0.5 K^2 C_KK) with the surface's
+        # own forward drift mu = F'(T)/F(T)) to ~1e-8 relative.
+        # The repo's FD stencil (dK = K*1e-3, dT = 1e-3) adds ~2-3e-6
+        # relative, so the honest tolerance below is 1e-4 — several orders
+        # tighter than the ~12% bias the old symmetric-stencil values
+        # certified.
         expected = {
-            (90.0, 1.0): 0.5240159030,
-            (90.0, 1.5): 0.5355544481,
-            (100.0, 1.0): 0.3388399231,
-            (100.0, 1.5): 0.3374822475,
-            (110.0, 1.0): 0.2284521863,
-            (110.0, 1.5): 0.2096225592,
+            (90.0, 1.0): 0.5966932352,
+            (90.0, 1.5): 0.6942597587,
+            (100.0, 1.0): 0.3422958235,
+            (100.0, 1.5): 0.3442086699,
+            (110.0, 1.0): 0.2225186276,
+            (110.0, 1.5): 0.1983872723,
         }
 
         for (K, T), ref in expected.items():
             lv = dupire_at(fs, K, T)
-            assert lv == approx(ref, rel=1e-6), (
+            assert lv == approx(ref, rel=1e-4), (
                 f"K={K}, T={T}: got {lv:.10f}, expected {ref:.10f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Test: regression — non-uniform k-grid second-difference
+# ---------------------------------------------------------------------------
+class TestDupireNonUniformSecondDifference:
+    """The second-derivative stencil must handle the non-uniform k-grid.
+
+    The repo's stencil steps in *absolute strike* (``K ± dK``), so the
+    implied k-grid (``k = ln(K/F)``) is NOT uniform.  The old symmetric
+    second-difference ``(w⁺ − 2w⁰ + w⁻)/dk²`` injected a spurious
+    ``-w'(k)`` term on that grid.  These tests pin the corrected
+    non-uniform stencil.
+    """
+
+    def test_d2w_dk2_zero_on_linear_in_k_branch(self) -> None:
+        """d²w/dk² ≈ 0 on a linear-in-k total-variance slice.
+
+        On a slice whose total variance is ``w = sigma²·T·(1 + beta·k)``
+        the true second derivative is zero.  The pre-fix symmetric formula
+        returned ``-b = -sigma²·T·beta`` (the smile slope); the corrected
+        non-uniform stencil must return ~0 instead.
+        """
+        from tests.ground_truth.dupire_cases import (
+            BETA_LIN,
+            SIGMA_LIN,
+            build_linear_in_k_surface,
+        )
+
+        fs = build_linear_in_k_surface()
+        F_T = 100.0  # SPOT; r = q = 0 in the ground-truth cases module
+
+        # True second derivative on the linear branch: exactly 0.
+        # Pre-fix symmetric formula would return -b = -SIGMA_LIN²·T·BETA_LIN
+        # (e.g. -0.028125 at T=1.5) — two orders of magnitude beyond the
+        # tolerance here.
+        for T in (0.75, 1.0, 1.25, 1.5):
+            for k in (-0.4, -0.2, 0.0, 0.2, 0.4):
+                K = 100.0 * math.exp(k)
+                d2 = _d2w_dk2(fs, K, T, F_T)
+                assert d2 == approx(0.0, abs=1e-4), (
+                    f"T={T}, k={k}: d2w/dk2={d2:.8f}, expected ~0 "
+                    f"(pre-fix symmetric stencil gave "
+                    f"{-SIGMA_LIN ** 2 * T * BETA_LIN:.8f})"
+                )
+
+    def test_d2w_dk2_reduces_to_symmetric_on_uniform_grid(self) -> None:
+        """The non-uniform stencil reduces to the symmetric formula when
+        the k-grid IS uniform (equal k-steps)."""
+        # Build a 2-slice surface (any smile works); the point here is the
+        # algebra, verified directly: on a uniform k-grid
+        # h⁺ = h⁻ = h the stencil is
+        #   2/(h⁺+h⁻)·[(w⁺−w⁰)/h⁺ − (w⁰−w⁻)/h⁻]
+        # = 1/h·[(w⁺−w⁰)/h − (w⁰−w⁻)/h]
+        # = (w⁺ − 2w⁰ + w⁻)/h².
+        # Numerically simulate the formula with equal k-steps and confirm it
+        # equals the symmetric form.
+        w0, wm, wp, h = 0.4, 0.3, 0.55, 0.05
+        symmetric = (wp - 2.0 * w0 + wm) / (h * h)
+        non_uniform = 2.0 / (h + h) * ((wp - w0) / h - (w0 - wm) / h)
+        assert non_uniform == approx(symmetric, rel=1e-12)

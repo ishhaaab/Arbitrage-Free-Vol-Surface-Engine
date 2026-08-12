@@ -86,9 +86,10 @@ FD_REL_TOL_LINEAR: float = 2e-3
 first/second-order accurate in the k-step (the repo's FD steps are
 ``dK = max(1e-3, K*1e-3)``); the independent price-space FD reference
 agrees with the closed form to ~1.5e-4, so 2e-3 is a documented FD
-tolerance several times the observed FD error.  (The repo currently
-FAILS this tolerance by 4e-3..8e-3 because of the ``_d2w_dk2``
-first-derivative bias — see test_dupire_ground_truth.py.)"""
+tolerance several times the observed FD error.  (The repo previously
+FAILED this tolerance by 4e-3..8e-3 because of the ``_d2w_dk2``
+first-derivative bias; after the non-uniform stencil + fixed-k ``_dw_dT``
+fix the measured deviation is ~3.4e-7 — see test_dupire_ground_truth.py.)"""
 
 
 def _forward(T: float) -> float:

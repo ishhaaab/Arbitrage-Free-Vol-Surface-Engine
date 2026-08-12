@@ -12,34 +12,32 @@ Two closed-form cases:
    local vol derived in ``dupire_cases.py`` (Gatheral 2004 Eq 1.10) and
    implemented LITERALLY there, independent of the repo's ``local_vol.py``.
 
-STOPPED-ON FINDING (do not weaken):
------------------------------------
-The repo's ``dupire`` currently does NOT agree with the hand-derived closed
-form for the linear-in-k case: the measured relative deviation is 4e-3..8e-3,
-well above the documented FD tolerance of 2e-3.  Investigation shows a
-genuine repo bug in ``pricing/local_vol.py::_d2w_dk2``: it applies the
-symmetric second-difference formula ``(w+ - 2w0 + w-)/dk^2`` with
+STOPPED-ON FINDING — RESOLVED (2026-08-13)
+-----------------------------------------
+The repo's ``dupire`` previously did NOT agree with the hand-derived closed
+form for the linear-in-k case: the measured relative deviation was
+4e-3..8e-3, well above the documented FD tolerance of 2e-3.  Investigation
+found a genuine repo bug in ``pricing/local_vol.py::_d2w_dk2``: it applied
+the symmetric second-difference formula ``(w+ - 2w0 + w-)/dk^2`` with
 ASYMMETRIC k-steps (equal K-steps give unequal k-steps because
-k = ln(K/F)), which injects a spurious ``-w'(k)`` term into the second
+k = ln(K/F)), which injected a spurious ``-w'(k)`` term into the second
 derivative.  Measured on the linear branch: true d2w = 0, repo d2w = -b
-(the smile slope).  The same bias is visible on the repo's own non-flat
-smile test (``test_local_vol.py::test_dupire_non_flat_exact_values``), where
-the "reference" values were computed with the same biased formula and deviate
-from the independent price-space Dupire FD by up to ~12%.
-
-Per the campaign's core rule the repo-vs-closed-form comparison test is
-marked ``xfail(strict=True)`` with this bug as the reason: it expects the
-repo to FAIL the honest label, and flips to a hard failure if the bug is
-"fixed" without updating the test.  The closed form itself is validated by a
-non-xfail test against an independent price-space Dupire finite-difference
-(which uses no total-variance-space formula at all).
+(the smile slope).  A SECOND same-class bug was found in ``_dw_dT``, which
+took the T-derivative at fixed absolute strike K instead of fixed
+log-moneyness k, injecting a spurious ``(r-q)*dw/dk`` term (first-order in
+the smile slope for non-zero carry).  Both are fixed with the non-uniform
+central second-difference stencil and the fixed-k T-stencil; the xfail
+below has been flipped to a passing test.  The repo-vs-closed-form
+deviation is now ~3.4e-7 relative (tolerance 2e-3).  The closed form
+itself is validated by a non-xfail test against an independent
+price-space Dupire finite-difference (which uses no total-variance-space
+formula at all).
 """
 
 from __future__ import annotations
 
 import math
 
-import pytest
 from pytest import approx
 
 from arbfree_vol.pricing.local_vol import dupire
@@ -151,25 +149,17 @@ def test_linear_in_k_closed_form_matches_price_space_fd() -> None:
             )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "STOPPED-ON repo bug: pricing/local_vol.py::_d2w_dk2 applies a "
-        "symmetric second-difference formula to ASYMMETRIC k-steps (equal "
-        "K-steps give unequal k-steps since k=ln(K/F)), injecting a "
-        "spurious -w'(k) term: measured d2w = -b on a linear branch where "
-        "the true d2w = 0.  The repo's dupire deviates from the "
-        "hand-derived closed form by 4e-3..8e-3 relative (documented FD "
-        "tolerance 2e-3; independent price-space FD agrees with the closed "
-        "form to 1.5e-4).  This xfail is the honest pin: it must fail until "
-        "the _d2w_dk2 bias is fixed in a separate cycle."
-    ),
-)
 def test_linear_in_k_repo_dupire_matches_closed_form() -> None:
     """``dupire`` must reproduce the closed-form local vol on the interior grid.
 
-    Interior maturity rows only.  Currently FAILS because of the ``_d2w_dk2``
-    first-derivative bias — see the module docstring and the xfail reason.
+    Interior maturity rows only.  This test was the module's honest
+    ``xfail(strict=True)`` pin while ``pricing/local_vol.py::_d2w_dk2``
+    applied a symmetric second-difference formula to ASYMMETRIC k-steps
+    (equal K-steps give unequal k-steps since k = ln(K/F)), injecting a
+    spurious -w'(k) term (measured d2w = -b on a linear branch where the
+    true d2w = 0).  The fix (non-uniform central stencil + fixed-k ∂w/∂T)
+    removed the bias; the measured deviation on this grid is now ~3.4e-7
+    relative, well inside the documented FD tolerance of 2e-3.
     """
     fs = build_linear_in_k_surface()
     lv = dupire(fs, list(LINEAR_IN_K_STRIKES), list(LINEAR_IN_K_MATURITIES))
