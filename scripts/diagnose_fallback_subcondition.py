@@ -10,6 +10,18 @@ Uses `verify_hm_condition_breakdown` with `fitted_slices_prev` to ensure
 consecutive fallbacks are attributed to the correct predecessor (the
 last hard-constrained fit, not the position-based predecessor).
 
+This is a RESEARCH / DIAGNOSTIC tool, not part of the library test suite.
+All numbers are snapshot-in-time: live fetches on the run date, fitted
+with the scipy optimizer at that moment.
+
+LIMITATION: the ratio condition is only evaluated when chi genuinely
+increases.  When chi is flat or decreasing, the ratio is reported as N/A
+(undefined) — the old clamped denominator manufactured a huge, misleading
+ratio, and a chi dip is a PRIMARY data-driven failure, not evidence about
+the model's ratio condition.  A "ratio" count below therefore means a
+genuine ratio violation with monotone (increasing) chi, never a derived
+consequence of a chi dip.
+
 Usage:
     python scripts/diagnose_fallback_subcondition.py
 """
@@ -164,7 +176,16 @@ def diagnose_source(label: str, surface) -> dict | None:
         theta_drop = (theta_prev - theta_self) / theta_prev * 100 if theta_prev > 0 else 0
         chi_drop = (chi_prev - chi_self) / chi_prev * 100 if chi_prev > 0 else 0
 
-        # Format fail description
+        # The ratio is only defined when chi genuinely increases.  When chi
+        # is flat or decreasing the ratio is N/A (undefined) — a chi dip is
+        # the PRIMARY failure, and any ratio number would be a derived,
+        # misleading diagnostic.
+        ratio_defined = ratio_val is not None
+        ratio_str = f"{ratio_val:>8.4f}" if ratio_defined else "     N/A"
+
+        # Format fail description — primary failures (theta/chi) first,
+        # then the derived ratio diagnostic (only present when chi
+        # increases and the slope condition genuinely fails).
         fail_parts = []
         for cond in failing:
             if cond == "theta":
@@ -173,10 +194,12 @@ def diagnose_source(label: str, surface) -> dict | None:
                 fail_parts.append(f"chi (drops {chi_drop:.0f}%)")
             elif cond == "ratio":
                 fail_parts.append(f"ratio ({ratio_val:.4f} > 1)")
+        if not ratio_defined and not entry["chi_ok"]:
+            fail_parts.append("ratio N/A (chi non-monotonic)")
         fail_str = ", ".join(fail_parts) if fail_parts else "(none — should not be fallback?)"
 
         print(f"  {fb_T:>8.4f}  {prev_T:>8.4f}  {theta_self:>10.6f}  "
-              f"{chi_self:>10.6f}  {ratio_val:>8.4f}  FAILS: {fail_str}")
+              f"{chi_self:>10.6f}  {ratio_str}  FAILS: {fail_str}")
 
         # Count each failing condition
         for cond in failing:
@@ -211,6 +234,9 @@ def diagnose_source(label: str, surface) -> dict | None:
     print(f"    chi violations:   {aggregate['chi']}/{n_fallback}")
     print(f"    ratio violations: {aggregate['ratio']}/{n_fallback}")
     print(f"    multi-condition:  {aggregate['multi']}/{n_fallback}")
+    print(f"    (ratio is only counted where chi increases; where chi dips")
+    print(f"     the ratio is N/A — a derived consequence, not a separate")
+    print(f"     model failure)")
 
     return {
         "label": label,
@@ -244,14 +270,17 @@ def print_comparison(all_results: dict[str, dict | None]):
 
     # Interpretation
     print(f"\n  Interpretation:")
-    print(f"  - theta violations = data wants lower ATM variance at this")
-    print(f"    maturity than the predecessor. Likely a data artifact (event")
-    print(f"    risk, microstructure noise) or a genuine short-end feature.")
-    print(f"  - chi violations = theta*psi dips, often correlated with theta")
-    print(f"    dips (if theta drops, chi likely drops too).")
-    print(f"  - ratio violations = theta and chi are both monotonic, but the")
-    print(f"    cross-slice slope condition |(rho*chi)'| / chi' <= 1 fails.")
-    print(f"    This is a structural H&M limitation.")
+    print(f"  - theta violations (PRIMARY) = data wants lower ATM variance")
+    print(f"    at this maturity than the predecessor. Likely a data artifact")
+    print(f"    (event risk, microstructure noise) or a genuine short-end feature.")
+    print(f"  - chi violations (PRIMARY) = theta*psi dips, often correlated")
+    print(f"    with theta dips (if theta drops, chi likely drops too).")
+    print(f"  - ratio violations (DERIVED) = theta and chi are both increasing,")
+    print(f"    but the cross-slice slope condition |(rho*chi)'| / chi' <= 1")
+    print(f"    fails. This is a structural H&M limitation.")
+    print(f"  - ratio is only evaluated where chi increases.  Where chi dips,")
+    print(f"    the ratio is N/A (undefined) — a chi dip is the primary failure,")
+    print(f"    and the old clamped denominator produced a huge misleading ratio.")
 
     # Key finding
     has_data = {k: v for k, v in all_results.items() if v is not None}
@@ -264,12 +293,13 @@ def print_comparison(all_results: dict[str, dict | None]):
         print(f"\n  Overall: {total_fb} total fallbacks across {len(has_data)} sources")
         print(f"    theta: {total_theta} ({total_theta/max(total_fb,1)*100:.0f}%)")
         print(f"    chi:   {total_chi} ({total_chi/max(total_fb,1)*100:.0f}%)")
-        print(f"    ratio: {total_ratio} ({total_ratio/max(total_fb,1)*100:.0f}%)")
+        print(f"    ratio: {total_ratio} ({total_ratio/max(total_fb,1)*100:.0f}%)  "
+              f"(only where chi increases; N/A where chi dips)")
 
         if total_ratio == 0 and total_theta > 0:
             print(f"\n  => ALL fallbacks are data-driven (theta/chi violations).")
             print(f"     No structural H&M limitations found — the ratio condition")
-            print(f"     is satisfied wherever theta and chi are monotonic.")
+            print(f"     is satisfied wherever chi increases.")
         elif total_ratio > 0 and total_theta == 0:
             print(f"\n  => ALL fallbacks are model-driven (ratio violations).")
             print(f"     The H&M slope condition is the binding constraint.")

@@ -741,9 +741,18 @@ def verify_hm_condition_breakdown(
         - "chi_self", "chi_prev": float — chi = theta * psi
         - "chi_ok": bool — True if chi_self >= chi_prev - tol
         - "rho_chi_self", "rho_chi_prev": float — rho * chi
-        - "ratio_value": float — |rho_chi_self - rho_chi_prev| / max(chi_self - chi_prev, tol)
-        - "ratio_ok": bool — True if ratio_value <= 1 + tol
-        - "failing_conditions": list of str — subset of {"theta", "chi", "ratio"}
+        - "ratio_value": float or None — |rho_chi_self - rho_chi_prev| /
+          (chi_self - chi_prev) when chi genuinely increases
+          (chi_delta >= tol); else None (undefined).  A flat or decreasing
+          chi makes the ratio denominator <= 0 — the old clamped-to-tol
+          denominator manufactured a huge, misleading ratio, so the value
+          is now reported as undefined instead.
+        - "ratio_ok": bool or None — True if ratio_value <= 1 + tol;
+          None when the ratio is undefined (chi not increasing)
+        - "failing_conditions": list of str — subset of {"theta", "chi",
+          "ratio"}.  "ratio" is listed ONLY when chi increases and the
+          slope condition fails — never as a derived consequence of a chi
+          dip (that is the "chi" failure).
 
     Slices with no valid predecessor (``prev_T`` is None or not in the
     fitted-slices dict) are skipped (not included in the output).
@@ -776,16 +785,28 @@ def verify_hm_condition_breakdown(
 
         rho_chi_self = params.rho * chi_self
         rho_chi_prev = prev_params.rho * chi_prev
-        denom = max(chi_self - chi_prev, tol)
-        ratio_value = abs(rho_chi_self - rho_chi_prev) / denom
-        ratio_ok = ratio_value <= 1.0 + tol
+
+        # The ratio condition |(rho*chi)'| / chi' <= 1 is only meaningful
+        # when chi genuinely increases.  When chi is flat or decreases the
+        # denominator is <= 0; clamping it to `tol` (the old behaviour)
+        # manufactured a huge, misleading ratio.  Report the ratio as
+        # undefined (None) in that case and never list it as a failing
+        # condition — a chi dip is the primary failure, and the ratio is a
+        # derived diagnostic, not an independent model violation.
+        chi_delta = chi_self - chi_prev
+        if chi_delta >= tol:
+            ratio_value = abs(rho_chi_self - rho_chi_prev) / chi_delta
+            ratio_ok = ratio_value <= 1.0 + tol
+        else:
+            ratio_value = None
+            ratio_ok = None
 
         failing: list[str] = []
         if not theta_ok:
             failing.append("theta")
         if not chi_ok:
             failing.append("chi")
-        if not ratio_ok:
+        if ratio_ok is False:
             failing.append("ratio")
 
         results.append({

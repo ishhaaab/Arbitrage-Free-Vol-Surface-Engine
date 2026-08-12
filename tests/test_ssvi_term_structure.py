@@ -89,6 +89,51 @@ def test_breakdown_chi_violation() -> None:
     assert entry_050["theta_ok"] is True  # theta increased
 
 
+# ── Test 3b: ratio undefined when chi is non-monotonic ───────────────
+
+def test_breakdown_ratio_undefined_when_chi_dips() -> None:
+    """When chi decreases, the ratio condition is undefined: ratio_value
+    and ratio_ok are None and "ratio" is NOT a failing condition.  A chi
+    dip is the PRIMARY failure; the old clamped-to-tol denominator
+    manufactured a huge, misleading ratio that made every chi dip look
+    like a ratio violation."""
+    # chi: 0.04 -> 0.024 (dips at slice 2)
+    fitted = _make_fitted_slices([
+        (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),   # chi=0.04
+        (0.50, dict(theta=0.04, rho=-0.2, psi=0.6)),   # chi=0.024 — chi dipped
+    ])
+
+    breakdown = verify_hm_condition_breakdown(fitted)
+
+    assert len(breakdown) == 1
+    entry = breakdown[0]
+    assert entry["chi_ok"] is False
+    assert entry["ratio_value"] is None
+    assert entry["ratio_ok"] is None
+    assert "ratio" not in entry["failing_conditions"]
+    assert "chi" in entry["failing_conditions"]
+
+
+def test_breakdown_ratio_undefined_when_chi_flat() -> None:
+    """A flat chi (chi_delta below the tolerance) also leaves the ratio
+    undefined — the denominator is at the noise floor, so no ratio
+    conclusion is drawn."""
+    fitted = _make_fitted_slices([
+        (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),   # chi=0.04
+        (0.50, dict(theta=0.08, rho=-0.2, psi=0.5)),   # chi=0.04 — flat
+    ])
+
+    breakdown = verify_hm_condition_breakdown(fitted)
+
+    entry = breakdown[0]
+    assert entry["theta_ok"] is True
+    assert entry["chi_ok"] is True
+    assert entry["ratio_value"] is None
+    assert entry["ratio_ok"] is None
+    assert "ratio" not in entry["failing_conditions"]
+    assert entry["failing_conditions"] == []
+
+
 # ── Test 4: ratio violation ─────────────────────────────────────────
 
 def test_breakdown_ratio_violation() -> None:
