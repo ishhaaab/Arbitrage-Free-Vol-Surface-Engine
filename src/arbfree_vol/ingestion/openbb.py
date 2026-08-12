@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import math
 import warnings
-from datetime import date, datetime, time
+from datetime import date
 from typing import Any
 
 from arbfree_vol.data.quality import (
@@ -24,7 +24,6 @@ from arbfree_vol.data.quality import (
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 from arbfree_vol.ingestion.cleaning import RejectionRecord, clean_quotes
 from arbfree_vol.ingestion._index_rates import (
-    _INDEX_REPRESENTATIVE,
     _estimate_index_dividend_yield,
     _get_representative_dividend_yield,
 )

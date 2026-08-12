@@ -27,7 +27,6 @@ def _slice_forward(s: ExpirySlice, r: float, spot: float) -> float | None:
         by_strike.setdefault(q.strike, {})[q.option_type] = q.price
 
     estimates: list[float] = []
-    Ks_used: list[float] = []
 
     for K, sides in by_strike.items():
         if OptionType.CALL in sides and OptionType.PUT in sides:

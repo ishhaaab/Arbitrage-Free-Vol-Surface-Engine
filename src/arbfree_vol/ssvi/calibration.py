@@ -1,8 +1,5 @@
 """Calibration: fit SSVI / eSSVI to observed (k, w) points."""
 
-from math import sqrt, log
-from statistics import mean
-
 import numpy as np
 from scipy.optimize import least_squares
 
@@ -28,10 +25,8 @@ def fit_ssvi_slice(points: list[tuple[float, float]]) -> SSVIParams:
 
     # initial guess: theta= min(w) (ATM variance= min total var),
     # rho= 0 (no skew), psi= 0.5
-    ks= np.array([k for k, _ in points])
     ws= np.array([w for _, w in points])
     w_min= float(np.min(ws))
-    w_max= float(np.max(ws))
     x0= [w_min, 0.0, 0.5]
     bounds= (
         [1e-6, -0.999, 1e-6],
@@ -64,7 +59,6 @@ def fit_essvi_slice(
 
     # Initial guess: psi(theta)= eta / theta ** gamma.  Start with gamma=0
     # (constant psi) and eta = some moderate value.
-    ks= np.array([k for k, _ in points])
     ws= np.array([w for _, w in points])
     theta0= float(np.min(ws))
     rho0= 0.0

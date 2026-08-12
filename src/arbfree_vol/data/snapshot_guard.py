@@ -16,7 +16,7 @@ Usage::
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 # ── Exclusion dates ──────────────────────────────────────────────────

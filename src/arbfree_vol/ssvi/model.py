@@ -8,7 +8,6 @@ Gatheral-Jacquier condition.  The eSSVI specialization uses
 """
 
 from math import sqrt
-from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 

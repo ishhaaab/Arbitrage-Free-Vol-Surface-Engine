@@ -14,7 +14,7 @@ recorded in ``DropRecord`` for diagnostic context.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -123,8 +123,6 @@ def filter_option_chain(
     as an observed zero.  ``strike`` keeps its 0.0 default — a row with
     no strike is unpriceable either way.
     """
-    import math
-
     if config is None:
         config = DataQualityConfig()
 

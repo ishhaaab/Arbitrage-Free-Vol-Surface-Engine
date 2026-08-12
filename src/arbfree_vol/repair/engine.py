@@ -2,8 +2,8 @@ from math import log, sqrt
 from statistics import mean
 import logging
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType, OffendingQuote
+from arbfree_vol.models.surface import VolSurface, ExpirySlice
+from arbfree_vol.models.option import OptionType
 from arbfree_vol.arbitrage.report import ArbitrageReport
 from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
@@ -14,7 +14,6 @@ from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
     verify_ssvi_calendar_free,
-    SequentialFitResult,
 )
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
 from arbfree_vol.sabr.term_structure import fit_sabr_term_structure

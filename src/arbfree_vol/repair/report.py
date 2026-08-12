@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from arbfree_vol.models.option import OptionType, OffendingQuote
+from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.arbitrage.report import ViolationType, ArbitrageReport
 from arbfree_vol.svi.model import SVIParams

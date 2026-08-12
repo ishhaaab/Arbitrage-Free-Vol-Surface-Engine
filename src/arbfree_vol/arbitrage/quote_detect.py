@@ -1,5 +1,5 @@
 from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote, get_r, get_q
+from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r, get_q
 from arbfree_vol.models.option import OptionType, OffendingQuote
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r

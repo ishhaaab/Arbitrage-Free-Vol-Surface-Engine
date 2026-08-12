@@ -1,7 +1,6 @@
 """Calibration: fit SABR (alpha, rho, nu) to observed (k, w) points at fixed beta."""
 
 from math import sqrt
-from statistics import mean
 
 import numpy as np
 from scipy.optimize import least_squares

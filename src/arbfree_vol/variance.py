@@ -1,4 +1,4 @@
-"""Per-slice implied total variance; its shared by arbitrage detection and SVI fitting."""
+"""Per-slice implied total variance; it is shared by arbitrage detection and SVI fitting."""
 
 import logging
 from datetime import date

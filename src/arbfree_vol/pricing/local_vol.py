@@ -36,8 +36,6 @@ import bisect
 from dataclasses import dataclass
 from math import log, nan, sqrt, isnan
 
-import numpy as np
-
 from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at, _forward_at
 
 
@@ -168,7 +166,6 @@ def _dw_dk(fs: FittedSurface, K: float, T: float, F_T: float,
     log-moneyness units.
     """
     # Very low / zero strike: forward difference
-    K_min = dK  # effective minimum K for central diff
     if K - dK <= 0.0:
         kp = log((K + dK) / F_T)
         k0 = log(K / F_T)

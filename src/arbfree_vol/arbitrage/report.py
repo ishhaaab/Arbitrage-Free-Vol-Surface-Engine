@@ -1,5 +1,5 @@
 from enum import Enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from arbfree_vol.models.option import OffendingQuote
 
 

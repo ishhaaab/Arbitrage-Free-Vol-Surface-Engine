@@ -22,7 +22,6 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.ingestion.cleaning import clean_quotes, RejectionRecord
 from arbfree_vol.ingestion._index_rates import (
-    _INDEX_REPRESENTATIVE,
     _estimate_index_dividend_yield,
     _get_representative_dividend_yield,
 )

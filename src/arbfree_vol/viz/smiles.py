@@ -75,8 +75,6 @@ def plot_smiles_heatmap(
     Each row corresponds to one fitted expiry.  The color shows the
     total variance (w) at that (k, T).  Missing cells are left empty.
     """
-    from math import sqrt as _sqrt
-
     ordered = sorted(fitted_slices, key=lambda fs: fs.expiry_time)
     if len(ordered) < 1:
         raise ValueError("No fitted slices to plot")
