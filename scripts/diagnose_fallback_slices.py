@@ -274,7 +274,8 @@ def try_warm_start(
     - "converged": bool
     - on success: "params", "violations", "final_objective",
       "optimizer_status", "optimizer_message"
-    - on failure: "error", "final_objective"
+    - on failure: "error", "final_objective", "optimizer_status",
+      "optimizer_message" (status/message from the last solver run)
     """
     # We need to temporarily monkeypatch the seed in _fit_slice.
     # Instead, let's directly call the optimizer with the warm-started x0.
@@ -382,6 +383,8 @@ def try_warm_start(
             "params": None,
             "error": str(result.message),
             "final_objective": float(_objective(result.x)),
+            "optimizer_status": int(result.status),
+            "optimizer_message": str(result.message),
         }
 
     theta, u, v = result.x
@@ -739,9 +742,13 @@ def run_diagnostics():
                 v = r["violations"]
                 print(f"        {r['label']}: start=({start_str}) -> "
                       f"theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
-                      f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}")
+                      f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}, "
+                      f"status={r['optimizer_status']} "
+                      f"({r['optimizer_message']})")
             else:
-                print(f"        {r['label']}: start=({start_str}) -> FAILED")
+                print(f"        {r['label']}: start=({start_str}) -> FAILED "
+                      f"[status={r['optimizer_status']} "
+                      f"{r['optimizer_message']}]")
 
         # (e) Check if unconstrained params satisfy H&M with neighbors
         print(f"\n  Does the unconstrained fit satisfy H&M with neighbors?")
