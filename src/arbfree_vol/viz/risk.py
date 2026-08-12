@@ -76,9 +76,11 @@ def plot_greeks_heatmap(
         if fallback_slices:
             # with_extremes replaces the deprecated set_bad API (matplotlib
             # >= 3.7 deprecation); the bad color is passed as an RGBA tuple
-            # because with_extremes has no alpha keyword.
-            cmap.with_extremes(bad=(0.5019607843137255, 0.5019607843137255,
-                                    0.5019607843137255, 0.5))
+            # because with_extremes has no alpha keyword. It returns a new
+            # colormap rather than mutating in place, so the result must be
+            # assigned back.
+            cmap = cmap.with_extremes(bad=(0.5019607843137255, 0.5019607843137255,
+                                           0.5019607843137255, 0.5))
 
         mesh = ax.pcolormesh(strike_mesh, T_mesh, data,
                              cmap=cmap, shading="auto")

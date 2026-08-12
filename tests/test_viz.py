@@ -302,3 +302,79 @@ def test_greeks_heatmap_no_fallback_masks_nothing() -> None:
             "no cells may be masked when no fallback slices are supplied"
         )
         assert np.isfinite(arr.data).all()
+
+
+def test_masked_heatmaps_use_configured_bad_color() -> None:
+    """Regression: ``cmap.with_extremes(bad=...)`` returns a NEW colormap.
+
+    The heatmap helpers must assign the result back to ``cmap``; if they
+    discard it (the pre-fix behavior), masked fallback / NaN cells keep
+    matplotlib's default fully-transparent bad color instead of the
+    configured gray.  After plotting masked data, the effective colormap
+    on the rendered mesh must carry the configured gray bad color.
+    """
+    from arbfree_vol.viz.surface import plot_iv_heatmap
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.pricing.local_vol import LocalVolSurface
+
+    expected_bad = (0.5019607843137255, 0.5019607843137255,
+                    0.5019607843137255, 0.5)
+    default_bad = (0.0, 0.0, 0.0, 0.0)
+
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+
+    # plot_iv_heatmap: fallback slice masks the T=0.5 maturity row.
+    fig = plot_iv_heatmap(fs, fallback_slices=[0.5])
+    mesh = fig.axes[0].collections[0]
+    assert np.ma.getmaskarray(mesh.get_array()).any(), (
+        "precondition: iv heatmap must have masked cells"
+    )
+    bad = mesh.get_cmap().get_bad()
+    assert np.allclose(bad, expected_bad), (
+        f"iv heatmap bad color must be the configured gray {expected_bad}, "
+        f"got {bad}"
+    )
+    assert not np.allclose(bad, default_bad), (
+        "iv heatmap bad color must not be the default transparent"
+    )
+
+    # plot_greeks_heatmap: fallback slice masks the T=0.5 maturity row
+    # in every Greek subplot.
+    fig = plot_greeks_heatmap(fs, [90, 100, 110], [0.5, 1.0],
+                              fallback_slices=[0.5])
+    subplot_axes = [
+        ax for ax in fig.axes
+        if ax.get_title() in {"Delta", "Gamma", "Vega"}
+    ]
+    assert len(subplot_axes) == 3
+    for ax in subplot_axes:
+        mesh = ax.collections[0]
+        assert np.ma.getmaskarray(mesh.get_array()).any(), (
+            "precondition: greek heatmap must have masked cells"
+        )
+        bad = mesh.get_cmap().get_bad()
+        assert np.allclose(bad, expected_bad), (
+            f"greek heatmap bad color must be the configured gray "
+            f"{expected_bad}, got {bad}"
+        )
+
+    # plot_dupire_heatmap: a NaN cell in the local-vol grid is masked.
+    lv = LocalVolSurface(
+        strikes=(90, 95, 100, 105, 110),
+        maturities=(0.5, 1.0),
+        grid=((0.2, 0.2, 0.2, 0.2, 0.2),
+              (0.2, float("nan"), 0.2, 0.2, 0.2)),
+    )
+    fig = plot_dupire_heatmap(lv)
+    mesh = fig.axes[0].collections[0]
+    assert np.ma.getmaskarray(mesh.get_array()).any(), (
+        "precondition: dupire heatmap must have masked cells"
+    )
+    bad = mesh.get_cmap().get_bad()
+    assert np.allclose(bad, expected_bad), (
+        f"dupire heatmap bad color must be the configured gray "
+        f"{expected_bad}, got {bad}"
+    )
