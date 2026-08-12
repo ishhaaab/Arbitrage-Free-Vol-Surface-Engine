@@ -93,13 +93,21 @@ def test_iterative_max_iters_zero_returns_empty() -> None:
     assert reports == []
 
 
-def test_iterative_repair_fixpoint_stability() -> None:
-    """A run converges to a stable fixpoint: re-running
-    ``iterative_repair`` on the returned final cleaned surface yields
-    the SAME rejection outcome — no additional rejects and identical
-    final report key fields (arb-free, n_rejected, n_violations_after,
-    n_slices_fitted)."""
-    # A surface that needs one rejection (bad call at K=100 priced at 20).
+def test_iterative_repair_second_pass_adds_no_new_rejections_and_surface_stable() -> None:
+    """A converged run is a fixpoint whose honest contract is: re-running
+    ``iterative_repair`` on the returned final cleaned surface adds NO
+    new rejections (``rejected == ()`` and ``n_rejected == 0``) and
+    reproduces the same final surface state (arb-free, identical
+    ``n_violations_after``, ``n_slices_fitted`` and ``n_slices_input``).
+
+    Rejection COUNTS are intentionally NOT asserted equal across passes:
+    the second pass runs on the already-cleaned (smaller) surface, so
+    ``n_total_quotes`` / ``n_violations_before`` / ``n_rejected`` are
+    naturally lower on pass 2.  The stability claim is about the END
+    STATE of the surface, not the input-dependent intermediate counts."""
+    # A surface that forces a repair: a bad call at K=100 priced at 20
+    # breaks put-call parity at that strike (the parity detector rejects
+    # both quotes of the pair).
     quotes: list[Quote] = []
     for K in [80, 90, 100, 110, 120]:
         for o in [OptionType.CALL, OptionType.PUT]:
@@ -112,17 +120,37 @@ def test_iterative_repair_fixpoint_stability() -> None:
     final_surface = reports[-1].cleaned_surface
     assert final_surface is not None
 
+    # The first pass's final report is the reference END STATE.  Its
+    # surface fields (arb-free, n_violations_after, n_slices_fitted,
+    # n_slices_input) define what "stable" means; n_rejected is
+    # deliberately NOT part of the fixpoint claim.
+    first_metrics = reports[-1].metrics
+    # The fixture genuinely exercised the rejection path, so the
+    # fixpoint surface is the product of a repair, not a trivial input.
+    assert first_metrics.n_rejected > 0, (
+        f"fixture must force a repair, got n_rejected="
+        f"{first_metrics.n_rejected}"
+    )
+
     reports2 = iterative_repair(final_surface, max_iters=5)
     final2 = reports2[-1]
 
-    # No additional rejects: the fixpoint surface is stable.
+    # The second pass on the already-cleaned surface adds NO new
+    # rejections: the fixpoint surface is stable, so nothing further is
+    # rejected.
+    assert final2.rejected == (), (
+        f"fixpoint run must reject no quotes, got {final2.rejected}"
+    )
     assert final2.metrics.n_rejected == 0, (
         f"fixpoint run must reject nothing, got {final2.metrics.n_rejected}"
     )
+    # The final surface state is stable across passes: the arb-free
+    # result, the post-repair violation count, and the fitted/input
+    # slice structure reproduce the first pass's final report exactly.
     assert final2.remaining_violations.is_arbitrage_free
-    # Identical final report key fields.
-    assert final2.metrics.n_violations_after == 0
-    assert final2.metrics.n_slices_fitted == reports[-1].metrics.n_slices_fitted
+    assert final2.metrics.n_violations_after == first_metrics.n_violations_after
+    assert final2.metrics.n_slices_fitted == first_metrics.n_slices_fitted
+    assert final2.metrics.n_slices_input == first_metrics.n_slices_input
 
 
 def test_iterative_repair_stops_after_two_zero_rejections(monkeypatch) -> None:
