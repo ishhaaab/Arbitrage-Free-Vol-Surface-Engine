@@ -422,6 +422,28 @@ class TestQuoteWideSpread:
         _check_wide_spread(sl, violations)
         assert violations == []
 
+    def test_just_inside_threshold_not_flagged(self) -> None:
+        """A spread of exactly ``0.5 - 1e-6`` (just inside the strict
+        ``> 0.5`` threshold) must NOT be flagged as WIDE_SPREAD.
+
+        The existing boundary tests cover ratio 0.2 (pass), equality
+        0.5 (pass), and violation 1.0; this pins the just-inside side
+        of the threshold so a future threshold-off-by-one regression is
+        caught."""
+        # (ask - bid) / mid = 0.5 - 1e-6 with mid = 10: bid/ask are
+        # symmetric around mid, so the arithmetic is exact.
+        half = (0.5 - 1e-6) / 2.0
+        mid = 10.0
+        bid = mid * (1.0 - half)
+        ask = mid * (1.0 + half)
+        sl = ExpirySlice(expiry_time=T, quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0,
+                  bid=bid, ask=ask),
+        ])
+        violations: list[ArbitrageViolation] = []
+        _check_wide_spread(sl, violations)
+        assert violations == []
+
     def test_wide_spread_violation_detected_by_detect(self) -> None:
         surface = _surface([
             Quote(strike=100.0, option_type=OptionType.CALL, price=10.0, bid=5.0, ask=15.0),
