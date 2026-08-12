@@ -524,7 +524,19 @@ truth) rather than independently re-deriving which rows to gray out.
 `make_fallback_mask` is still used for IV heatmap and Greeks heatmap
 (which don't use FD stencils across T).
 
-### Data source comparison (Issue #15 follow-up)
+### Data source comparison (Issue #15 follow-up) — HISTORICAL / SUPERSEDED
+
+> **HISTORICAL / SUPERSEDED:** this section framed the audit as a
+> "multiple data sources" comparison (SPY vs ^SPX vs OpenBB).  The
+> corrected semantics (see the **Underlying / path comparison** section
+> written by `scripts/audit_theta_dip_data_quality.py`) are that the
+> audit compares DIFFERENT UNDERLYINGS and INGESTION PATHS, not
+> independent data providers: yfinance/SPY vs yfinance/^SPX changes the
+> UNDERLYING (ETF vs index), and OpenBB/SPY is configured with
+> provider='yfinance', so it only tests the ingestion path
+> (normalisation), not provider independence.  The snapshot numbers
+> below are retained as historical record and must not be re-read as a
+> provider comparison.
 
 All numbers in this section are snapshot-in-time from a single calendar date and vary day-to-day (see the Calendar date caveat and determinism check below).
 
@@ -551,7 +563,18 @@ SPX has fewer theta dips (1) than SPY (9) on raw data, suggesting the non-monoto
 OpenBB was not available for comparison. Install with `pip install openbb` to include it in future audits.
 
 
-### Per-slice H&M sub-condition breakdown (Issue #15 follow-up)
+### Per-slice H&M sub-condition breakdown (Issue #15 follow-up) — HISTORICAL / SUPERSEDED
+
+> **HISTORICAL / SUPERSEDED:** the ratio-violation interpretation below
+> used the OLD clamped-to-tolerance denominator, which manufactured a
+> huge, misleading ratio whenever chi dipped (a single chi failure
+> double-counted as a ratio failure).  The corrected semantics (commit
+> 66db209) report the ratio as **undefined / N/A when chi is
+> non-monotonic** (a flat or decreasing chi makes the ratio denominator
+> `<= 0`); "ratio" is listed as a failing condition ONLY when chi
+> genuinely increases and the slope condition fails.  The historical
+> ratio counts in this section are superseded by that source change and
+> must not be re-read as current findings.
 
 The eSSVI fallback attribution shows which H&M Prop 3.1 sub-condition
 fails for each fallback slice.  This distinguishes data-driven failures
