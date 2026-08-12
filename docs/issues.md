@@ -765,3 +765,28 @@ k=0.675).  Violations strictly between grid points or beyond the grid are
 not certified.  **Do not claim the counterexample is fixed** — resolving
 the exact HM Prop 3.1 / Prop 3.5 statement and adding the sufficient
 condition to `verify_hm_condition` remains an open item.
+
+---
+
+## OPEN — eSSVI hard-fit quality escape on the GJ condition-2 boundary
+
+- Dated: 2026-08-13 (assessed during the Dupire `_d2w_dk2` FIX-GT cycle).
+- **Assessment: (b) fit-QUALITY issue, NOT an arb-certification bug.**  The
+  hard eSSVI optimizer can relocate a boundary slice to a feasible smile
+  pinned on the GJ condition-2 boundary: the fitted surface passes its own
+  grid-based arb checks (`verify_hm_condition` True, native grid calendar
+  check True, `detect_svi_surface` arb-free), `repair_infeasible=False` is
+  the HONEST outcome, and the per-slice RMSE is reported normally in
+  `RepairReport.fitted_slices` — nothing is silently certified.
+- **The issue is fit quality**: the constraint-satisfying smile fits the
+  quotes poorly, with per-slice RMSE in the range **0.07–0.32** on the
+  boundary-repair scenario (measured again in the FIX-GT cycle: RMSE
+  0.0859 on `essvi_boundary_condition1_exact`; a 40-trial theta/psi sweep
+  produced poor-fit slices with RMSE 0.05–0.17).
+- Not covered by `_hard_fit_is_degenerate_corner`
+  (`src/arbfree_vol/ssvi/term_structure.py`): that predicate covers the
+  m66/eps-corner class; the boundary-pinned-escape class is a different
+  failure mode.
+- **No fit logic was changed.**  Possible follow-up (not implemented): a
+  post-fit RMSE-vs-constraint margin check that routes boundary-pinned
+  poor fits to fallback like the m66 corner check does.
