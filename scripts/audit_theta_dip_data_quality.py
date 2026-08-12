@@ -1,17 +1,36 @@
 """Audit: data quality at eSSVI fallback vs non-fallback expiries.
 
-Fetches live option chain data from multiple sources/symbols, identifies
-which expiries take the eSSVI fallback path, and computes ATM-strike
-data quality metrics for every expiry.  Prints comparison tables and
-writes findings to docs/issues.md under Issue #15.
+Fetches live option chain data, identifies which expiries take the eSSVI
+fallback path, and computes ATM-strike data quality metrics for every
+expiry.  Prints comparison tables and writes findings to docs/issues.md
+under Issue #15.
 
-Sources compared:
-1. yfinance + SPY (default)
-2. yfinance + SPX (^SPX — index, q=0)
-3. OpenBB + SPY (if openbb is installed)
+This is a RESEARCH / DIAGNOSTIC tool, not part of the library test suite.
+All numbers are snapshot-in-time: they come from live fetches on the day
+the script is run and vary day to day.  The raw vs filtered runs are
+SEPARATE live fetches (differences may include market movement between
+the two calls), and per-expiry option-chain metrics can be unavailable
+for a given source / expiry — those are reported as N/A, never as
+observed zeros.
+
+The comparisons are UNDERLYING / INGESTION-PATH comparisons, not
+provider comparisons:
+1. yfinance + SPY (ETF) vs yfinance + ^SPX (index) changes the UNDERLYING
+   — and with it the option market being measured — so any difference is
+   an underlying effect, not a data-source effect.
+2. OpenBB + SPY is configured with provider="yfinance", so OpenBB/SPY vs
+   yfinance/SPY only tests the ingestion path (normalisation), NOT
+   provider independence: the two paths share the same upstream provider.
+
+For index symbols (^SPX), the per-expiry dividend yield is estimated from
+put-call parity on the option chain itself (median across ATM strikes),
+with a representative-ETF trailing yield (SPY for ^SPX) as fallback when
+parity estimation fails.  q is NOT assumed to be zero.
 
 For each source, runs with filter OFF (true baseline) and filter ON
-(default thresholds: OI>=10, spread<=50%).
+(default thresholds: OI>=10, spread<=50%).  In --use-fixture mode the
+filtered comparison is N/A: the fixture is a post-ingestion surface with
+no raw chains to filter.
 
 Volume is recorded as diagnostic context only — it is not a filter criterion.
 
@@ -470,7 +489,12 @@ def run_audit(args=None):
     if args is None:
         args = parse_args()
     print("=" * 72)
-    print("  Data Quality Audit: eSSVI fallback comparison across sources")
+    print("  Data Quality Audit: eSSVI fallback across underlyings / ingestion paths")
+    print("=" * 72)
+    print("  These are UNDERLYING / INGESTION-PATH comparisons, not provider")
+    print("  comparisons: SPY vs ^SPX changes the underlying, and OpenBB is")
+    print("  configured with provider='yfinance', so OpenBB/SPY vs yfinance/SPY")
+    print("  does NOT test provider independence.")
     print("=" * 72)
 
     import yfinance as yf
@@ -558,7 +582,7 @@ def run_audit(args=None):
         results["yfinance_SPX"] = None
 
     # ── Source 3: OpenBB + SPY ───────────────────────────────────────
-    print("\n[3] OpenBB + SPY")
+    print("\n[3] OpenBB + SPY (provider='yfinance' — ingestion-path comparison only)")
     print("-" * 40)
     try:
         obb_raw_surface, _, obb_raw_drops = fetch_openbb_data("SPY", disable_quality_filter=True)
@@ -590,8 +614,11 @@ def run_audit(args=None):
 
     # ── Comparison table ─────────────────────────────────────────────
     print(f"\n{'=' * 72}")
-    print("  CROSS-SOURCE COMPARISON")
+    print("  UNDERLYING / PATH COMPARISON (not a provider comparison)")
     print(f"{'=' * 72}")
+    print("  SPY vs ^SPX changes the underlying; OpenBB/SPY uses")
+    print("  provider='yfinance', so it does NOT test provider independence.")
+    print()
 
     header = (f"  {'Source':<25} {'Fitted':>7} {'Fallback':>9} "
               f"{'Drops':>6} {'ThDips':>7} {'MaxDip%':>8}")
@@ -673,23 +700,30 @@ def run_audit(args=None):
 # ── Write findings ──────────────────────────────────────────────────
 
 def write_findings_to_issues(results):
-    """Update docs/issues.md Issue #15 with data source comparison."""
+    """Update docs/issues.md Issue #15 with the underlying/path comparison."""
     issues_path = Path(__file__).resolve().parent.parent / "docs" / "issues.md"
     content = issues_path.read_text(encoding="utf-8")
 
     # Build the comparison table
     lines = [
         "",
-        "### Data source comparison (Issue #15 follow-up)",
+        "### Underlying / path comparison (Issue #15 follow-up)",
         "",
-        "The audit was run across multiple data sources to determine whether",
-        "the theta non-monotonicity is a data-source artifact or a genuine",
-        "market feature.",
+        "The audit compares different UNDERLYINGS and INGESTION PATHS, not",
+        "independent data providers:",
+        "- yfinance/SPY vs yfinance/^SPX changes the UNDERLYING (ETF vs index),",
+        "  so any difference is an underlying effect, not a data-source effect;",
+        "- OpenBB/SPY is configured with provider='yfinance', so OpenBB/SPY vs",
+        "  yfinance/SPY only tests the ingestion path (normalisation) — it does",
+        "  NOT test provider independence.",
         "",
-        "#### Sources compared",
+        "All numbers are snapshot-in-time from a single calendar date and vary",
+        "day-to-day.",
         "",
-        "| Source | Fitted | Fallback | Quality drops | Theta dips | Max dip % |",
-        "|--------|--------|----------|---------------|------------|-----------|",
+        "#### Underlyings / paths compared",
+        "",
+        "| Path | Fitted | Fallback | Quality drops | Theta dips | Max dip % |",
+        "|------|--------|----------|---------------|------------|-----------|",
     ]
 
     for key, label in [
@@ -721,8 +755,10 @@ def write_findings_to_issues(results):
 
     lines.extend([
         "",
-        "**Key question:** Does switching data source (SPY to SPX, or yfinance",
-        "to OpenBB) reduce theta non-monotonicity independent of the quality filter?",
+        "**Key question:** Does switching underlying (SPY ETF to ^SPX index) or",
+        "ingestion path (yfinance to OpenBB) reduce theta non-monotonicity",
+        "independent of the quality filter?  OpenBB uses provider='yfinance', so",
+        "the OpenBB leg does not test provider independence.",
         "",
     ])
 
@@ -759,7 +795,7 @@ def write_findings_to_issues(results):
         lines.append(
             f"Both SPX ({spx_raw_dips}) and SPY ({spy_raw_dips}) show the same "
             "number of theta dips on raw data. The non-monotonicity is a "
-            "genuine market feature, not a data-source artifact."
+            "genuine market feature, not an underlying-specific artifact."
         )
     else:
         lines.append(
@@ -780,24 +816,28 @@ def write_findings_to_issues(results):
     elif obb_raw_dips < spy_raw_dips:
         lines.append(
             f"OpenBB has fewer theta dips ({obb_raw_dips}) than yfinance "
-            f"({spy_raw_dips}), suggesting the data normalisation or "
-            "provider may help."
+            f"({spy_raw_dips}), suggesting the OpenBB ingestion path "
+            "(normalisation) may help."
         )
     elif obb_raw_dips == spy_raw_dips:
         lines.append(
             f"OpenBB ({obb_raw_dips}) and yfinance ({spy_raw_dips}) show the "
-            "same number of theta dips — the provider does not matter."
+            "same number of theta dips — the ingestion path does not matter "
+            "(provider independence is not tested: OpenBB uses provider='yfinance')."
         )
 
     lines.append("")
 
     # Replace only this bounded section so later Issue #15 sections,
-    # including the determinism snapshot, are preserved.
-    marker = "### Data source comparison"
-    if marker in content:
-        start_idx = content.index(marker)
+    # including the determinism snapshot, are preserved.  Accept both the
+    # pre-FIX-4 header ("Data source comparison") and the current one so a
+    # rerun replaces the old tracked section instead of duplicating it.
+    markers = ["### Data source comparison", "### Underlying / path comparison"]
+    found_marker = next((m for m in markers if m in content), None)
+    if found_marker is not None:
+        start_idx = content.index(found_marker)
         # Find the next ### heading after the start marker
-        next_section_idx = content.find("\n### ", start_idx + len(marker))
+        next_section_idx = content.find("\n### ", start_idx + len(found_marker))
         if next_section_idx == -1:
             # No next section — replace from marker to end of file
             new_data_source_section = "\n".join(lines) + "\n"
@@ -817,7 +857,7 @@ def write_findings_to_issues(results):
         content = content.rstrip() + "\n" + "\n".join(lines) + "\n"
 
     issues_path.write_text(content, encoding="utf-8")
-    print(f"\n  Wrote data source comparison to {issues_path}")
+    print(f"\n  Wrote underlying/path comparison to {issues_path}")
 
 
 # ── Entry point ──────────────────────────────────────────────────────
