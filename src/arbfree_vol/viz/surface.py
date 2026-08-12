@@ -205,7 +205,11 @@ def plot_iv_heatmap(
 
     cmap = matplotlib.colormaps["plasma"].copy()
     if fallback_slices:
-        cmap.set_bad("gray", alpha=0.5)
+        # with_extremes replaces the deprecated set_bad API (matplotlib >= 3.7
+        # deprecation); the bad color is passed as an RGBA tuple because
+        # with_extremes has no alpha keyword.
+        cmap.with_extremes(bad=(0.5019607843137255, 0.5019607843137255,
+                                0.5019607843137255, 0.5))
 
     mesh = ax.pcolormesh(strikes, maturities, iv_grid,
                          cmap=cmap, shading="auto")
