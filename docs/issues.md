@@ -251,9 +251,11 @@ SOFT penalty (`src/arbfree_vol/sabr/term_structure.py`).  Calendar-arb
 verification is EMPIRICAL and grid-based via `detect_svi_surface` --
 it is NOT a closed-form / by-construction guarantee.  SABR is offered
 as a COMPARISON parametrisation alongside the arbitrage-certified eSSVI
-primary surface (which is now arb-free by construction -- see issue
-note below).  Dynamic SABR (Hagan-Patrick-Sulem et al.) is a
-not-implemented research extension.
+primary surface (hard-constrained eSSVI slices satisfy the implemented
+Gatheral-Jacquier conditions and the grid-based calendar check; the
+certificate is grid-based, not a global analytic guarantee -- see the
+OPEN counterexample in the Issue #15 note below).  Dynamic SABR
+(Hagan-Patrick-Sulem et al.) is a not-implemented research extension.
 
 B-spline coefficients are reparametrised at the coefficient level
 (scaled tanh for rho keeping |rho| < 0.999; exp + floor for alpha/nu
@@ -268,15 +270,18 @@ independent-fit calendar risk.  That is now RESOLVED -- the eSSVI path
 fits slices sequentially by increasing maturity with the
 Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition enforced
 as a HARD optimizer constraint, plus both Gatheral-Jacquier (2014)
-butterfly bounds per slice.  Slices that fit within the constraints are
-arbitrage-free by construction (commit 582d1cf); slices that fall back
-to the unconstrained per-slice fit are NOT (see Issue #15 and
-`RepairReport.repair_infeasible`).  See
+butterfly bounds per slice.  Slices that fit within the constraints
+satisfy the implemented Gatheral-Jacquier conditions and the grid-based
+calendar check -- a discrete certificate, not a global analytic one
+(commit 582d1cf); slices that fall back to the unconstrained per-slice
+fit are NOT (see Issue #15 and `RepairReport.repair_infeasible`).  See
 `src/arbfree_vol/ssvi/term_structure.py`.
 
-**Status:** eSSVI -- resolved (arb-free by construction for
-hard-constrained slices; fallback slices excepted, see Issue #15 /
-`repair_infeasible`, commit 582d1cf).
+**Status:** eSSVI -- resolved (hard-constrained slices satisfy the
+implemented Gatheral-Jacquier conditions and the grid-based calendar
+check; the certificate is grid-based, not global -- a counterexample
+is documented OPEN under Issue #15; fallback slices excepted, see
+Issue #15 / `repair_infeasible`, commit 582d1cf).
 SABR -- known limitation, documented and empirical; dynamic SABR is a
 future research extension.
 
