@@ -368,38 +368,47 @@ def _run_single_audit(
         exp_date = ref + timedelta(days=int(round(T * 365.0)))
         exp_str = exp_date.isoformat()
 
+        metrics = None
+        oi_info = None
+        metrics_error = None
         if ticker is not None:
             try:
                 chain = ticker.option_chain(exp_str)
                 metrics = compute_atm_quality_metrics(chain.calls, chain.puts, spot)
                 oi_info = compute_per_expiry_oi_drops(chain.calls, chain.puts, spot)
-            except Exception:
-                metrics = {
-                    "median_OI": float("nan"),
-                    "median_volume": float("nan"),
-                    "median_bid_ask_pct": float("nan"),
-                    "zero_vol_count": float("nan"),
-                    "zero_oi_count": float("nan"),
-                    "zero_quote_count": float("nan"),
-                    "n_atm_strikes": 0,
-                }
-                oi_info = {"total_strikes": 0, "oi_dropped": 0, "drop_rate": 0.0}
+            except Exception as exc:
+                metrics_error = str(exc)
+                _logger.warning(
+                    "option_chain fetch failed for source=%r expiry=%s T=%.4f: %s",
+                    label, exp_str, T, exc,
+                )
         else:
+            metrics_error = "no ticker (per-expiry option chains unavailable in fixture mode)"
+        metrics_available = metrics is not None
+        if metrics is None:
+            # Unavailable metrics are represented as None / N/A — never as
+            # observed zeros (a missing chain is not evidence of zero dips).
             metrics = {
-                "median_OI": float("nan"),
-                "median_volume": float("nan"),
-                "median_bid_ask_pct": float("nan"),
-                "zero_vol_count": float("nan"),
-                "zero_oi_count": float("nan"),
-                "zero_quote_count": float("nan"),
-                "n_atm_strikes": 0,
+                "median_OI": None,
+                "median_volume": None,
+                "median_bid_ask_pct": None,
+                "zero_vol_count": None,
+                "zero_oi_count": None,
+                "zero_quote_count": None,
+                "n_atm_strikes": None,
             }
-            oi_info = {"total_strikes": 0, "oi_dropped": 0, "drop_rate": 0.0}
+            oi_info = {
+                "total_strikes": None,
+                "oi_dropped": None,
+                "drop_rate": None,
+            }
 
         tag = "FALLBACK" if is_fallback else ("FAILED" if is_failed else "OK")
         rows.append({
             "T": T,
             "tag": tag,
+            "metrics_available": metrics_available,
+            "error": metrics_error,
             **metrics,
             **oi_info,
         })
@@ -411,12 +420,24 @@ def _run_single_audit(
           f"{'total':>6}  {'drop%':>6}")
     print(f"  {'-' * 98}")
 
+    n_unavailable = 0
     for r in rows:
+        if not r["metrics_available"]:
+            n_unavailable += 1
+            print(f"  {r['T']:>8.4f}  {r['tag']:>8}  "
+                  f"{'N/A':>6}  {'N/A':>10}  {'N/A':>10}  {'N/A':>10}  "
+                  f"{'N/A':>6}  {'N/A':>6}  {'N/A':>6}  "
+                  f"(metrics N/A: {r['error']})")
+            continue
         print(f"  {r['T']:>8.4f}  {r['tag']:>8}  {r['n_atm_strikes']:>6}  "
               f"{r['median_OI']:>10.0f}  {r['median_volume']:>10.0f}  "
               f"{r['median_bid_ask_pct']:>10.2f}  "
               f"{r['oi_dropped']:>6}  {r['total_strikes']:>6}  "
               f"{r['drop_rate']:>6.1%}")
+    if n_unavailable:
+        print(f"  (per-expiry option-chain metrics unavailable for "
+              f"{n_unavailable}/{len(rows)} expiries; those rows are excluded "
+              f"from the metric summary above)")
 
     # Tenor bucket breakdown
     tenor_breakdown = compute_tenor_bucket_breakdown(surface, result.fallback_slices)
@@ -468,6 +489,12 @@ def run_audit(args=None):
     print("  Fetching with filter ENABLED (OI>=10, spread<=50%)...")
     spy_filt_surface, _, spy_filt_drops = fetch_yf_data("SPY", disable_quality_filter=False)
 
+    # The raw and filtered runs are SEPARATE live fetches — they do not
+    # share input data, so differences may include market movement between
+    # the two calls, not just the filter.
+    print("\n  NOTE: FILTER OFF and FILTER ON are SEPARATE live fetches;")
+    print("  differences may include market movement between the two calls.")
+
     print("  Running eSSVI fit...")
     spy_raw_result = _run_single_audit(
         "yfinance/SPY — FILTER OFF",
@@ -488,11 +515,11 @@ def run_audit(args=None):
     print("-" * 40)
     try:
         if args.use_fixture:
-            print("  Using saved raw fixture (quality filter not applied).")
+            print("  Using saved fixture — a post-ingestion surface, not a raw chain.")
             spx_raw_surface = load_spx_fixture()
             spx_spot = spx_raw_surface.spot
             spx_raw_drops = []
-            spx_filt_surface = load_spx_fixture()
+            spx_filt_surface = None
             spx_filt_drops = []
             ticker_spx = None
         else:
@@ -500,15 +527,27 @@ def run_audit(args=None):
             spx_raw_surface, _, spx_raw_drops = fetch_yf_data("^SPX", disable_quality_filter=True)
             spx_spot = spx_raw_surface.spot
             spx_filt_surface, _, spx_filt_drops = fetch_yf_data("^SPX", disable_quality_filter=False)
+            print("\n  NOTE: FILTER OFF and FILTER ON are SEPARATE live fetches;")
+            print("  differences may include market movement between the two calls.")
 
         spx_raw_result = _run_single_audit(
             "yfinance/^SPX — FILTER OFF" + (" (FIXTURE)" if args.use_fixture else ""),
             spx_raw_surface, spx_raw_drops, spx_spot, ticker_spx,
         )
-        spx_filt_result = _run_single_audit(
-            "yfinance/^SPX — FILTER ON" + (" (FIXTURE; same as raw)" if args.use_fixture else ""),
-            spx_filt_surface, spx_filt_drops, spx_spot, ticker_spx,
-        )
+        if args.use_fixture:
+            # No fake filtered comparison: the fixture is a post-ingestion
+            # surface and the filtering comparison requires raw option chains
+            # (OI / spread columns) that the fixture does not contain.
+            spx_filt_result = None
+            print("\n  yfinance/^SPX — FILTER ON: N/A (fixture mode)")
+            print("  The fixture is a post-ingestion surface; the filtering")
+            print("  comparison requires raw option chains. Run without")
+            print("  --use-fixture for the filter comparison.")
+        else:
+            spx_filt_result = _run_single_audit(
+                "yfinance/^SPX — FILTER ON",
+                spx_filt_surface, spx_filt_drops, spx_spot, ticker_spx,
+            )
         results["yfinance_SPX"] = {
             "raw": spx_raw_result,
             "filtered": spx_filt_result,
@@ -526,6 +565,8 @@ def run_audit(args=None):
         if obb_raw_surface is not None:
             obb_spot = obb_raw_surface.spot
             obb_filt_surface, _, obb_filt_drops = fetch_openbb_data("SPY", disable_quality_filter=False)
+            print("\n  NOTE: FILTER OFF and FILTER ON are SEPARATE live fetches;")
+            print("  differences may include market movement between the two calls.")
 
             obb_raw_result = _run_single_audit(
                 "OpenBB/SPY — FILTER OFF",
@@ -566,13 +607,21 @@ def run_audit(args=None):
         ("openbb_SPY",    "OpenBB/SPY raw"),
         ("openbb_SPY",    "OpenBB/SPY filt"),
     ]:
-        entry = results.get(key)
-        if entry is None:
-            continue
         is_raw = "raw" in label
-        r = entry["raw"] if is_raw else entry["filtered"]
         suffix = "raw" if is_raw else "filt"
         row_label = f"{key.replace('_', '/')} {suffix}"
+        entry = results.get(key)
+        if entry is None:
+            # Source never measured — an explicit N/A row, never a zero.
+            print(f"  {row_label:<25}  {'N/A':>7}  {'N/A':>9}  {'N/A':>6}  "
+                  f"{'N/A':>7}  {'N/A':>8}   (source unavailable)")
+            continue
+        r = entry["raw"] if is_raw else entry["filtered"]
+        if r is None:
+            print(f"  {row_label:<25}  {'N/A':>7}  {'N/A':>9}  {'N/A':>6}  "
+                  f"{'N/A':>7}  {'N/A':>8}   (run not performed: "
+                  f"fixture mode has no filtered comparison)")
+            continue
         print(f"  {row_label:<25} {r['n_fitted']:>7} "
               f"{len(r['fallback_slices']):>9} "
               f"{r['n_quality_drops']:>6} "
@@ -601,6 +650,8 @@ def run_audit(args=None):
             continue
         is_raw = "raw" in label
         r = entry["raw"] if is_raw else entry["filtered"]
+        if r is None:
+            continue
         suffix = "raw" if is_raw else "filt"
         row_label = f"{key.replace('_', '/')} {suffix}"
 
@@ -648,7 +699,7 @@ def write_findings_to_issues(results):
     ]:
         entry = results.get(key)
         if entry is None:
-            lines.append(f"| {label} | N/A | N/A | N/A | N/A | N/A |")
+            lines.append(f"| {label} | N/A (source unavailable) | N/A | N/A | N/A | N/A |")
             continue
         raw = entry["raw"]
         filt = entry["filtered"]
@@ -657,11 +708,16 @@ def write_findings_to_issues(results):
             f"{len(raw['fallback_slices'])} | {raw['n_quality_drops']} | "
             f"{raw['theta_dips']} | {raw['theta_max_dip_pct']:.1f}% |"
         )
-        lines.append(
-            f"| {label} (filtered) | {filt['n_fitted']} | "
-            f"{len(filt['fallback_slices'])} | {filt['n_quality_drops']} | "
-            f"{filt['theta_dips']} | {filt['theta_max_dip_pct']:.1f}% |"
-        )
+        if filt is None:
+            lines.append(
+                f"| {label} (filtered) | N/A | N/A | N/A | N/A | N/A |"
+            )
+        else:
+            lines.append(
+                f"| {label} (filtered) | {filt['n_fitted']} | "
+                f"{len(filt['fallback_slices'])} | {filt['n_quality_drops']} | "
+                f"{filt['theta_dips']} | {filt['theta_max_dip_pct']:.1f}% |"
+            )
 
     lines.extend([
         "",
@@ -670,12 +726,30 @@ def write_findings_to_issues(results):
         "",
     ])
 
-    # Determine answer from results
-    spy_raw_dips = results.get("yfinance_SPY", {}).get("raw", {}).get("theta_dips", 0) if results.get("yfinance_SPY") else 0
-    spx_raw_dips = results.get("yfinance_SPX", {}).get("raw", {}).get("theta_dips", 0) if results.get("yfinance_SPX") else 0
-    obb_raw_dips = results.get("openbb_SPY", {}).get("raw", {}).get("theta_dips", 0) if results.get("openbb_SPY") else 0
+    # Determine answer from results.  A source that was not measured on
+    # this run (fetch failure, fixture mode without a filtered comparison)
+    # is N/A — it must NOT contribute a zero that can be compared as if it
+    # were observed.  A comparative conclusion is only drawn when BOTH
+    # operands were actually measured.
+    def _raw_dips(key: str):
+        entry = results.get(key)
+        if entry is None:
+            return None
+        raw = entry.get("raw")
+        if raw is None:
+            return None
+        return raw.get("theta_dips")
 
-    if spx_raw_dips < spy_raw_dips:
+    spy_raw_dips = _raw_dips("yfinance_SPY")
+    spx_raw_dips = _raw_dips("yfinance_SPX")
+    obb_raw_dips = _raw_dips("openbb_SPY")
+
+    if spy_raw_dips is None or spx_raw_dips is None:
+        lines.append(
+            "SPX vs SPY raw-dip comparison: N/A — one or both sources were "
+            "unavailable on this run, so no winner/ties conclusion is drawn."
+        )
+    elif spx_raw_dips < spy_raw_dips:
         lines.append(
             f"SPX has fewer theta dips ({spx_raw_dips}) than SPY ({spy_raw_dips}) "
             "on raw data, suggesting the non-monotonicity is partially "
@@ -693,22 +767,26 @@ def write_findings_to_issues(results):
             "on raw data — unexpected, investigate further."
         )
 
-    if results.get("openbb_SPY") is not None:
-        if obb_raw_dips < spy_raw_dips:
-            lines.append(
-                f"OpenBB has fewer theta dips ({obb_raw_dips}) than yfinance "
-                f"({spy_raw_dips}), suggesting the data normalisation or "
-                "provider may help."
-            )
-        elif obb_raw_dips == spy_raw_dips:
-            lines.append(
-                f"OpenBB ({obb_raw_dips}) and yfinance ({spy_raw_dips}) show the "
-                "same number of theta dips — the provider does not matter."
-            )
-    else:
+    if results.get("openbb_SPY") is None:
         lines.append(
             "OpenBB was not available for comparison. Install with "
             "`pip install openbb` to include it in future audits."
+        )
+    elif spy_raw_dips is None or obb_raw_dips is None:
+        lines.append(
+            "OpenBB vs yfinance raw-dip comparison: N/A — one or both sources "
+            "were unavailable on this run, so no winner/ties conclusion is drawn."
+        )
+    elif obb_raw_dips < spy_raw_dips:
+        lines.append(
+            f"OpenBB has fewer theta dips ({obb_raw_dips}) than yfinance "
+            f"({spy_raw_dips}), suggesting the data normalisation or "
+            "provider may help."
+        )
+    elif obb_raw_dips == spy_raw_dips:
+        lines.append(
+            f"OpenBB ({obb_raw_dips}) and yfinance ({spy_raw_dips}) show the "
+            "same number of theta dips — the provider does not matter."
         )
 
     lines.append("")
