@@ -346,6 +346,51 @@ class TestInterpolationEdges:
         with pytest.raises(ValueError, match="above the surface range"):
             total_variance_at(fs, K=100.0, T=1.0)
 
+    def test_expiry_tolerance_snaps_to_boundary_slice(self) -> None:
+        """Queries within ``_EXACT_EXPIRY_TOL`` of a boundary expiry are
+        SNAPPED to that boundary slice instead of interpolating or
+        extrapolating in expiry.
+
+        Regression: the exact-match loop is strict (``<``), so a query
+        at exactly ``T_min + tol`` / ``T_max - tol`` used to fall
+        through to the interior interpolation path — a ``T_max + tol``
+        query extrapolated PAST the last slice (theta > 1) and returned
+        a total variance different from the boundary slice's own value.
+        With the snap, every query the tolerance admits evaluates the
+        boundary slice exactly.
+        """
+        from arbfree_vol.surface.interpolate import _EXACT_EXPIRY_TOL
+
+        fs = self._smile_surface()
+        K = 105.0
+        sl_low, sl_high = fs.fitted_slices[0], fs.fitted_slices[1]
+
+        w_low_exact = svi_total_variance(
+            math.log(K / sl_low.forward_price),
+            sl_low.params.a, sl_low.params.b, sl_low.params.rho,
+            sl_low.params.m, sl_low.params.sigma,
+        )
+        w_high_exact = svi_total_variance(
+            math.log(K / sl_high.forward_price),
+            sl_high.params.a, sl_high.params.b, sl_high.params.rho,
+            sl_high.params.m, sl_high.params.sigma,
+        )
+
+        # T_min +/- tol snaps to the T_min slice; T_max +/- tol snaps to
+        # the T_max slice (the pre-fix values differed at the ~1e-11
+        # level because they went through the interpolation path, so an
+        # abs=1e-15 tolerance discriminates the snap).
+        for T in [sl_low.expiry_time - _EXACT_EXPIRY_TOL,
+                  sl_low.expiry_time + _EXACT_EXPIRY_TOL]:
+            assert total_variance_at(fs, K=K, T=T) == approx(w_low_exact, abs=1e-15), (
+                f"T={T} not snapped to the T_min slice"
+            )
+        for T in [sl_high.expiry_time - _EXACT_EXPIRY_TOL,
+                  sl_high.expiry_time + _EXACT_EXPIRY_TOL]:
+            assert total_variance_at(fs, K=K, T=T) == approx(w_high_exact, abs=1e-15), (
+                f"T={T} not snapped to the T_max slice"
+            )
+
     def test_duplicate_maturities_resolve_to_first_slice(self) -> None:
         """Duplicate expiries in fitted_slices: the exact-match loop
         returns on the FIRST slice with the matching expiry, so the

@@ -135,6 +135,15 @@ def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:
       ``_EXACT_EXPIRY_TOL`` slack at each end).  A single-slice surface
       therefore evaluates exactly at its expiry and rejects every other
       *T*.
+    - Queries within ``_EXACT_EXPIRY_TOL`` of a boundary expiry are
+      SNAPPED to that boundary slice *before* the interpolation path:
+      ``T <= T_min + tol`` evaluates ``T_min`` and ``T >= T_max - tol``
+      evaluates ``T_max``.  The exact-match loop is strict (``<``), so
+      without the snap a query at exactly ``T_min + tol`` / ``T_max -
+      tol`` slipped into the interpolation path and silently
+      interpolated/extrapolated in expiry (e.g. a ``T_max + tol`` query
+      extrapolated past the last slice).  Snapping keeps the boundary
+      contract exact for every query the tolerance admits.
     - Strikes are NOT range-checked: the SVI smile is evaluated at
       ``log(K / F)``, so wing extrapolation in the strike dimension is
       inherent — any positive *K* produces the smile's extrapolated
@@ -166,6 +175,18 @@ def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:
         raise ValueError(
             f"T={T} is above the surface range [{T_min}, {T_max}]"
         )
+
+    # ── snap queries within the expiry tolerance to the boundary slice ─
+    # The exact-match loop below is strict (`<`), so a query at exactly
+    # T_min + tol / T_max - tol would otherwise slip into the interior
+    # interpolation path and silently interpolate/extrapolate in expiry
+    # (a T_max + tol query extrapolates PAST the last slice).  Snap such
+    # queries to the boundary expiry so the tolerance admits exactly the
+    # boundary slice's value, never a near-boundary interpolation.
+    if T <= T_min + _EXACT_EXPIRY_TOL:
+        T = T_min
+    elif T >= T_max - _EXACT_EXPIRY_TOL:
+        T = T_max
 
     # ── exact slice expiry match ──────────────────────────────────────────
     for i, sl in enumerate(slices):
