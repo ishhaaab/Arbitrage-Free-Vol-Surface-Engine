@@ -4,6 +4,15 @@ The 3 fallback T values: 0.0849, 0.2575, 0.4274.
 The fallback works (unconstrained fit succeeds) but the hard-constrained
 H&M Prop 3.1 fit fails on these slices.
 
+This is a RESEARCH / DIAGNOSTIC tool, not part of the library test suite.
+Its outputs are snapshot- and optimizer-dependent:
+- data is fetched live (yfinance) at run time, or built synthetically
+  when the fetch fails — the numbers change day to day;
+- the hard-constrained fits depend on the scipy optimizer (trust-constr
+  with an SLSQP retry), its tolerances, and the starting point, so the
+  "converged" columns are statements about this optimizer run, not about
+  the data in general.
+
 This script:
   1. Fetches live SPY data (yfinance)
   2. Runs fit_ssvi_surface_sequential and identifies fallback slices
@@ -11,12 +20,20 @@ This script:
      a. Slice data (T, ATM vol, 25-delta skew, 10-delta skew)
      b. Unconstrained fit params (theta, psi, rho)
      c. Hard-constrained fit attempts with:
-        - Default seed (current behavior)
+        - Default seed (deterministic _fit_slice behaviour)
         - Warm-start from unconstrained fit params
-        - 5 random restarts
+        - 5 random restarts, each an independent constrained solve
+          started from its own seed-derived initial point
      d. Constraint violation at each solution
      e. Whether unconstrained params already satisfy H&M with neighbors
   4. Prints a summary table
+
+Restart methodology (corrected): the "5 random restarts" section does
+NOT run a deterministic default-seed attempt first and warm-start only
+on failure.  Every restart runs the hard-constrained optimizer from its
+OWN initial point (a random theta/rho/psi seed refined by an
+unconstrained least-squares solve), and each restart row reports the
+actual initial point and the optimizer result.
 
 Usage:
     python scripts/diagnose_fallback_slices.py
@@ -255,11 +272,24 @@ def try_warm_start(
     points: list[tuple[float, float]],
     prev: SSVIParams | None,
     warm_params: SSVIParams,
+    label: str = "warm-start",
 ) -> dict:
-    """Try hard-constrained fit warm-started from unconstrained solution.
+    """Run the hard-constrained optimizer from a caller-supplied start point.
 
-    This is the key diagnostic: does the unconstrained solution provide
-    a good initial point for the constrained optimizer?
+    This is the script-local wrapper that passes a start through to the
+    constrained optimizer (``_fit_slice`` has no ``start`` parameter, so
+    the optimizer loop is reproduced here with the given initial point).
+    It is the key diagnostic: does a given starting point let the
+    constrained optimizer converge?
+
+    Returns a dict describing the run:
+    - "label": identifier for this attempt
+    - "start": the actual initial point used, as SSVIParams
+    - "x0": the internal (theta, u, v) initial point passed to scipy
+    - "converged": bool
+    - on success: "params", "violations", "final_objective",
+      "optimizer_status", "optimizer_message"
+    - on failure: "error", "final_objective"
     """
     # We need to temporarily monkeypatch the seed in _fit_slice.
     # Instead, let's directly call the optimizer with the warm-started x0.
@@ -269,12 +299,13 @@ def try_warm_start(
     ws = np.array([w for _, w in points], dtype=np.float64)
 
     # Convert warm_params to internal (theta, u, v) representation
-    theta0 = warm_params.theta
-    rho0 = np.clip(warm_params.rho, -0.99, 0.99)
-    p0 = np.clip(warm_params.psi, 1e-6, 20.0)
+    theta0 = float(warm_params.theta)
+    rho0 = float(np.clip(warm_params.rho, -0.99, 0.99))
+    p0 = float(np.clip(warm_params.psi, 1e-6, 20.0))
     u0 = float(np.arctanh(rho0))
     v0 = float(np.log(p0))
     x0 = np.array([theta0, u0, v0], dtype=np.float64)
+    start_params = SSVIParams(theta=theta0, rho=rho0, psi=p0)
 
     eps_theta = 1e-9
     eps_chi = 1e-6
@@ -359,7 +390,9 @@ def try_warm_start(
 
     if not success:
         return {
-            "label": "warm-start",
+            "label": label,
+            "start": start_params,
+            "x0": x0.tolist(),
             "converged": False,
             "params": None,
             "error": str(result.message),
@@ -394,11 +427,15 @@ def try_warm_start(
         violation_info["ratio_ok"] = abs(ratio) <= 1.0 + 1e-8
 
     return {
-        "label": "warm-start",
+        "label": label,
+        "start": start_params,
+        "x0": x0.tolist(),
         "converged": True,
         "params": params,
         "violations": violation_info,
         "final_objective": float(_objective(result.x)),
+        "optimizer_status": int(result.status),
+        "optimizer_message": str(result.message),
     }
 
 
@@ -407,7 +444,17 @@ def try_random_restarts(
     prev: SSVIParams | None,
     n_restarts: int = 5,
 ) -> list[dict]:
-    """Try hard-constrained fit with random initial seeds."""
+    """Run the hard-constrained fit from ``n_restarts`` random starts.
+
+    Every restart runs the constrained optimizer from its OWN seed-derived
+    start point: a random theta/rho/psi seed (per-restart RNG), refined by
+    an unconstrained least-squares solve.  The deterministic default-seed
+    attempt is NOT used as a gate — there is no "try default first, then
+    warm-start only on failure".  Each restart is an independent
+    constrained solve from its own initial point, and each returned dict
+    records the actual initial point ("start" / "x0") and the optimizer
+    result.
+    """
     ws = np.array([w for _, w in points])
     w_min = float(ws.min())
     w_max = float(ws.max())
@@ -432,7 +479,8 @@ def try_random_restarts(
         rho_seed = float(np.clip(rho_seed, -0.99, 0.99))
         psi_seed = float(np.clip(psi_seed, 1e-6, 20.0))
 
-        # Try unconstrained least_squares for this seed first, then use as warm-start
+        # Refine the random seed with an unconstrained least-squares solve
+        # to get this restart's seed-derived start point.
         from scipy.optimize import least_squares as _ls
 
         def _seed_resid(p):
@@ -453,11 +501,10 @@ def try_random_restarts(
             psi=float(seed_result.x[2]),
         )
 
-        r = try_hard_constrained(points, prev, label=f"restart-{i}")
-        if not r["converged"]:
-            # Try with this random seed's unconstrained result as warm-start
-            r = try_warm_start(points, prev, seed_params)
-            r["label"] = f"restart-{i}-warm"
+        # EVERY restart runs the constrained optimizer from its own
+        # seed-derived start — the deterministic default-seed attempt is
+        # not used as a gate.
+        r = try_warm_start(points, prev, seed_params, label=f"restart-{i}")
         results.append(r)
 
     return results
@@ -695,18 +742,26 @@ def run_diagnostics():
         else:
             warm_result = {"converged": False}
 
-        # Random restarts
+        # Random restarts — each is an independent constrained solve from
+        # its own seed-derived start (no default-seed gate).
         restart_results = try_random_restarts(pts, prev_params, n_restarts=5)
         n_restart_converged = sum(1 for r in restart_results if r["converged"])
-        print(f"\n    [5 random restarts]")
+        print(f"\n    [5 random restarts — each constrained solve starts from its own seed-derived point]")
         print(f"      Converged: {n_restart_converged} / 5")
         for r in restart_results:
+            start = r.get("start")
+            if start is not None:
+                start_str = (f"theta={start.theta:.6f}, rho={start.rho:.6f}, "
+                             f"psi={start.psi:.6f}")
+            else:
+                start_str = "N/A"
             if r["converged"]:
                 v = r["violations"]
-                print(f"        {r['label']}: theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
+                print(f"        {r['label']}: start=({start_str}) -> "
+                      f"theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
                       f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}")
             else:
-                print(f"        {r['label']}: FAILED")
+                print(f"        {r['label']}: start=({start_str}) -> FAILED")
 
         # (e) Check if unconstrained params satisfy H&M with neighbors
         print(f"\n  Does the unconstrained fit satisfy H&M with neighbors?")
