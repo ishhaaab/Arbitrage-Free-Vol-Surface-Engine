@@ -1,6 +1,6 @@
 # arbfree-vol-surface
 
-A library that turns a messy option chain into a clean, arbitrage-aware implied volatility surface. Feed it raw quotes; get back a calibrated surface you can query for IV, Greeks, local vol, and PCA modes. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and the repair report says so (`RepairReport.fallback_slices` / `repair_infeasible`).
+A library that turns a messy option chain into a clean, arbitrage-aware implied volatility surface. Feed it raw quotes; get back a calibrated surface you can query for IV, Greeks, local vol, and PCA modes. Hard-constrained eSSVI slices satisfy the implemented Gatheral–Jacquier conditions and the grid-based calendar check; slices that fall back to an unconstrained per-slice fit are not arbitrage-free and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`.
 
 ## The problem
 
@@ -87,7 +87,7 @@ A few decisions are baked into the code:
 
 The core engine is built and tested: ingestion, cleaning, the five static-arbitrage checks, three smile models, the repair loop, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery — currently 439 tests pass plus 2 expected XPASS tripwires (the m66 boundary tripwires), and the suite grows with the codebase.
 
-This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The raw-SVI path is not arbitrage-free by construction; the eSSVI path is, but only for slices that fit within the H&M hard constraints — slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. SABR is fit as a comparison model, not as an arb-free construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers. European options only.
+This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The raw-SVI path is not arbitrage-free by construction; the eSSVI path is, but only in the implemented sense — slices that fit within the H&M hard constraints AND pass the grid-based calendar check are certified, while slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. SABR is fit as a comparison model, not as an arb-free construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers. European options only.
 
 ## Roadmap
 

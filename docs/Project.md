@@ -1,6 +1,6 @@
 # arbfree-vol-surface
 
-An implied volatility surface engine for serious quant finance research and production-style system design. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and the repair report says so (`RepairReport.fallback_slices` / `repair_infeasible`).
+An implied volatility surface engine for serious quant finance research and production-style system design. Hard-constrained eSSVI slices satisfy the implemented Gatheral–Jacquier conditions and the grid-based calendar check; slices that fall back to an unconstrained per-slice fit are not arbitrage-free and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`.
 
 ## Why This Project Exists
 
@@ -319,7 +319,7 @@ The repaired surface should produce:
 
 The repair system should be honest. If a surface cannot be fully repaired under current assumptions, it should say so.
 
-The implementation (`repair()` in `src/arbfree_vol/repair/engine.py`) fits three smile models -- raw SVI, eSSVI (primary), and SABR (comparison) -- selectable via `use_ssvi` / `use_sabr` (mutually exclusive). The raw-SVI path applies a calendar-arbitrage SOFT penalty that threads the previous slice's fitted parameters when fitting in ascending-expiry order (commit 8b3e149). The **eSSVI** path is the arbitrage-certified primary surface: it fits SSVI slices sequentially by increasing maturity with the Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition enforced as a HARD optimizer constraint -- non-decreasing theta and chi=theta*psi across slices, plus |(rho*chi)_{i+1} - (rho*chi)_i| / (chi_{i+1} - chi_i) <= 1 between adjacent slices -- together with both Gatheral-Jacquier (2014) butterfly bounds per slice (commit 582d1cf, `src/arbfree_vol/ssvi/term_structure.py`). Per-slice rho is fully free (tanh-reparametrised per slice, no cross-slice functional form). Slices that fit within the hard constraints are arbitrage-free BY CONSTRUCTION; slices that fall back to the unconstrained per-slice fit are NOT (see `RepairReport.fallback_slices` / `repair_infeasible` and Issue #15) — the grid-based `detect_svi_surface` then reports those violations as remaining_violations rather than being only a redundant regression check. The **SABR** path is an empirical comparison parametrisation: it fits cubic B-spline term structures on alpha(t)/nu(t)/rho(t) across expiries with a cross-slice calendar-arb SOFT penalty, with B-spline coefficients reparametrised at the control-point level (scaled tanh for rho, exp+floor for alpha/nu) to stay in-range between knots by the convex-hull property (`src/arbfree_vol/sabr/term_structure.py`). Calendar-arb verification is grid-based and EMPIRICAL -- not a closed-form guarantee; dynamic SABR is a not-implemented research extension. All three paths report remaining violations honestly via `detect_svi_surface`; `RepairReport.repair_infeasible` is set true if the eSSVI hard constraints cannot be satisfied.
+The implementation (`repair()` in `src/arbfree_vol/repair/engine.py`) fits three smile models -- raw SVI, eSSVI (primary), and SABR (comparison) -- selectable via `use_ssvi` / `use_sabr` (mutually exclusive). The raw-SVI path applies a calendar-arbitrage SOFT penalty that threads the previous slice's fitted parameters when fitting in ascending-expiry order (commit 8b3e149). The **eSSVI** path is the arbitrage-certified primary surface: it fits SSVI slices sequentially by increasing maturity with the Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition enforced as a HARD optimizer constraint -- non-decreasing theta and chi=theta*psi across slices, plus |(rho*chi)_{i+1} - (rho*chi)_i| / (chi_{i+1} - chi_i) <= 1 between adjacent slices -- together with both Gatheral-Jacquier (2014) butterfly bounds per slice (commit 582d1cf, `src/arbfree_vol/ssvi/term_structure.py`). Per-slice rho is fully free (tanh-reparametrised per slice, no cross-slice functional form). Slices that fit within the hard constraints satisfy the implemented Gatheral-Jacquier conditions and the grid-based calendar check (a discrete verification over a k-grid — not a global analytic certificate); slices that fall back to the unconstrained per-slice fit are NOT arbitrage-free (see `RepairReport.fallback_slices` / `repair_infeasible` and Issue #15) — the grid-based `detect_svi_surface` then reports those violations as remaining_violations rather than being only a redundant regression check. The **SABR** path is an empirical comparison parametrisation: it fits cubic B-spline term structures on alpha(t)/nu(t)/rho(t) across expiries with a cross-slice calendar-arb SOFT penalty, with B-spline coefficients reparametrised at the control-point level (scaled tanh for rho, exp+floor for alpha/nu) to stay in-range between knots by the convex-hull property (`src/arbfree_vol/sabr/term_structure.py`). Calendar-arb verification is grid-based and EMPIRICAL -- not a closed-form guarantee; dynamic SABR is a not-implemented research extension. All three paths report remaining violations honestly via `detect_svi_surface`; `RepairReport.repair_infeasible` is set true if the eSSVI hard constraints cannot be satisfied.
 
 ## API Layer
 
@@ -497,7 +497,7 @@ Goal: make the work explorable.
 Optional, once the core is strong:
 
 - SABR fitting. **(implemented — `repair(use_sabr=True)`, `src/arbfree_vol/sabr/`; term-structure B-spline calibration in `sabr/term_structure.py`)**
-- eSSVI arbitrage-free-by-construction calibration (hard-constrained slices; fallback slices excepted — see `repair_infeasible`/Issue #15). **(implemented — `ssvi/term_structure.py:fit_ssvi_surface_sequential`, Hendriks & Martini 2019 Prop 3.1; commit 582d1cf)**
+- eSSVI calibration with hard-constrained slices satisfying the implemented Gatheral–Jacquier conditions and the grid-based calendar check (fallback slices excepted — see `repair_infeasible`/Issue #15). **(implemented — `ssvi/term_structure.py:fit_ssvi_surface_sequential`, Hendriks & Martini 2019 Prop 3.1; commit 582d1cf)**
 - Local volatility extraction. **(implemented — `pricing/local_vol.py`, Dupire)**
 - Heston calibration.
 - American option adjustments.
@@ -519,7 +519,7 @@ A strong implementation will show that the builder understands both the math and
 
 ## Resume Bullet
 
-Built an implied volatility surface engine that ingests option chains, solves implied volatilities, detects calendar and butterfly arbitrage, fits SVI total variance slices, and repairs noisy market surfaces under no-arbitrage constraints. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`, not certified.
+Built an implied volatility surface engine that ingests option chains, solves implied volatilities, detects calendar and butterfly arbitrage, fits SVI total variance slices, and repairs noisy market surfaces under no-arbitrage constraints. Hard-constrained eSSVI slices satisfy the implemented Gatheral–Jacquier conditions and the grid-based calendar check; slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`, not certified.
 
 ## Interview Talking Points
 
@@ -552,7 +552,7 @@ It is better to have a smaller, correct, well-tested engine than a huge but frag
 ## Initial Prompt For A New Build Session
 
 ```text
-I want to build a serious quant finance project called `arbfree-vol-surface`: an implied volatility surface engine. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and the repair report says so (`RepairReport.fallback_slices` / `repair_infeasible`).
+I want to build a serious quant finance project called `arbfree-vol-surface`: an implied volatility surface engine. Hard-constrained eSSVI slices satisfy the implemented Gatheral–Jacquier conditions and the grid-based calendar check; slices that fall back to an unconstrained per-slice fit are not arbitrage-free and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`.
 
 Context:
 I am a math major interested in finance, stochastic calculus, and strong system design. I do not want a generic resume project. I want this to be rigorous, difficult, and impressive enough to discuss in quant/dev interviews.

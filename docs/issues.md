@@ -698,3 +698,42 @@ instead of re-fetching from yfinance.
 `tests/fixtures/spx_sample.json` (snapshot from 2026-07-31). The
 audit script can load this fixture via the `--use-fixture` flag
 instead of re-fetching from yfinance (see `audit_theta_dip_data_quality.py`).
+
+### eSSVI calendar certificate is grid-based, not a global analytic guarantee (OPEN)
+
+The "arbitrage-free by construction" wording has been qualified across
+README.md / Project.md to match the implemented guarantee: hard-constrained
+eSSVI slices satisfy the implemented Gatheral–Jacquier conditions AND the
+grid-based calendar check.  The certificate is DISCRETE, not a closed-form
+analytic one — a pair can pass every parameter check yet still cross
+between grid points or beyond the grid.
+
+**Open item — HM sufficient condition (from docs/architecture_review.md,
+Finding 3, status "mitigated" 2026-08-05):** the exact Hendriks & Martini
+(2019) Prop 3.1 statement remains unresolved (primary paywalled); the
+implementation enforces the monotonicity/ratio inequalities only, not the
+additional Prop 3.5 sufficient disjunction.  The counterexample is STILL
+reproducible at HEAD (FIX-6 probe, 2026-08-12) as a parameter pair whose
+parameter conditions pass while the slices cross:
+
+```
+p1 = SSVIParams(theta=0.0149505446, rho=-0.6548551, psi=0.11491999)
+p2 = SSVIParams(theta=0.0574982989, rho=-0.8830506, psi=2.5226500)
+p1 butterfly residuals: [3.999407, 3.99715677, 3.99993185, 3.99967326]  (all >= 0)
+p2 butterfly residuals: [3.98303671, 3.72686712, 3.95720757, 3.31098134]  (all >= 0)
+chi = 0.0017181164, 0.1450480837   (non-decreasing)
+verify_hm_condition: True
+w2 - w1 at k=0.68 = -0.0015283049   (calendar-spread violation at that point)
+HM sufficient disjunction (Prop 3.5 restatement): phi_ratio 21.95 > 1 and
+  lhs 5460.42509 > rhs 5271.15807  -> False
+```
+
+At HEAD this pair is NO LONGER silently certified: the native-SSVI
+post-fit gate `verify_ssvi_calendar_free` (grid over `linspace(-3, 3, 241)`)
+returns **False** for it, so `repair()` sets `repair_infeasible=True` and
+surfaces the violation.  That mitigation is GRID-BASED: it depends on the
+violation falling on the grid (here it does: min w2-w1 = -0.0015288 at
+k=0.675).  Violations strictly between grid points or beyond the grid are
+not certified.  **Do not claim the counterexample is fixed** — resolving
+the exact HM Prop 3.1 / Prop 3.5 statement and adding the sufficient
+condition to `verify_hm_condition` remains an open item.
