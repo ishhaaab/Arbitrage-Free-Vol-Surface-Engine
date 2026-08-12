@@ -9,4 +9,7 @@ __pycache__/
 !roadmap.md
 !issues.md
 /mutants
+# Temporary mutmut configuration (mutation-testing campaign working file;
+# see docs/review_campaign.md). The repo's real build config lives in
+# pyproject.toml.
 setup.cfg
