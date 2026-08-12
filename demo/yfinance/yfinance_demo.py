@@ -52,12 +52,28 @@ surface, rejected, quality_drops = fetch_chain(symbol, max_expiries=20, min_T_ye
 
 T_count = len(surface.slices)
 Q_count = sum(len(s.quotes) for s in surface.slices)
-print(f"  Raw quotes fetched: {Q_count + len(rejected)}")
-print(f"  Rejected by cleaning: {len(rejected)} "
-      f"({len(rejected) / max(Q_count + len(rejected), 1) * 100:.1f}%)")
-print(f"  Dropped by data quality filter: {len(quality_drops)}")
+
+# Quote accounting, each quantity with its explicit denominator:
+#   raw rows     = rows the data-quality filter saw (quality drops + rows
+#                  that survived the filter with a price).
+#   quotes built = rows that survived the filter AND produced a Quote
+#                  (cleaning rejects + retained quotes).
+# Rows whose bid/ask/last-price are ALL absent are dropped silently by the
+# fetcher (_row_to_quote returns None) and appear in none of the returned
+# lists; in practice yfinance supplies price fields for every row, so the
+# raw-row denominator below is exact for this source.
+n_raw = len(quality_drops) + len(rejected) + Q_count
+n_quotes_built = len(rejected) + Q_count
+print(f"  Raw rows fetched: {n_raw}")
+print(f"    Dropped by data quality filter: {len(quality_drops)} of {n_raw} raw rows "
+      f"({len(quality_drops) / max(n_raw, 1) * 100:.1f}%)")
+print(f"    Quotes built from surviving rows: {n_quotes_built} of {n_raw} raw rows "
+      f"({n_quotes_built / max(n_raw, 1) * 100:.1f}%)")
+print(f"    Rejected by cleaning: {len(rejected)} of {n_quotes_built} quotes built "
+      f"({len(rejected) / max(n_quotes_built, 1) * 100:.1f}%)")
+print(f"    Retained quotes: {Q_count} of {n_quotes_built} quotes built "
+      f"({Q_count / max(n_quotes_built, 1) * 100:.1f}%)")
 if quality_drops:
-    from collections import Counter
     dq_reasons = Counter()
     for d in quality_drops:
         for part in d.reason.split("; "):
@@ -65,7 +81,6 @@ if quality_drops:
     print(f"  Quality drop breakdown:")
     for reason, count in dq_reasons.most_common():
         print(f"    {reason}: {count}")
-print(f"  Kept quotes: {Q_count}")
 print(f"  Expiries: {T_count}")
 print(f"  Spot={surface.spot:.2f}, r={surface.risk_free:.4f}, "
       f"q={surface.div_yield:.4f}")
@@ -120,14 +135,19 @@ for label, kw in model_configs:
             print(f"    T = {fl}")
 
 # ##########################################################################
-# 3. Build FittedSurface (use SVI report) + extract eSSVI fallback slices
+# 3. Build FittedSurface from the eSSVI report + extract its fallback slices
 # ##########################################################################
-fs = build_fitted_surface(reports["SVI"])
+# The IV / Dupire / Greeks plots are annotated with eSSVI fallback
+# diagnostics, so the plotted surface must come from the SAME report that
+# supplies those diagnostics (not the raw-SVI one).  Otherwise the fallback
+# rows would be grayed out on a surface that never fell back at those
+# maturities — the masking would annotate a different model's fit.
+essvi_report = reports["eSSVI"]
+fs = build_fitted_surface(essvi_report)
 
 # Extract fallback T values from the eSSVI report for plot masking.
 # These are maturities where the hard-constrained H&M Prop 3.1 fit failed
 # and the unconstrained per-slice fallback was used instead.
-essvi_report = reports["eSSVI"]
 fallback_Ts: list[float] = essvi_report.fallback_slices
 if fallback_Ts:
     print(f"  eSSVI fallback T values (will be grayed in heatmaps): "
