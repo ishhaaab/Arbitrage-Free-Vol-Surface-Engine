@@ -42,7 +42,7 @@ Usage:
 import argparse
 import sys
 import logging
-from math import log, sqrt
+from math import log
 from pathlib import Path
 
 import numpy as np
@@ -56,7 +56,7 @@ from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 from arbfree_vol.ingestion.yfinance import fetch_chain as yf_fetch_chain
-from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
+from arbfree_vol.models.surface import VolSurface
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
@@ -625,7 +625,6 @@ def run_audit(args=None):
     print(header)
     print(f"  {'-' * 65}")
 
-    comparison_rows = []
     for key, label in [
         ("yfinance_SPY", "yfinance/SPY raw"),
         ("yfinance_SPY", "yfinance/SPY filt"),
@@ -654,10 +653,6 @@ def run_audit(args=None):
               f"{r['n_quality_drops']:>6} "
               f"{r['theta_dips']:>7} "
               f"{r['theta_max_dip_pct']:>8.1f}%")
-        comparison_rows.append({
-            "label": row_label,
-            **r,
-        })
 
     # ── Tenor bucket breakdown ───────────────────────────────────────
     print(f"\n{'=' * 72}")

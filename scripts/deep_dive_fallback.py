@@ -1,5 +1,12 @@
 """Deep-dive: compute RMSE of degenerate (predecessor-copy) restart solutions
-vs the unconstrained fit for the fallback slices."""
+vs the unconstrained fit for the fallback slices.
+
+This is a RESEARCH / DIAGNOSTIC tool, not part of the library test suite.
+It fetches live SPY data, so all numbers are snapshot-in-time and vary day
+to day.  It does NOT establish that the fallback slices are repairable —
+it only compares how well the predecessor parameters and the unconstrained
+fit explain the fallback slice's own data on this snapshot.
+"""
 
 import sys
 from math import sqrt, log
@@ -10,17 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-from arbfree_vol.ssvi.term_structure import (
-    fit_ssvi_surface_sequential, _fit_slice, verify_hm_condition,
-)
+from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.ingestion.yfinance import fetch_chain
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
 
 def fetch_and_extract():
-    surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=20, min_T_years=7.0/365.0)
+    surface, _, _ = fetch_chain("SPY", max_expiries=20, min_T_years=7.0/365.0)
     fwd_curve = estimate_forward_curve(surface)
     populate_per_slice_r(surface, fwd_curve)
     slices_data = []
@@ -51,15 +55,12 @@ def main():
 
     result = fit_ssvi_surface_sequential(slices_data)
     sorted_fitted = sorted(result.fitted_slices, key=lambda x: x[0])
-    fitted_by_T = {T: p for T, p in sorted_fitted}
     data_by_T = {T: pts for T, pts in slices_data}
 
     print(f"Fallback slices: {[f'{T:.4f}' for T in result.fallback_slices]}\n")
 
     for fallback_T in result.fallback_slices:
         pts = data_by_T[fallback_T]
-        ks = np.array([k for k, _ in pts])
-        ws = np.array([w for _, w in pts])
 
         # Unconstrained fit
         unc = fit_ssvi_slice(pts)
@@ -114,7 +115,6 @@ def main():
         # Check: what does the unconstrained fit's theta look like in the 
         # overall term structure?
         print(f"\n  ATM vol term structure around this slice:")
-        all_thetas = [(T, p.theta) for T, p in sorted_fitted if T not in result.fallback_slices]
         for T_i, p_i in sorted_fitted:
             atm_w = p_i.theta
             atm_vol = sqrt(atm_w / T_i) if T_i > 0 else 0

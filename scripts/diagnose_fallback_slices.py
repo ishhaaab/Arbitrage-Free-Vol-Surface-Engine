@@ -40,7 +40,6 @@ Usage:
 """
 
 import sys
-import os
 import logging
 from math import log, sqrt
 from pathlib import Path
@@ -63,7 +62,6 @@ from arbfree_vol.ssvi.term_structure import (
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.ingestion.cleaning import clean_quotes
 from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
 
 _logger = logging.getLogger(__name__)
@@ -75,9 +73,9 @@ logging.basicConfig(level=logging.WARNING)
 
 def fetch_spy_data() -> tuple[VolSurface, list]:
     """Fetch SPY option data via yfinance, same approach as the demo."""
-    try:
-        import yfinance as yf
-    except ImportError:
+    import importlib.util
+
+    if importlib.util.find_spec("yfinance") is None:
         print("yfinance not installed. Using synthetic fallback data.")
         return _build_synthetic_data()
 
@@ -127,19 +125,6 @@ def _build_synthetic_data() -> tuple[VolSurface, list]:
         theta = atm_vol ** 2 * T
         psi = 0.5 + 0.1 * (T ** 0.5)  # mild psi term structure
 
-        quotes = []
-        for K in strikes_base:
-            k = log(K / F)
-            w = ssvi_w(k, theta, rho, psi)
-            sigma = sqrt(w / T) if T > 0 else atm_vol
-            from arbfree_vol.pricing.black_scholes import price_floats
-            for otype in (OptionType.CALL, OptionType.PUT):
-                price = price_floats(spot, K, T, r, q, sigma,
-                                     is_call=(otype == OptionType.CALL))
-                if price > 0.01:
-                    quotes.append(
-                        ExpirySlice.Quote if hasattr(ExpirySlice, 'Quote') else None
-                    )
         # Build quotes properly
         from arbfree_vol.models.surface import Quote
         quotes = []
@@ -457,7 +442,6 @@ def try_random_restarts(
     """
     ws = np.array([w for _, w in points])
     w_min = float(ws.min())
-    w_max = float(ws.max())
 
     results = []
     for i in range(n_restarts):
@@ -529,7 +513,6 @@ def check_unconstrained_satisfies_hm(
     """
     # Find predecessor and successor
     sorted_params = sorted(all_params, key=lambda x: x[0])
-    T_sorted = [T for T, _ in sorted_params]
 
     idx = None
     for i, (T, _) in enumerate(sorted_params):
@@ -638,9 +621,6 @@ def run_diagnostics():
     # Step 4: Detailed diagnostics for each fallback slice
     print("\n[4/4] Detailed diagnostics for fallback slices...")
     print("=" * 72)
-
-    # Build a map of all fitted params by T
-    fitted_by_T = {T: p for T, p in result.fitted_slices}
 
     # Build a map of all slices_data by T
     data_by_T = {T: pts for T, pts in slices_data}

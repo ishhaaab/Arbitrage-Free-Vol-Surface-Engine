@@ -109,7 +109,6 @@ def diagnose_source(label: str, surface) -> dict | None:
     slices_data = extract_slice_data(surface)
     result = fit_ssvi_surface_sequential(slices_data)
 
-    fallback_set = set(result.fallback_slices)
     n_fallback = len(result.fallback_slices)
     n_fitted = len(result.fitted_slices)
     print(f"  Fitted: {n_fitted} slices")
