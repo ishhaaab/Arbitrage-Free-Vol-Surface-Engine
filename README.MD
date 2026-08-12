@@ -23,7 +23,7 @@ Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacqu
 ## Quick start
 
 ```bash
-pytest tests/ -q                                              # full test suite (currently 439 tests + 2 expected XPASS tripwires; grows with the suite)
+pytest tests/ -q                                              # full test suite (400+ tests; expected XPASS tripwires are documented in the suite)
 python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
 python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; use --symbol TICKER for others)
 python demo/ticker_compare/ticker_compare.py                  # live cross-ticker comparison, 3 plots (SPY/QQQ/IWM by default)
@@ -85,7 +85,7 @@ A few decisions are baked into the code:
 
 ## What's done, and what isn't
 
-The core engine is built and tested: ingestion, cleaning, the five static-arbitrage checks, three smile models, the repair loop, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery — currently 439 tests pass plus 2 expected XPASS tripwires (the m66 boundary tripwires), and the suite grows with the codebase.
+The core engine is built and tested: ingestion, cleaning, the five static-arbitrage checks, three smile models, the repair loop, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery — 400+ tests, with the expected XPASS tripwires documented in the suite, and it grows with the codebase.
 
 This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The raw-SVI path is not arbitrage-free by construction; the eSSVI path is, but only in the implemented sense — slices that fit within the H&M hard constraints AND pass the grid-based calendar check are certified, while slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. SABR is fit as a comparison model, not as an arb-free construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers. European options only.
 
