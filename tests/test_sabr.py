@@ -6,6 +6,7 @@ from pytest import approx
 
 from arbfree_vol.sabr.model import (
     SABRParams,
+    clamp_to_sabr_domain,
     sabr_implied_vol,
     sabr_total_variance,
     to_raw_svi_params,
@@ -192,3 +193,43 @@ def test_sabr_smile_positive() -> None:
     for k in ks:
         iv = sabr_implied_vol(float(k), _F, _T, _ALPHA, _BETA, _RHO, _NU)
         assert iv > 0, f"Non-positive IV at k={k}: {iv}"
+
+
+def test_clamp_to_sabr_domain_boundary_inputs() -> None:
+    """The domain clamp nudges boundary values inside the model and leaves
+    in-domain values untouched.
+
+    The margins are derived from the SABRParams field constraints
+    (``gt``/``lt``/``ge``/``le`` metadata), so the clamp cannot drift from
+    the model bounds.  Exclusive bounds (rho, alpha, nu) get a 1e-9
+    nudge; inclusive bounds (beta in [0, 1]) clamp to the bound exactly.
+    """
+    # rho: exactly-on-bound must be nudged strictly inside (-0.999, 0.999).
+    r_hi = clamp_to_sabr_domain("rho", 0.999)
+    assert r_hi < 0.999
+    assert r_hi == approx(0.999 - 1e-9)
+    r_lo = clamp_to_sabr_domain("rho", -0.999)
+    assert r_lo > -0.999
+    assert r_lo == approx(-0.999 + 1e-9)
+
+    # In-domain values pass through unchanged (tight clamp).
+    assert clamp_to_sabr_domain("rho", 0.5) == 0.5
+    assert clamp_to_sabr_domain("rho", -0.998) == -0.998
+
+    # alpha / nu: gt=0 — boundary and below-bound land above 0.
+    assert clamp_to_sabr_domain("alpha", 0.0) > 0
+    assert clamp_to_sabr_domain("nu", 0.0) > 0
+    assert clamp_to_sabr_domain("alpha", 0.2) == 0.2
+
+    # beta: inclusive [0, 1] — clamps to the bound, not nudged past it.
+    assert clamp_to_sabr_domain("beta", -0.1) == 0.0
+    assert clamp_to_sabr_domain("beta", 1.5) == 1.0
+    assert clamp_to_sabr_domain("beta", 0.5) == 0.5
+
+    # The clamped boundary values construct valid SABRParams.
+    p = SABRParams(alpha=clamp_to_sabr_domain("alpha", 0.0),
+                   beta=clamp_to_sabr_domain("beta", 1.5),
+                   rho=clamp_to_sabr_domain("rho", 0.999),
+                   nu=clamp_to_sabr_domain("nu", 0.0))
+    assert p.rho < 0.999
+    assert p.alpha > 0 and p.nu > 0

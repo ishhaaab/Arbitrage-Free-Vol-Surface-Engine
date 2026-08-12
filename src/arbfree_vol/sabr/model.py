@@ -54,6 +54,46 @@ class SABRParams(BaseModel):
     nu: float = Field(..., gt=0)
 
 
+_DOMAIN_CLAMP_MARGIN: float = 1e-9
+"""Nudge applied when a fitted value lands exactly on an exclusive model
+bound (e.g. ``rho == 0.999``) so ``SABRParams`` construction never raises."""
+
+
+def clamp_to_sabr_domain(field_name: str, value: float) -> float:
+    """Clamp ``value`` strictly inside the ``SABRParams`` domain for a field.
+
+    Reads the field's ``gt`` / ``lt`` / ``ge`` / ``le`` constraints from
+    the ``SABRParams`` model itself, so the clamp can never drift from the
+    model bounds.  Exclusive bounds (``gt`` / ``lt``) receive a small
+    margin nudge (``_DOMAIN_CLAMP_MARGIN``) so the returned value passes
+    the strict comparison; inclusive bounds (``ge`` / ``le``) clamp to the
+    bound exactly.  Values already inside the domain are returned
+    unchanged — the clamp is tight and only nudges values that would
+    otherwise violate the model.
+    """
+    info = SABRParams.model_fields[field_name]
+    for constraint in info.metadata:
+        lower = getattr(constraint, "gt", None)
+        if lower is not None:
+            if value <= float(lower):
+                value = float(lower) + _DOMAIN_CLAMP_MARGIN
+        else:
+            lower_incl = getattr(constraint, "ge", None)
+            if lower_incl is not None and value < float(lower_incl):
+                value = float(lower_incl)
+
+        upper = getattr(constraint, "lt", None)
+        if upper is not None:
+            if value >= float(upper):
+                value = float(upper) - _DOMAIN_CLAMP_MARGIN
+        else:
+            upper_incl = getattr(constraint, "le", None)
+            if upper_incl is not None and value > float(upper_incl):
+                value = float(upper_incl)
+
+    return float(value)
+
+
 _SABR_NEAR_ATM_EPS = 1e-8
 """Threshold below which we use the ATM limit formula."""
 

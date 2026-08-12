@@ -5,7 +5,7 @@ from math import sqrt
 import numpy as np
 from scipy.optimize import least_squares
 
-from arbfree_vol.sabr.model import SABRParams, sabr_total_variance
+from arbfree_vol.sabr.model import SABRParams, clamp_to_sabr_domain, sabr_total_variance
 
 
 def calibrate_sabr(points: list[tuple[float, float]],
@@ -67,5 +67,13 @@ def calibrate_sabr(points: list[tuple[float, float]],
         raise RuntimeError(f"SABR calibration failed: {result.message}")
     alpha, rho, nu = result.x
 
-    return SABRParams(alpha=float(alpha), beta=beta_hint,
-                      rho=float(rho), nu=float(nu))
+    # scipy's bounded least_squares can return a parameter EXACTLY on a
+    # bound (e.g. rho == 0.999), which the SABRParams strict constraints
+    # reject (rho is lt=0.999).  Clamp every fitted value into the model
+    # domain so construction can never raise.
+    return SABRParams(
+        alpha=clamp_to_sabr_domain("alpha", float(alpha)),
+        beta=beta_hint,
+        rho=clamp_to_sabr_domain("rho", float(rho)),
+        nu=clamp_to_sabr_domain("nu", float(nu)),
+    )

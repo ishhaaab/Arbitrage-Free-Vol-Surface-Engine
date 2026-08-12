@@ -193,3 +193,47 @@ def test_joint_fit_nonconvergence_falls_back_to_per_slice(monkeypatch, caplog) -
     assert "falling back to per-slice calibrate_sabr" in caplog.text, (
         f"expected the fallback warning, got: {caplog.text}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test: joint fit never emits out-of-domain parameters (boundary rho clamp)
+# ---------------------------------------------------------------------------
+
+def test_joint_fit_clamps_boundary_rho_into_valid_domain(monkeypatch) -> None:
+    """The joint B-spline fit must never emit ``rho == 0.999``.
+
+    Regression for the Docker-env crash (scipy 1.17/numpy 2.4): the
+    scaled-tanh reparametrisation can round ``0.999 * tanh(u)`` up to
+    EXACTLY 0.999 for large u (``0.999 * tanh(20) == 0.999`` in float),
+    and ``SABRParams`` declares ``rho`` strictly ``lt=0.999`` — so
+    constructing ``SABRParams(rho=0.999, ...)`` raised pydantic
+    ``ValidationError`` and crashed ``repair(use_sabr=True)`` before the
+    mapping-failure wrap could record the slice.  The post-fit clamp
+    nudges the boundary value inside the model domain.
+
+    Deterministic by construction: the joint-fit ``least_squares`` call
+    is monkeypatched to return a successful result whose rho coefficients
+    map to exactly 0.999 (the fitter's own ``_rho_from_u`` is patched to
+    return 0.999), so the outcome cannot depend on optimizer budgets.
+    Pre-fix, this test fails with a pydantic ValidationError.
+    """
+    import arbfree_vol.sabr.term_structure as ts
+
+    slices = _make_synthetic_slices()
+
+    class _FakeSuccess:
+        success = True
+        message = "simulated converged joint fit"
+        x = np.zeros(9)  # 3 expiries x (u_alpha, u_nu, u_rho)
+
+    monkeypatch.setattr(ts, "least_squares", lambda *a, **k: _FakeSuccess())
+    monkeypatch.setattr(ts, "_rho_from_u",
+                        lambda u: np.full(np.asarray(u).size, 0.999))
+
+    result = fit_sabr_term_structure(slices)
+
+    assert len(result) == 3
+    for i, p in enumerate(result):
+        assert p.rho < 0.999, f"rho[{i}]={p.rho} not < 0.999"
+        assert p.rho > -0.999, f"rho[{i}]={p.rho} not > -0.999"
+        assert p.alpha > 0 and p.nu > 0

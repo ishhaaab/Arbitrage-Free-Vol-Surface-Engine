@@ -32,7 +32,11 @@ from scipy.interpolate import BSpline, make_interp_spline
 from scipy.optimize import least_squares
 
 from arbfree_vol.sabr.calibration import calibrate_sabr
-from arbfree_vol.sabr.model import SABRParams, sabr_total_variance
+from arbfree_vol.sabr.model import (
+    SABRParams,
+    clamp_to_sabr_domain,
+    sabr_total_variance,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -263,7 +267,19 @@ def fit_sabr_term_structure(
             "falling back to per-slice calibrate_sabr",
             result.message,
         )
-        fallback = per_slice_params
+        # Per-slice calibrate_sabr clamps its own output into the model
+        # domain; rebuild through the clamp here anyway so the fallback
+        # contract is guaranteed locally and cannot drift if the emitter
+        # changes.
+        fallback = [
+            SABRParams(
+                alpha=clamp_to_sabr_domain("alpha", p.alpha),
+                beta=p.beta,
+                rho=clamp_to_sabr_domain("rho", p.rho),
+                nu=clamp_to_sabr_domain("nu", p.nu),
+            )
+            for p in per_slice_params
+        ]
         if return_splines:
             spl_a = make_interp_spline(expiries, [p.alpha for p in fallback], k=min(3, m - 1))
             spl_n = make_interp_spline(expiries, [p.nu for p in fallback], k=min(3, m - 1))
@@ -281,12 +297,19 @@ def fit_sabr_term_structure(
     nu_fitted = _nu_from_u(u_nu_opt)
     rho_fitted = _rho_from_u(u_rho_opt)
 
+    # The scaled-tanh reparametrisation can round 0.999 * tanh(u) up to
+    # exactly 0.999 for large u, and SABRParams declares rho strictly
+    # < 0.999 — constructing SABRParams(rho=0.999) raised ValidationError
+    # and crashed repair() before the mapping-failure wrap could record
+    # the slice.  Clamp every fitted parameter into the model domain
+    # (tight: only values that would violate the model are nudged) so
+    # SABRParams construction always succeeds.
     fitted_params = [
         SABRParams(
-            alpha=float(alpha_fitted[i]),
+            alpha=clamp_to_sabr_domain("alpha", float(alpha_fitted[i])),
             beta=beta,
-            rho=float(rho_fitted[i]),
-            nu=float(nu_fitted[i]),
+            rho=clamp_to_sabr_domain("rho", float(rho_fitted[i])),
+            nu=clamp_to_sabr_domain("nu", float(nu_fitted[i])),
         )
         for i in range(N)
     ]
