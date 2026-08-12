@@ -52,11 +52,14 @@ from tests.ground_truth.dupire_cases import (
     LINEAR_IN_K_INTERIOR_ROWS,
     LINEAR_IN_K_MATURITIES,
     LINEAR_IN_K_STRIKES,
+    NONFLAT_REFERENCE_POINTS,
     SIGMA_CONST,
     SPOT,
     build_constant_vol_surface,
     build_linear_in_k_surface,
+    build_nonflat_svi_surface,
     closed_form_linear_sigma_loc,
+    closed_form_nonflat_svi_sigma_loc,
     price_space_dupire_sigma_loc,
 )
 
@@ -173,3 +176,66 @@ def test_linear_in_k_repo_dupire_matches_closed_form() -> None:
                 f"K={K:.3f} (k={k:.2f}), T={LINEAR_IN_K_MATURITIES[iT]}: "
                 f"repo={got:.8f}, closed form={expected:.8f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Case 3 — non-flat SVI surface (the repo's test_local_vol.py pin)
+# ---------------------------------------------------------------------------
+
+
+def test_nonflat_surface_total_variance_matches_svi_interpolation() -> None:
+    """The repo-consumable non-flat surface is the SVI interpolation.
+
+    Pins the exact surface semantics the closed-form evaluator replicates:
+    each slice's total variance evaluated at ITS OWN forward's
+    log-moneyness (``k_i = ln(K/F_i)``), linearly interpolated in T.  This
+    is the executable statement of the "per-slice forwards differ when
+    r != q" behaviour that makes the surface NOT ``w = T*f(k)``.
+    """
+    from arbfree_vol.surface.interpolate import _forward_at
+
+    from tests.ground_truth.dupire_cases import _svi_literal_w
+
+    fs = build_nonflat_svi_surface()
+    sl_low, sl_high = fs.fitted_slices[0], fs.fitted_slices[1]
+    p_low, p_high = sl_low.params, sl_high.params
+    dT = sl_high.expiry_time - sl_low.expiry_time
+    F_low = _forward_at(fs, sl_low.expiry_time)
+    F_high = _forward_at(fs, sl_high.expiry_time)
+    for K, T in NONFLAT_REFERENCE_POINTS:
+        theta = (T - sl_low.expiry_time) / dT
+        wA, _, _ = _svi_literal_w(math.log(K / F_low), p_low.a, p_low.b,
+                                  p_low.rho, p_low.m, p_low.sigma)
+        wB, _, _ = _svi_literal_w(math.log(K / F_high), p_high.a, p_high.b,
+                                  p_high.rho, p_high.m, p_high.sigma)
+        want = (1.0 - theta) * wA + theta * wB
+        got = total_variance_at(fs, K, T)
+        assert got == approx(want, rel=1e-12), (
+            f"K={K}, T={T}: surface w={got}, literal interpolation={want}"
+        )
+
+
+def test_nonflat_closed_form_matches_price_space_fd() -> None:
+    """The non-flat SVI closed form is the correct label (independent GT).
+
+    Compares the literal closed form against the model-independent
+    price-space Dupire finite difference computed on the repo's OWN surface
+    (Black-Scholes prices on the repo's ACTUAL linear forward curve ->
+    [dC/dT + mu*K dC/dK + (r - mu) C]/(0.5 K^2 C_KK) with the CORRECTED
+    forward drift mu = F'(T)/F(T), per the FIX-GT work).  The two agree
+    within ~1.8e-5 relative on the interior reference points (the
+    price-space FD grid error for dK = 0.2% of K, dT = 1e-4); the
+    documented 1e-4 tolerance is several times the observed FD error —
+    proving the hand-derived closed form, not the repo's total-variance-
+    space output, is the true local vol of the surface.  This is the
+    executable provenance behind the regression test in
+    ``tests/test_local_vol.py``.
+    """
+    fs = build_nonflat_svi_surface()
+    for K, T in NONFLAT_REFERENCE_POINTS:
+        closed = closed_form_nonflat_svi_sigma_loc(fs, K, T)
+        price_fd = price_space_dupire_sigma_loc(fs, K, T, dK_rel=2e-3, dT=1e-4)
+        assert price_fd == approx(closed, rel=1e-4), (
+            f"K={K}, T={T}: price-FD={price_fd:.8f} vs closed "
+            f"form={closed:.8f}"
+        )

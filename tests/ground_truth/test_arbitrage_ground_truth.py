@@ -20,6 +20,13 @@ labels in ``arbitrage_cases.py``:
   crossing — only the grid fold-in can set the flag honestly;
 - the SVI cases: ``detect_svi`` flags exactly the known label, and the
   independent literal ``g(k)`` corroborates it on a dense grid.
+
+Every case's HAND-DERIVED ``known_label`` is additionally wired to the
+observations the repo's verifiers/detectors actually produce on that case
+(``test_known_label_matches_observed_outcomes``): a label changed to a value
+inconsistent with the actual outcome now FAILS, where previously it could be
+flipped silently.  The label -> outcome mapping is centralised and documented
+in ``label_matches``.
 """
 
 from __future__ import annotations
@@ -47,7 +54,9 @@ from tests.ground_truth.arbitrage_cases import (
     SVI_BUTTERFLY_VIOLATING,
     SVI_CASES,
     dense_g_min,
+    gj_first_bound,
     gj_hand_residual,
+    gj_second_bound,
     mapped_raw_svi,
     svi_density_g,
 )
@@ -299,6 +308,146 @@ def test_svi_butterfly_violating_matches_label() -> None:
     )
     _, gmin = dense_g_min(p.a, p.b, p.rho, p.m, p.sigma, n=20001)
     assert gmin < -0.05, f"expected a clear negative density, min g={gmin}"
+
+
+# ---------------------------------------------------------------------------
+# Label consistency: known_label must match the observed outcomes
+# ---------------------------------------------------------------------------
+# The hand-derived ``known_label`` of every case must be CONSISTENT with the
+# outcomes the repo's verifiers/detectors actually produce on that case.
+# Documented mapping (label -> observations it implies):
+#
+#   arb_free            -> the case is fully clean: hm True AND grid True
+#                          (calendar checks pass), no per-slice
+#                          Gatheral-Jacquier violation, no boundary
+#                          equality, and (for raw-SVI cases) detect_svi
+#                          reports arbitrage-free.
+#   butterfly_violation -> a per-slice Gatheral-Jacquier violation exists
+#                          (some slice's min bound residual < 0, or the SVI
+#                          density g(k) is negative).  The label names the
+#                          BUTTERFLY violation only; the calendar checks are
+#                          NOT implied either way (the shipped eSSVI
+#                          butterfly cases are calendar-clean by
+#                          construction, so hm/grid are True there, but a
+#                          butterfly case need not be — the mapping asserts
+#                          only what the label implies).
+#   calendar_violation  -> grid False (the defining calendar implication);
+#                          hm may be True or False (the H&M sufficiency-gap
+#                          case has hm True while the grid crossing fails).
+#   both_violation      -> some slice violates BOTH GJ bounds (> 4 each).
+#                          Calendar implications are NOT implied (the
+#                          shipped case is calendar-clean: hm True,
+#                          grid True) — "both" refers to the two GJ bounds,
+#                          not calendar+butterfly.
+#   boundary            -> some slice sits EXACTLY on a boundary equality:
+#                          GJ condition 1 == 4 (the paper's STRICT
+#                          condition-1 edge, strict-mode residual), or the
+#                          calendar theta-flat equality (theta_delta = 0
+#                          exactly).  These are the documented boundary
+#                          semantics the existing tests pin.
+#   unknown_by_design   -> no implications (vacuously consistent).
+#
+# The assertions below FAIL if a label is changed to a value inconsistent
+# with the observed outcomes (e.g. labeling a case with a per-slice GJ
+# violation "arb_free", or a calendar-crossing case "arb_free"/"boundary").
+
+_GJ_EPS: float = 1e-9  # same strict-mode epsilon as the case module
+
+
+def label_matches(
+    label: str,
+    *,
+    hm: bool | None = None,
+    grid: bool | None = None,
+    gj_min: float | None = None,
+    gj_boundary: bool = False,
+    gj_both: bool = False,
+    theta_flat: bool = False,
+    svi_arb_free: bool | None = None,
+    svi_butterfly: bool = False,
+) -> bool:
+    """Is ``label`` consistent with the observed verifier/detector outcomes?
+
+    Implements the documented mapping above.  ``None`` observables mean
+    "not applicable" (raw-SVI cases have no native SSVI checks); they never
+    cause a mismatch on their own.
+    """
+    if label == "unknown_by_design":
+        return True
+    if label == "arb_free":
+        return (
+            (hm is None or hm is True)
+            and (grid is None or grid is True)
+            and (gj_min is None or gj_min > _GJ_EPS)
+            and not gj_boundary
+            and not gj_both
+            and not theta_flat
+            and (svi_arb_free is None or svi_arb_free is True)
+            and not svi_butterfly
+        )
+    if label == "butterfly_violation":
+        if gj_min is not None:
+            return gj_min < 0.0
+        return svi_butterfly
+    if label == "calendar_violation":
+        return grid is False
+    if label == "both_violation":
+        return gj_both
+    if label == "boundary":
+        return gj_boundary or theta_flat
+    return False
+
+
+def _observed_outcomes(case) -> dict[str, object]:
+    """The verifier/detector outcomes for one case, as ``label_matches`` kwargs.
+
+    eSSVI cases: ``hm``/``grid`` from the native verifiers plus the
+    hand-computed per-slice GJ diagnostics (min residual, condition-1 exact
+    boundary, both-bounds violation, theta-flat equality).  Raw-SVI cases:
+    the ``detect_svi`` outcome.
+    """
+    if case.model == "essvi":
+        hm = verify_hm_condition(list(case.slices))
+        grid = verify_ssvi_calendar_free(list(case.slices))
+        firsts = [gj_first_bound(sl.theta, sl.rho, sl.psi) for sl in case.slices]
+        seconds = [gj_second_bound(sl.theta, sl.rho, sl.psi) for sl in case.slices]
+        residuals = [gj_hand_residual(sl.theta, sl.rho, sl.psi) for sl in case.slices]
+        return {
+            "hm": hm,
+            "grid": grid,
+            "gj_min": min(residuals),
+            "gj_boundary": any(abs(4.0 - b1) <= _GJ_EPS for b1 in firsts),
+            "gj_both": any(
+                b1 > 4.0 + _GJ_EPS and b2 > 4.0 + _GJ_EPS
+                for b1, b2 in zip(firsts, seconds)
+            ),
+            "theta_flat": max(abs(sl.theta - case.slices[0].theta)
+                              for sl in case.slices) <= _GJ_EPS,
+        }
+    if case.model == "svi":
+        report = detect_svi(case.params)
+        kinds = [v.kind for v in report.violations]
+        return {
+            "svi_arb_free": report.is_arbitrage_free,
+            "svi_butterfly": len(kinds) == 1 and kinds[0] == ViolationType.BUTTERFLY,
+        }
+    return {}
+
+
+@pytest.mark.parametrize("case", ALL_CASES, ids=lambda c: c.name)
+def test_known_label_matches_observed_outcomes(case) -> None:
+    """The hand-derived label must be consistent with the actual outcomes.
+
+    This is the wiring that makes ``known_label`` load-bearing: before it,
+    a label could be changed (e.g. ``arb_free`` -> ``calendar_violation``)
+    without any test failing.  See ``label_matches`` for the documented
+    label -> outcome mapping.
+    """
+    kwargs = _observed_outcomes(case)
+    assert label_matches(case.known_label, **kwargs), (
+        f"{case.name}: known_label={case.known_label!r} is inconsistent "
+        f"with the observed outcomes {kwargs}"
+    )
 
 
 # ---------------------------------------------------------------------------

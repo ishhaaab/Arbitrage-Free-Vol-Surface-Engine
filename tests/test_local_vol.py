@@ -287,77 +287,38 @@ class TestDupireNonFlatSmileExact:
     """Regression test: non-flat SVI smile must produce known local vols."""
 
     def test_dupire_non_flat_exact_values(self) -> None:
-        """dupire_at with nonzero b, rho, m matches independently-
-        computed reference values at interior (K, T) points."""
-        spot = 100.0
-        r = 0.05
-        q = 0.0
-        T_low = 0.5
-        T_high = 2.0
+        """dupire_at on the non-flat SVI smile matches an INDEPENDENT
+        closed-form reference within the documented FD tolerance.
 
-        a_ref, b_ref = 0.04, 0.4
-        rho_ref, m_ref, sigma_ref = -0.4, 0.05, 0.15
-
-        sl_low = FittedSlice(
-            expiry_time=T_low,
-            params=SVIParams(
-                a=a_ref * T_low, b=b_ref * T_low,
-                rho=rho_ref, m=m_ref, sigma=sigma_ref,
-            ),
-            rmse=0.0,
-            forward_price=_forward(T_low, spot, r, q),
-            n_quotes_total=5,
-            n_quotes_used=5,
-        )
-        sl_high = FittedSlice(
-            expiry_time=T_high,
-            params=SVIParams(
-                a=a_ref * T_high, b=b_ref * T_high,
-                rho=rho_ref, m=m_ref, sigma=sigma_ref,
-            ),
-            rmse=0.0,
-            forward_price=_forward(T_high, spot, r, q),
-            n_quotes_total=5,
-            n_quotes_used=5,
+        The expected values are computed at test time from the independent
+        closed-form evaluator ``closed_form_nonflat_svi_sigma_loc`` in
+        ``tests/ground_truth/dupire_cases.py`` — Gatheral (2004) Eq 1.10
+        with the surface's analytic SVI derivatives and the exact fixed-k
+        ∂w/∂T (the FIX-GT corrected convention), never the repo's
+        ``local_vol.py``.  For regression visibility the previously pinned
+        opaque literals, reproduced exactly by the evaluator, were:
+            (90,1.0)=0.5966932352, (90,1.5)=0.6942597587,
+            (100,1.0)=0.3422958235, (100,1.5)=0.3442086699,
+            (110,1.0)=0.2225186276, (110,1.5)=0.1983872723
+        The evaluator's OWN provenance (agreement with an independent
+        price-space Dupire FD using the corrected forward drift
+        mu = F'(T)/F(T)) is asserted in test_dupire_ground_truth.py.
+        The repo's FD stencil (dK = K*1e-3, dT = 1e-3) adds ~2-3.5e-6
+        relative, so the honest tolerance below is 1e-4 (documented FD
+        stencil limits; see FD_REL_TOL_NONFLAT in dupire_cases.py) — orders
+        of magnitude tighter than the ~12% bias the OLD symmetric-stencil
+        values certified.
+        """
+        from tests.ground_truth.dupire_cases import (
+            NONFLAT_REFERENCE_POINTS,
+            build_nonflat_svi_surface,
+            closed_form_nonflat_svi_sigma_loc,
         )
 
-        fs = FittedSurface(
-            spot=spot,
-            risk_free=r,
-            div_yield=q,
-            forward_curve=(
-                (T_low, _forward(T_low, spot, r, q)),
-                (T_high, _forward(T_high, spot, r, q)),
-            ),
-            fitted_slices=(sl_low, sl_high),
-        )
+        fs = build_nonflat_svi_surface()
 
-        # Reference values — INDEPENDENT provenance (not the repo's dupire_at):
-        # exact closed-form evaluation with CORRECTED derivatives on the
-        # ACTUAL interpolated surface.  Because total_variance_at
-        # interpolates at fixed absolute strike K (per-slice forwards differ
-        # when r != q), the surface is NOT exactly w = T*f(k); the reference
-        # uses the SVI analytic derivatives (svi_core w1/w2) of each slice,
-        # the exact T-derivative of the interpolated w at FIXED log-moneyness
-        # k = ln(K/F(T)), and Gatheral (2004) Eq 1.10 literally.  This
-        # closed form cross-validates against the model-independent
-        # price-space Dupire finite difference (Black-Scholes prices ->
-        # [dC/dT + mu*K dC/dK + (r-mu) C]/(0.5 K^2 C_KK) with the surface's
-        # own forward drift mu = F'(T)/F(T)) to ~1e-8 relative.
-        # The repo's FD stencil (dK = K*1e-3, dT = 1e-3) adds ~2-3e-6
-        # relative, so the honest tolerance below is 1e-4 — several orders
-        # tighter than the ~12% bias the old symmetric-stencil values
-        # certified.
-        expected = {
-            (90.0, 1.0): 0.5966932352,
-            (90.0, 1.5): 0.6942597587,
-            (100.0, 1.0): 0.3422958235,
-            (100.0, 1.5): 0.3442086699,
-            (110.0, 1.0): 0.2225186276,
-            (110.0, 1.5): 0.1983872723,
-        }
-
-        for (K, T), ref in expected.items():
+        for K, T in NONFLAT_REFERENCE_POINTS:
+            ref = closed_form_nonflat_svi_sigma_loc(fs, K, T)
             lv = dupire_at(fs, K, T)
             assert lv == approx(ref, rel=1e-4), (
                 f"K={K}, T={T}: got {lv:.10f}, expected {ref:.10f}"
