@@ -1,6 +1,6 @@
 # arbfree-vol-surface
 
-An arbitrage-free implied volatility surface engine for serious quant finance research and production-style system design.
+An implied volatility surface engine for serious quant finance research and production-style system design. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and the repair report says so (`RepairReport.fallback_slices` / `repair_infeasible`).
 
 ## Why This Project Exists
 
@@ -519,7 +519,7 @@ A strong implementation will show that the builder understands both the math and
 
 ## Resume Bullet
 
-Built an arbitrage-free implied volatility surface engine that ingests option chains, solves implied volatilities, detects calendar and butterfly arbitrage, fits SVI total variance slices, and repairs noisy market surfaces under no-arbitrage constraints.
+Built an implied volatility surface engine that ingests option chains, solves implied volatilities, detects calendar and butterfly arbitrage, fits SVI total variance slices, and repairs noisy market surfaces under no-arbitrage constraints. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`, not certified.
 
 ## Interview Talking Points
 
@@ -552,7 +552,7 @@ It is better to have a smaller, correct, well-tested engine than a huge but frag
 ## Initial Prompt For A New Build Session
 
 ```text
-I want to build a serious quant finance project called `arbfree-vol-surface`: an arbitrage-free implied volatility surface engine.
+I want to build a serious quant finance project called `arbfree-vol-surface`: an implied volatility surface engine. Hard-constrained eSSVI slices are arbitrage-free by construction; slices that fall back to an unconstrained per-slice fit are not, and the repair report says so (`RepairReport.fallback_slices` / `repair_infeasible`).
 
 Context:
 I am a math major interested in finance, stochastic calculus, and strong system design. I do not want a generic resume project. I want this to be rigorous, difficult, and impressive enough to discuss in quant/dev interviews.
