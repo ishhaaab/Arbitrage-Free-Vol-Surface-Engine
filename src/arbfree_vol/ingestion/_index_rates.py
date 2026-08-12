@@ -14,6 +14,7 @@ only that fallback path needs it at call time.
 """
 
 import logging
+import math
 
 from arbfree_vol.models.surface import ExpirySlice
 from arbfree_vol.models.option import OptionType
@@ -116,8 +117,13 @@ def _get_representative_dividend_yield(symbol: str) -> float | None:
     this function return ``None`` (like any other fetch failure) instead
     of raising ``ModuleNotFoundError``.
 
-    Returns None if no representative is mapped, or the representative
-    ticker's dividend yield cannot be fetched.
+    Returns None only when the yield is genuinely MISSING (no
+    representative mapped, field absent, ``None`` or NaN, or a fetch
+    failure).  An OBSERVED zero (``dividendYield == 0.0`` present in the
+    representative ETF's info) is a real observation and is returned as
+    ``0.0``, logged as "observed as zero" — the caller must NOT treat it
+    as a missing value and substitute the fallback (aligns with the
+    primary paths, commit 5bf429a).
     """
     rep = _INDEX_REPRESENTATIVE.get(symbol)
     if rep is None:
@@ -127,10 +133,23 @@ def _get_representative_dividend_yield(symbol: str) -> float | None:
         rep_ticker = yf.Ticker(rep)
         info = rep_ticker.info or {}
         q = info.get("dividendYield")
-        if q is not None and isinstance(q, (int, float)) and q > 0:
+        if q is not None and isinstance(q, (int, float)):
             q = float(q)
+            if math.isnan(q):
+                return None
             if q > 0.50:
                 q /= 100.0
+            if q == 0.0:
+                # An observed zero is a real observation, not a missing
+                # value: the yield is used as-is, but the provenance is
+                # logged so a zero-yield surface is never silent about
+                # where q came from.
+                _logger.warning(
+                    "Dividend yield for %s observed as zero (representative "
+                    "ETF %s has dividendYield present as 0.0); using q=0.0 "
+                    "as observed",
+                    symbol, rep,
+                )
             return q
     except Exception:
         _logger.warning(

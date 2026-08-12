@@ -373,6 +373,62 @@ class TestOpenBBFetchChainMainPath:
             f"{caplog.text}"
         )
 
+    def test_fetch_chain_index_representative_zero_yield_preserved(
+        self, monkeypatch, caplog,
+    ) -> None:
+        """Index path: all slices fail parity and the representative
+        ETF's dividend yield is PRESENT as 0.0.  The surface q must be
+        0.0 AS OBSERVED (not treated as missing), the representative
+        helper must log "observed as zero", and fetch_chain must NOT
+        claim the representative yield was unavailable or hardcoded.
+
+        Regression (pre-fix): ``_get_representative_dividend_yield``
+        required ``q > 0``, so a present-zero representative yield
+        returned None and fetch_chain logged "no representative ETF
+        yield available; surface q hardcoded to 0.0" — conflating an
+        observed zero with missing data (commit 5bf429a aligned the
+        primary paths; this pins the same semantics on the OpenBB
+        representative fallback)."""
+        fake_openbb = types.ModuleType("openbb")
+        fake_obb = MagicMock()
+        fake_obb.derivatives.options.chains.return_value.to_df.return_value = (
+            _chains_df(spot=100.0)
+        )
+        fake_openbb.obb = fake_obb
+        monkeypatch.setitem(sys.modules, "openbb", fake_openbb)
+
+        class _ZeroRepTicker(_FakeTicker):
+            _INFO = {
+                "^IRX": {"regularMarketPrice": 5.0},
+                "^SPX": {},
+                "SPY": {"dividendYield": 0.0},  # representative, present zero
+            }
+
+        monkeypatch.setattr("yfinance.Ticker", _ZeroRepTicker)
+        # Parity estimation fails for all slices so the representative
+        # fallback path runs with the REAL helper (not monkeypatched).
+        monkeypatch.setattr(openbb_mod, "_estimate_index_dividend_yield",
+                            lambda sl, spot, r: None)
+
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.openbb"):
+            surface, _, _ = openbb_mod.fetch_chain("^SPX")
+
+        assert surface.div_yield == 0.0
+        # The helper's observed-zero provenance is logged with its exact
+        # wording (unique to the representative path).
+        assert "representative ETF SPY has dividendYield present as 0.0" in caplog.text, (
+            f"expected the representative observed-zero warning, got: "
+            f"{caplog.text}"
+        )
+        assert "no representative ETF yield available" not in caplog.text, (
+            f"a present-zero representative yield must not be logged as "
+            f"unavailable, got: {caplog.text}"
+        )
+        assert "hardcoded to 0.0" not in caplog.text, (
+            f"a present-zero representative yield must not be logged as a "
+            f"hardcoded substitution, got: {caplog.text}"
+        )
+
     def test_fetch_chain_disable_quality_filter(self, monkeypatch) -> None:
         """disable_quality_filter=True skips the filter entirely."""
         df = _chains_df()

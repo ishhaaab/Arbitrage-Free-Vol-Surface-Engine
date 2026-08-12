@@ -317,6 +317,18 @@ def fetch_chain(
                     "surface q from representative ETF yield (q=%.6f)",
                     symbol, len(slices), q,
                 )
+            elif rep_q is not None:
+                # The representative yield was PRESENT and observed as
+                # zero (the helper itself logs the observed-zero
+                # provenance).  This branch must not claim the yield was
+                # unavailable — an observed zero is an observation, not
+                # a substitution.
+                _logger.warning(
+                    "Index %s: put-call parity q failed for all %d slices; "
+                    "representative ETF yield observed as zero; surface "
+                    "q=0.0 as observed",
+                    symbol, len(slices),
+                )
             else:
                 _logger.warning(
                     "Index %s: put-call parity q failed for all %d slices "

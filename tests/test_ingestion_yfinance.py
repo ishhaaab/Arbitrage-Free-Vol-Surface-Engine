@@ -332,6 +332,78 @@ def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
 
 @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
 @patch("arbfree_vol.ingestion.yfinance.date")
+def test_fetch_chain_index_representative_zero_yield_preserved(
+    mock_date_class, mock_ticker_class, monkeypatch, caplog,
+) -> None:
+    """All slices fail parity and the representative ETF's dividend yield
+    is PRESENT as 0.0: the surface q must be 0.0 AS OBSERVED (not
+    treated as missing), the representative helper must log "observed as
+    zero", and fetch_chain must NOT claim the representative yield was
+    unavailable or hardcoded.
+
+    Regression (pre-fix): ``_get_representative_dividend_yield``
+    required ``q > 0``, so a present-zero representative yield returned
+    None and fetch_chain logged "no representative ETF yield available;
+    surface q hardcoded to 0.0" — conflating an observed zero with
+    missing data (commit 5bf429a aligned the primary paths; this pins
+    the same semantics on the representative fallback)."""
+    import pandas as pd
+    from datetime import date as real_date
+    import arbfree_vol.ingestion.yfinance as yf_mod
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    # The same mock serves as the ^SPX chain ticker AND the
+    # representative SPY ticker (the helper calls yf.Ticker("SPY")); its
+    # info carries a PRESENT zero dividendYield.
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.0}
+    mock_ticker.options = ["2030-08-15", "2030-09-15"]
+
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    strikes = [440, 450, 460]
+    cols = {"strike": strikes, "lastPrice": [20, 15, 10],
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+
+    # Parity estimation fails for all slices so the representative
+    # fallback path runs with the REAL helper (not monkeypatched).
+    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
+                        lambda sl, spot, r: None)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
+
+    assert surface.div_yield == 0.0
+    # The helper's observed-zero provenance is logged with its exact
+    # wording (unique to the representative path).
+    assert "representative ETF SPY has dividendYield present as 0.0" in caplog.text, (
+        f"expected the representative observed-zero warning, got: {caplog.text}"
+    )
+    assert "no representative ETF yield available" not in caplog.text, (
+        f"a present-zero representative yield must not be logged as "
+        f"unavailable, got: {caplog.text}"
+    )
+    assert "hardcoded to 0.0" not in caplog.text, (
+        f"a present-zero representative yield must not be logged as a "
+        f"hardcoded substitution, got: {caplog.text}"
+    )
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yfinance.date")
 def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:

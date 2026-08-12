@@ -248,6 +248,66 @@ def test_representative_dividend_yield_handles_exception(mock_ticker_class) -> N
     assert q is None
 
 
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+def test_representative_dividend_yield_observed_zero_is_preserved(
+    mock_ticker_class, caplog,
+) -> None:
+    """An OBSERVED zero representative-ETF yield (``dividendYield``
+    PRESENT as 0.0 in the representative ticker's info) must be returned
+    as ``0.0`` and logged as "observed as zero" — NOT treated as missing.
+
+    Regression (pre-fix): the representative fallback required ``q > 0``,
+    so a present-zero was silently treated as missing and the caller fell
+    through to the last-resort "no representative ETF yield available;
+    hardcoded to 0.0" path.  Mirrors the primary-path semantics from
+    commit 5bf429a: present-zero is an observation, absent/None/NaN is
+    missing."""
+    import logging
+    from arbfree_vol.ingestion.yfinance import _get_representative_dividend_yield
+
+    mock_ticker = MagicMock()
+    mock_ticker.info = {"dividendYield": 0.0}  # observed zero, present
+    mock_ticker_class.return_value = mock_ticker
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion._index_rates"):
+        q = _get_representative_dividend_yield("^SPX")
+
+    assert q == 0.0
+    assert "observed as zero" in caplog.text, (
+        f"expected the observed-zero warning, got: {caplog.text}"
+    )
+    assert "substituting" not in caplog.text, (
+        f"an observed zero must NOT be logged as a substitution, got: "
+        f"{caplog.text}"
+    )
+
+
+@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+def test_representative_dividend_yield_missing_returns_none(mock_ticker_class) -> None:
+    """A MISSING representative-ETF yield (field absent, ``None``, or
+    NaN) returns None — the caller's last-resort substitution is the
+    only path that may set q=0.0."""
+    from arbfree_vol.ingestion.yfinance import _get_representative_dividend_yield
+
+    # Field absent entirely
+    mock_ticker_absent = MagicMock()
+    mock_ticker_absent.info = {}
+    mock_ticker_class.return_value = mock_ticker_absent
+    assert _get_representative_dividend_yield("^SPX") is None
+
+    # Field present but None
+    mock_ticker_none = MagicMock()
+    mock_ticker_none.info = {"dividendYield": None}
+    mock_ticker_class.return_value = mock_ticker_none
+    assert _get_representative_dividend_yield("^SPX") is None
+
+    # Field present but NaN — missing, not zero
+    mock_ticker_nan = MagicMock()
+    mock_ticker_nan.info = {"dividendYield": float("nan")}
+    mock_ticker_class.return_value = mock_ticker_nan
+    assert _get_representative_dividend_yield("^SPX") is None
+
+
 def test_representative_returns_none_when_yfinance_unavailable(monkeypatch) -> None:
     """A missing ``yfinance`` installation must make the function return
     ``None`` — NOT raise ``ModuleNotFoundError``.
