@@ -389,7 +389,17 @@ approach until one of the mitigations above is implemented.
 - `scripts/deep_dive_fallback.py`: theta term structure analysis and
   RMSE comparison.
 
-### Data quality audit (Issue #15 follow-up)
+### Data quality audit (Issue #15 follow-up) — HISTORICAL / SUPERSEDED
+
+> **HISTORICAL / SUPERSEDED:** this is the ORIGINAL audit from an older
+> commit (single-date SPY fetch).  The table below — including the 4.08%
+> vs 5.37% bid-ask spread figures — is NOT a current finding; the audit
+> methodology was corrected later (the "before filter" baseline had
+> silently applied default filter thresholds).  See the **Corrected audit
+> approach** and **Data source comparison** sections below, plus the
+> **Calendar date caveat**.  The corrected conclusion stands: fallback
+> expiries show thinner open interest, and their median bid-ask spreads
+> were NOT wider (fallback expiries showed narrower median spreads).
 
 An automated audit compared ATM-strike data quality metrics between
 fallback and non-fallback expiries on live SPY data.
@@ -410,7 +420,17 @@ expiries actually showed narrower median spreads).
 A data-quality filter (min OI, max spread) applied before building
 MarketSlices could eliminate some fallback expiries.
 
-### Data quality filter results (Issue #15 follow-up)
+### Data quality filter results (Issue #15 follow-up) — HISTORICAL / SUPERSEDED
+
+> **HISTORICAL / SUPERSEDED:** the "4 → 1" fallback reduction below was
+> measured on a DIFFERENT calendar date than the corrected audit and is
+> not current.  The corrected before/after comparison is in the
+> **Corrected audit approach** section (Filter OFF 19 fitted / 7 fallback
+> vs Filter ON 16 fitted / 7 fallback on that snapshot) and the **Data
+> source comparison** section; see also the **Calendar date caveat** —
+> fallback counts from live data are snapshot-in-time and must not be
+> compared across dates.  The filter implementation itself, and the fact
+> that volume is NOT a filter criterion, remain accurate.
 
 A pre-ingestion data-quality filter (`src/arbfree_vol/data/quality.py`)
 was implemented with default thresholds:
