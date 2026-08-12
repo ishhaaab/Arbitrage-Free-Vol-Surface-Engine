@@ -1015,6 +1015,67 @@ def test_sabr_mapping_success_records_slices_in_fitted_outputs(monkeypatch) -> N
     assert fitted_Ts == expiries
 
 
+@pytest.mark.slow
+# Slow: runs the REAL SABR->SVI mapping (sabr_to_raw_svi_params), which
+# burns thousands of optimizer evals per slice (the adversarial combo
+# needs ~10k nfev per slice; ~30-60s total).
+def test_sabr_mapping_real_optimizer_accounts_for_every_slice(monkeypatch) -> None:
+    """Exercise the REAL SABR->SVI optimizer on a difficult parameter
+    regime and assert the deterministic accounting contract: no slice may
+    be silently dropped.
+
+    The SABR term-structure fit is stubbed (fast), but
+    ``sabr_to_raw_svi_params`` is the REAL optimizer on an adversarial
+    combo (alpha=3.0, rho=0.995, nu=0.2 — a near-boundary rho with a
+    large alpha).  Whatever the optimizer does — converge within its
+    50,000-eval budget, or fail and raise — the repair path must account
+    for every slice: each expiry is either present in
+    ``fitted_sabr_slices`` or recorded in ``sabr_mapping_failed_slices``,
+    never both, never neither, and the raw-SVI ``fitted_slices`` mirror
+    the SABR fitted output 1:1.
+
+    This is the deterministic contract restored from
+    ``test_sabr_mapping_adversarial_params_no_crash`` (deleted in
+    ce4f4d8): unlike the old test it does NOT branch its assertions on
+    the optimizer outcome — the accounting invariant must hold no matter
+    which branch the optimizer takes.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    expiries = [0.25, 0.5, 1.0]
+    adversarial = [SABRParams(alpha=3.0, beta=0.5, rho=0.995, nu=0.2)
+                   for _ in expiries]
+
+    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
+                        lambda slices_data: adversarial)
+
+    report = repair(_flat_bs_surface(expiries), use_sabr=True)
+
+    # Deterministic contract: every slice is accounted for — fitted or
+    # failed-mapping — never silently dropped.
+    fitted_Ts = sorted(fs.expiry_time for fs in report.fitted_sabr_slices)
+    failed_Ts = sorted(report.sabr_mapping_failed_slices)
+    assert sorted(fitted_Ts + failed_Ts) == expiries, (
+        f"expected every expiry accounted for (fitted or failed-mapping), "
+        f"got fitted={fitted_Ts}, failed={failed_Ts}"
+    )
+    # A slice cannot be both fitted and failed-mapping.
+    assert set(fitted_Ts).isdisjoint(failed_Ts), (
+        f"slice recorded as both fitted and failed-mapping: "
+        f"fitted={fitted_Ts}, failed={failed_Ts}"
+    )
+    # The raw-SVI fitted_slices mirror the SABR fitted output 1:1 (each
+    # successfully mapped SABR slice becomes exactly one FittedSlice).
+    assert len(report.fitted_slices) == len(report.fitted_sabr_slices), (
+        f"expected fitted_slices to mirror fitted_sabr_slices, got "
+        f"{len(report.fitted_slices)} vs {len(report.fitted_sabr_slices)}"
+    )
+    assert report.metrics.n_slices_fitted == len(report.fitted_sabr_slices), (
+        f"metrics must count the fitted SABR slices, got "
+        f"{report.metrics.n_slices_fitted}"
+    )
+
+
 def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
     """The wrap around ``sabr_to_raw_svi_params`` (option A) is the
     correctness guarantee: when a slice's mapping raises RuntimeError,
