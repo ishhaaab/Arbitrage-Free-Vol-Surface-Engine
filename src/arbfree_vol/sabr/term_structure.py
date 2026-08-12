@@ -140,11 +140,15 @@ def fit_sabr_term_structure(
       reports ``success == False``, the function logs a WARNING
       ("falling back to per-slice calibrate_sabr") and returns the
       per-slice ``calibrate_sabr`` results computed during initialisation
-      (step A) EXACTLY as-is.  There is no marker distinguishing a
-      fallback result from a converged joint fit — callers pinning the
-      fallback contract must compare the returned parameters against an
-      independent direct ``calibrate_sabr`` call on the same slices
-      (they are equal within solver determinism).
+      (step A), each re-validated through ``clamp_to_sabr_domain`` so
+      the returned parameters are guaranteed inside the model domain
+      before ``SABRParams`` construction (``calibrate_sabr`` already
+      clamps its own output; the rebuild is a local guarantee that
+      cannot drift if the emitter changes).  There is no marker
+      distinguishing a fallback result from a converged joint fit —
+      callers pinning the fallback contract must compare the returned
+      parameters against an independent direct ``calibrate_sabr`` call
+      on the same slices (they are equal within solver determinism).
     """
     # Sort by ascending expiry
     slices_data = sorted(slices_data, key=lambda sd: sd[0])
@@ -315,9 +319,19 @@ def fit_sabr_term_structure(
     ]
 
     if return_splines:
-        spl_a = make_interp_spline(expiries, alpha_fitted, k=min(3, m - 1))
-        spl_n = make_interp_spline(expiries, nu_fitted, k=min(3, m - 1))
-        spl_r = make_interp_spline(expiries, rho_fitted, k=min(3, m - 1))
+        # Build the splines from the SAME clamped parameter arrays that
+        # produced ``fitted_params`` (lines above).  Pre-fix, the
+        # splines were built from the UNCLAMPED ``alpha_fitted`` /
+        # ``nu_fitted`` / ``rho_fitted`` arrays, so a boundary fit
+        # (rho == 0.999 after the scaled-tanh round-up) still yielded a
+        # spline whose evaluated rho equalled 0.999 even though the
+        # returned ``SABRParams`` were clamped.
+        clamped_alpha = np.array([p.alpha for p in fitted_params])
+        clamped_nu = np.array([p.nu for p in fitted_params])
+        clamped_rho = np.array([p.rho for p in fitted_params])
+        spl_a = make_interp_spline(expiries, clamped_alpha, k=min(3, m - 1))
+        spl_n = make_interp_spline(expiries, clamped_nu, k=min(3, m - 1))
+        spl_r = make_interp_spline(expiries, clamped_rho, k=min(3, m - 1))
         return fitted_params, {"alpha": spl_a, "nu": spl_n, "rho": spl_r}
 
     return fitted_params

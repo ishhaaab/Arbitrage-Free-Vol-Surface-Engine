@@ -237,3 +237,57 @@ def test_joint_fit_clamps_boundary_rho_into_valid_domain(monkeypatch) -> None:
         assert p.rho < 0.999, f"rho[{i}]={p.rho} not < 0.999"
         assert p.rho > -0.999, f"rho[{i}]={p.rho} not > -0.999"
         assert p.alpha > 0 and p.nu > 0
+
+
+# ---------------------------------------------------------------------------
+# Test: return_splines path must also clamp (boundary rho spline)
+# ---------------------------------------------------------------------------
+
+def test_joint_fit_clamps_boundary_rho_in_returned_splines(monkeypatch) -> None:
+    """The splines returned with ``return_splines=True`` must be built
+    from the SAME clamped parameter arrays as ``fitted_params``.
+
+    Regression: the ``return_splines`` path built its splines from the
+    UNCLAMPED ``alpha_fitted``/``nu_fitted``/``rho_fitted`` arrays, so a
+    boundary fit (``_rho_from_u`` rounding up to exactly ``0.999``) still
+    yielded a spline whose evaluated rho equalled 0.999 even though the
+    returned ``SABRParams`` were clamped into the model domain.  Every
+    evaluated spline value must stay strictly inside ``(-0.999, 0.999)``.
+
+    Deterministic by construction: the same monkeypatched ``least_squares``
+    success and ``_rho_from_u`` -> exactly 0.999 as the param-clamp
+    regression above.  Pre-fix, this test fails on the spline rho
+    assertion (the spline evaluates 0.999 at the knot expiries).
+    """
+    import arbfree_vol.sabr.term_structure as ts
+
+    slices = _make_synthetic_slices()
+
+    class _FakeSuccess:
+        success = True
+        message = "simulated converged joint fit"
+        x = np.zeros(9)  # 3 expiries x (u_alpha, u_nu, u_rho)
+
+    monkeypatch.setattr(ts, "least_squares", lambda *a, **k: _FakeSuccess())
+    monkeypatch.setattr(ts, "_rho_from_u",
+                        lambda u: np.full(np.asarray(u).size, 0.999))
+
+    result, splines = fit_sabr_term_structure(slices, return_splines=True)
+
+    # The returned params are clamped into the model domain...
+    assert len(result) == 3
+    for i, p in enumerate(result):
+        assert p.rho < 0.999, f"rho[{i}]={p.rho} not < 0.999"
+        assert p.rho > -0.999, f"rho[{i}]={p.rho} not > -0.999"
+
+    # ...and so is every evaluated point of the rho spline: a boundary
+    # fit must not leak rho == 0.999 through the spline return path.
+    t_fine = np.linspace(_EXPIRIES[0], _EXPIRIES[-1], 200)
+    rho_fine = splines["rho"](t_fine)
+    for i, t in enumerate(t_fine):
+        assert rho_fine[i] < 0.999, (
+            f"rho_spline({t:.4f})={rho_fine[i]:.8f} not < 0.999"
+        )
+        assert rho_fine[i] > -0.999, (
+            f"rho_spline({t:.4f})={rho_fine[i]:.8f} not > -0.999"
+        )
