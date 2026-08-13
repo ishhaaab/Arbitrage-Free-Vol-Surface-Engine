@@ -17,9 +17,9 @@ from arbfree_vol.surface.greeks import (
     bucketed_greeks,
     portfolio_greeks,
 )
-from arbfree_vol.surface.interpolate import FittedSurface, iv_at
+from arbfree_vol.surface.interpolate import iv_at
 from arbfree_vol.svi.model import SVIParams
-from arbfree_vol.repair.report import FittedSlice
+from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 
 import math
 

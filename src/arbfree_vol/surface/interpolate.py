@@ -1,47 +1,29 @@
+from __future__ import annotations
+
 """Fitted surface interpolation routines.
 
-Provides a frozen dataclass ``FittedSurface`` that holds the calibrated
-smile parameters for a set of expiries together with the forward curve,
+Provides a frozen dataclass ``FittedSurface`` — the type itself now lives
+in ``arbfree_vol.models.fitted`` — that holds the calibrated smile
+parameters for a set of expiries together with the forward curve,
 and routines to interpolate total variance / Black-Scholes implied
 volatility at arbitrary strikes and expiries.
 """
 
-from dataclasses import dataclass
 from math import log, sqrt
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from arbfree_vol.repair.report import FittedSlice, RepairReport
+from arbfree_vol.models.fitted import FittedSurface
 from arbfree_vol.svi.model import svi_total_variance
+
+if TYPE_CHECKING:
+    from arbfree_vol.repair.report import RepairReport
 
 # ---------------------------------------------------------------------------
 # Module-level tolerance constants (no-hardcoding rule)
 # ---------------------------------------------------------------------------
 _EXACT_EXPIRY_TOL: float = 1e-10
-
-
-# ---------------------------------------------------------------------------
-# FittedSurface — compute boundary type (frozen dataclass, no Pydantic)
-# ---------------------------------------------------------------------------
-@dataclass(frozen=True, slots=True)
-class FittedSurface:
-    """Stripped-down fitted vol surface for analytics.
-
-    All three smile-model code paths (SVI / eSSVI / SABR) funnel their
-    fitted parameters through raw SVI ``FittedSlice`` objects, so
-    ``FittedSurface`` works uniformly regardless of which model was used
-    during repair.
-    """
-
-    spot: float
-    risk_free: float
-    div_yield: float
-
-    forward_curve: tuple[tuple[float, float], ...]
-    """(expiry_time, forward_price) pairs sorted ascending by expiry."""
-
-    fitted_slices: tuple[FittedSlice, ...]
-    """Fitted slices sorted ascending by expiry_time."""
 
 
 def build_fitted_surface(report: RepairReport) -> FittedSurface:

@@ -9,9 +9,8 @@ import pytest
 from pytest import approx
 
 from arbfree_vol.svi.model import SVIParams, svi_total_variance
-from arbfree_vol.repair.report import FittedSlice
+from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.surface.interpolate import (
-    FittedSurface,
     total_variance_at,
     iv_at,
 )

@@ -1,10 +1,8 @@
 from dataclasses import dataclass, field
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import VolSurface
+from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice, FittedSABRSlice
 from arbfree_vol.arbitrage.report import ViolationType, ArbitrageReport
-from arbfree_vol.svi.model import SVIParams
-from arbfree_vol.ssvi.model import SSVIParams, eSSVISurfaceParams
-from arbfree_vol.sabr.model import SABRParams
 
 
 
@@ -16,38 +14,6 @@ class RejectedQuote:
     option_type: OptionType
     reason: ViolationType
     magnitude: float
-
-@dataclass(frozen=True, slots=True)
-class FittedSlice:
-
-    expiry_time: float
-    params: SVIParams
-    rmse: float
-    forward_price: float
-    n_quotes_total: int
-    n_quotes_used: int
-    data_points: tuple[tuple[float, float], ...] | None= None
-
-@dataclass(frozen=True, slots=True)
-class FittedSSVISlice:
-    """SSVI fit for one slice, with optional eSSVI surface parameters."""
-    expiry_time: float
-    ssvi: SSVIParams
-    rmse: float
-    forward_price: float
-    n_quotes_total: int
-    n_quotes_used: int
-    essvi: eSSVISurfaceParams | None = None
-
-@dataclass(frozen=True, slots=True)
-class FittedSABRSlice:
-    """SABR fit for one slice."""
-    expiry_time: float
-    sabr: SABRParams
-    rmse: float
-    forward_price: float
-    n_quotes_total: int
-    n_quotes_used: int
 
 @dataclass(frozen=True, slots=True)
 class RepairMetrics:

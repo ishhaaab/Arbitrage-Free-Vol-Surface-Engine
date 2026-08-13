@@ -18,11 +18,9 @@ from arbfree_vol.ssvi.term_structure import (
 from arbfree_vol.sabr.model import sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
 from arbfree_vol.sabr.term_structure import fit_sabr_term_structure
 from arbfree_vol.variance import slice_total_variance
+from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice, FittedSABRSlice
 from arbfree_vol.repair.report import (
     RejectedQuote,
-    FittedSlice,
-    FittedSSVISlice,
-    FittedSABRSlice,
     RepairMetrics,
     RepairReport,
 )

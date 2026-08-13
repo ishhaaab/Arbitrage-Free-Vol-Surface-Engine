@@ -1,7 +1,8 @@
 from arbfree_vol.models.surface import VolSurface, get_r, get_q
 from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.repair.report import FittedSlice, RepairReport
+from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.repair.report import RepairReport
 
 from math import log, exp
 

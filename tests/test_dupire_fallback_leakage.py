@@ -10,8 +10,7 @@ import math
 import pytest
 
 from arbfree_vol.svi.model import SVIParams
-from arbfree_vol.repair.report import FittedSlice
-from arbfree_vol.surface.interpolate import FittedSurface
+from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.pricing.local_vol import dupire, LocalVolSurface
 
 

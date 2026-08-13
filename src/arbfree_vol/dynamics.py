@@ -14,7 +14,7 @@ import numpy as np
 
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.repair.engine import repair
-from arbfree_vol.repair.report import FittedSlice
+from arbfree_vol.models.fitted import FittedSlice
 
 _BUCKET_TOL = 1e-3
 _NAN_DROP_THRESHOLD = 0.5

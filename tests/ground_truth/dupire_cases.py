@@ -64,8 +64,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from arbfree_vol.repair.report import FittedSlice
-from arbfree_vol.surface.interpolate import FittedSurface, _forward_at
+from arbfree_vol.models.fitted import FittedSlice, FittedSurface
+from arbfree_vol.surface.interpolate import _forward_at
 from arbfree_vol.svi.model import SVIParams
 
 # Surface parameters (documented, not magic numbers).
