@@ -41,7 +41,7 @@ from arbfree_vol.ssvi.term_structure import (
     verify_hm_condition_breakdown,
 )
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)

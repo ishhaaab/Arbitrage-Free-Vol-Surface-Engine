@@ -23,7 +23,7 @@ sys.path.insert(0, __PROJECT_ROOT__)
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
 

@@ -1,3 +1,17 @@
+"""Per-expiry forward estimation from put-call parity, shared by the
+arbitrage and repair layers.
+
+``estimate_forward_curve`` extracts the forward price per expiry from
+put-call parity (``F = e^{rT}(C-P) + K``, taking the median across
+strikes), and ``populate_per_slice_r`` derives the per-slice risk-free
+rate from the forward (``r = log(F/S)/T + q``).
+
+This module is shared by ``arbitrage.quote_detect`` and
+``repair.engine``.  It depends only on ``models`` — it has no
+``repair`` dependency (the ``repair`` layer is a consumer, not a
+requirement).
+"""
+
 import logging
 from math import exp, log
 from statistics import median

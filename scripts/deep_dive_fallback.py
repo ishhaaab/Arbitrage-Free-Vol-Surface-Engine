@@ -20,7 +20,7 @@ from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.ingestion.yfinance import fetch_chain
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 
 def fetch_and_extract():

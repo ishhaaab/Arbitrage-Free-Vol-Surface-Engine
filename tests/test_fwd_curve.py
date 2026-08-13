@@ -6,7 +6,7 @@ from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, _slice_forward, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, _slice_forward, populate_per_slice_r
 
 
 SPOT = 100.0
@@ -154,7 +154,7 @@ def test_fwd_curve_fallback_logs_default_substitution(caplog) -> None:
     )
     surface = VolSurface(spot=SPOT, risk_free=0.05, div_yield=0.0, slices=[slice_])
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.fwd_curve"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.forward"):
         estimate_forward_curve(surface)
 
     assert "default substitution" in caplog.text
@@ -175,7 +175,7 @@ def test_fwd_curve_fallback_logs_non_default_values(caplog) -> None:
     )
     surface = VolSurface(spot=SPOT, risk_free=0.05, div_yield=0.02, slices=[slice_])
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.fwd_curve"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.forward"):
         estimate_forward_curve(surface)
 
     assert "non-default" in caplog.text

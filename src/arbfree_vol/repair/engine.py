@@ -28,7 +28,7 @@ from arbfree_vol.repair.report import (
 )
 
 _logger = logging.getLogger(__name__)
-from arbfree_vol.repair.fwd_curve import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 
 def _build_rejection_set(
