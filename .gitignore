@@ -1,5 +1,8 @@
 /docs
 .*/
+opencode.jsonc
+AGENTS.MD
+.mcp*
 !.github/
 __pycache__/
 *.egg-info/
