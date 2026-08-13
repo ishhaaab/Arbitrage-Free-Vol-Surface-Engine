@@ -345,7 +345,9 @@ def test_svi_butterfly_violating_matches_label() -> None:
 #                          calendar theta-flat equality (theta_delta = 0
 #                          exactly).  These are the documented boundary
 #                          semantics the existing tests pin.
-#   unknown_by_design   -> no implications (vacuously consistent).
+#   unknown_by_design   -> RESERVED for future cases only; never a valid
+#                          expected label for a shipped case, so
+#                          ``label_matches`` always returns False for it.
 #
 # The assertions below FAIL if a label is changed to a value inconsistent
 # with the observed outcomes (e.g. labeling a case with a per-slice GJ
@@ -372,8 +374,11 @@ def label_matches(
     "not applicable" (raw-SVI cases have no native SSVI checks); they never
     cause a mismatch on their own.
     """
+    # "unknown_by_design" is reserved for future, not-yet-derived cases; a
+    # shipped case must never carry it, so it mismatches every outcome and
+    # falls through to the False return below.
     if label == "unknown_by_design":
-        return True
+        return False
     if label == "arb_free":
         return (
             (hm is None or hm is True)
@@ -462,6 +467,23 @@ def test_all_cases_carry_hand_derived_labels() -> None:
         )
         assert case.proof_note, f"{case.name}: proof_note must be non-empty"
         assert case.name, "every case needs a name"
+
+
+def test_no_shipped_case_is_unknown_by_design() -> None:
+    """``unknown_by_design`` is reserved for future cases, never shipped.
+
+    It is the ``GroundTruthCase.known_label`` default precisely so that a
+    half-built case is loudly rejected until its hand-derived label is
+    filled in.  Relabeling any shipped case to it must FAIL here and in
+    ``test_known_label_matches_observed_outcomes`` (where ``label_matches``
+    rejects it for every outcome).
+    """
+    offenders = [c.name for c in ALL_CASES
+                 if c.known_label == "unknown_by_design"]
+    assert not offenders, (
+        "unknown_by_design is a reserved label for future cases only; "
+        f"shipped cases must not carry it, got: {offenders}"
+    )
 
 
 def test_svi_case_params_are_the_mapped_literals() -> None:

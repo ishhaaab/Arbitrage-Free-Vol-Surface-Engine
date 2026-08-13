@@ -32,6 +32,10 @@ KnownLabel = Literal[
     "boundary",
     "unknown_by_design",
 ]
+# ``unknown_by_design`` is RESERVED for future, not-yet-hand-derived cases: it
+# is the ``known_label`` default precisely so a half-built case is loudly
+# rejected until its real label is filled in.  No shipped ``GroundTruthCase``
+# may carry it — the ground-truth tests reject it explicitly.
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,8 @@ class GroundTruthCase:
         Empty for single-slice / raw-SVI / SABR cases.
     known_label : KnownLabel
         The HAND-DERIVED label (analytic conditions, never repo calls).
+        ``"unknown_by_design"`` is reserved for future cases and must never
+        appear on a shipped case (the ground-truth tests reject it).
     expected_hm_condition : bool | None
         Hand-derived Hendriks-Martini Prop 3.1 expectation, or None when not
         applicable (SVI / SABR cases have no native SSVI params).
