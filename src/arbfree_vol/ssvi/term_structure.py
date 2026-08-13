@@ -163,6 +163,51 @@ def _butterfly_constraints(
     ])
 
 
+def _initial_guess(
+    points: list[tuple[float, float]],
+    prev: SSVIParams | None,
+    eps_theta: float,
+    eps_chi: float,
+) -> NDArray[np.float64]:
+    """Seed ``x0 = (theta, arctanh(rho), log(psi))`` for the constrained fit.
+
+    Least-squares seed in (theta, rho, psi) space, adjusted for the
+    Hendriks-Martini calendar constraints when a predecessor slice is
+    given, then mapped to the optimizer's unconstrained parameterization.
+    """
+    ws = np.array([w for _, w in points])
+    from scipy.optimize import least_squares as _ls
+
+    def _seed_resid(p):
+        th, rh, ps = p
+        return np.array([
+            ssvi_w(float(k), th, rh, ps) - float(w)
+            for k, w in points
+        ])
+
+    seed_result = _ls(
+        _seed_resid,
+        x0=[float(np.min(ws)), 0.0, 0.5],
+        bounds=([1e-6, -0.999, 1e-6], [10.0, 0.999, 20.0]),
+    )
+    theta0, rho0, p0 = [float(v) for v in seed_result.x]
+
+    if prev is not None:
+        prev_chi = prev.theta * prev.psi
+        theta0 = max(prev.theta + eps_theta, theta0)
+        p0 = max(p0, 1e-6)
+        chi0 = theta0 * p0
+        if chi0 < prev_chi + eps_chi:
+            p0 = (prev_chi + eps_chi) / theta0
+
+    rho0 = float(np.clip(rho0, -0.99, 0.99))
+    p0 = float(np.clip(p0, 1e-6, 20.0))
+
+    u0 = float(np.arctanh(rho0))
+    v0 = float(np.log(p0))
+    return np.array([theta0, u0, v0], dtype=np.float64)
+
+
 def _fit_slice(
     points: list[tuple[float, float]],
     prev: SSVIParams | None = None,
@@ -201,38 +246,7 @@ def _fit_slice(
     ks = np.array([k for k, _ in points], dtype=np.float64)
     ws = np.array([w for _, w in points], dtype=np.float64)
 
-    # ── Seed from unconstrained least-squares ──────────────────────
-    from scipy.optimize import least_squares as _ls
-
-    def _seed_resid(p):
-        th, rh, ps = p
-        return np.array([
-            ssvi_w(float(k), th, rh, ps) - float(w)
-            for k, w in points
-        ])
-
-    seed_result = _ls(
-        _seed_resid,
-        x0=[float(np.min(ws)), 0.0, 0.5],
-        bounds=([1e-6, -0.999, 1e-6], [10.0, 0.999, 20.0]),
-    )
-    theta0, rho0, p0 = [float(v) for v in seed_result.x]
-
-    # Adjust seed for calendar constraints if a predecessor is given.
-    if prev is not None:
-        prev_chi = prev.theta * prev.psi
-        theta0 = max(prev.theta + eps_theta, theta0)
-        p0 = max(p0, 1e-6)
-        chi0 = theta0 * p0
-        if chi0 < prev_chi + eps_chi:
-            p0 = (prev_chi + eps_chi) / theta0
-
-    rho0 = float(np.clip(rho0, -0.99, 0.99))
-    p0 = float(np.clip(p0, 1e-6, 20.0))
-
-    u0 = float(np.arctanh(rho0))
-    v0 = float(np.log(p0))
-    x0 = np.array([theta0, u0, v0], dtype=np.float64)
+    x0 = _initial_guess(points, prev, eps_theta, eps_chi)
 
     # ── Variable bounds ────────────────────────────────────────────
     bounds = Bounds(

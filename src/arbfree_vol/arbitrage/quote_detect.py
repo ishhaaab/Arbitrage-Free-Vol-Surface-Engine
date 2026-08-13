@@ -26,6 +26,26 @@ def _parity_rhs(
 
 
 
+def _parity_threshold(C_q, P_q) -> float:
+    """Market-aware parity threshold from the two sides' bid/ask spreads.
+
+    Both spreads must be crossed to execute a parity arbitrage (buy one
+    side at ask, sell the other at bid), so the combined execution cost is
+    the sum of the half-spreads, not the wider of the two.
+    """
+    if C_q.bid is not None and C_q.ask is not None and P_q.bid is not None and P_q.ask is not None:
+        half_spread_C = 0.5 * (C_q.ask - C_q.bid)
+        half_spread_P = 0.5 * (P_q.ask - P_q.bid)
+        return max(half_spread_C + half_spread_P, 0.05)
+
+    # fallback for data without bid/ask — calibrated for
+    # liquid US equities / ETFs (SPY, QQQ, AAPL, NVDA, MSFT).
+    # Adjust to $0.10-$0.15 for index options (SPX, NDX)
+    # or larger for illiquid names.
+    return 0.05
+
+
+
 def _check_parity(
         surface:VolSurface,
         s:ExpirySlice,
@@ -84,20 +104,7 @@ def _check_parity(
             # Fall back to surface-level r/q
             parity_rhs = _parity_rhs(surface, s, K)
 
-        # compute a market-aware threshold.  Both spreads must be
-        # crossed to execute a parity arbitrage (buy one side at ask,
-        # sell the other at bid), so the combined execution cost is the
-        # sum of the half-spreads, not the wider of the two.
-        if C_q.bid is not None and C_q.ask is not None and P_q.bid is not None and P_q.ask is not None:
-            half_spread_C = 0.5 * (C_q.ask - C_q.bid)
-            half_spread_P = 0.5 * (P_q.ask - P_q.bid)
-            threshold = max(half_spread_C + half_spread_P, 0.05)
-        else:
-            # fallback for data without bid/ask — calibrated for
-            # liquid US equities / ETFs (SPY, QQQ, AAPL, NVDA, MSFT).
-            # Adjust to $0.10-$0.15 for index options (SPX, NDX)
-            # or larger for illiquid names.
-            threshold = 0.05
+        threshold = _parity_threshold(C_q, P_q)
 
         if abs((C-P)-parity_rhs) > threshold:
             # Both the call and the put at this strike are potentially bad.

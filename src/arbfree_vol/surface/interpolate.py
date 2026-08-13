@@ -106,6 +106,20 @@ def _forward_at(fs: FittedSurface, T: float) -> float:
     return float(np.interp(T, expiries, forwards))
 
 
+def _snap_to_boundary(T: float, T_min: float, T_max: float, tol: float) -> float:
+    """Snap a query maturity to a boundary slice when within ``tol``.
+
+    The exact-match loop below is strict, so without this snap a query at
+    exactly T_min + tol / T_max - tol would slip into the interior
+    interpolation path and silently interpolate/extrapolate in expiry.
+    """
+    if T <= T_min + tol:
+        return T_min
+    if T >= T_max - tol:
+        return T_max
+    return T
+
+
 def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:
     """Total variance *w(K, T)* interpolated from the fitted surface.
 
@@ -177,16 +191,7 @@ def total_variance_at(fs: FittedSurface, K: float, T: float) -> float:
         )
 
     # ── snap queries within the expiry tolerance to the boundary slice ─
-    # The exact-match loop below is strict (`<`), so a query at exactly
-    # T_min + tol / T_max - tol would otherwise slip into the interior
-    # interpolation path and silently interpolate/extrapolate in expiry
-    # (a T_max + tol query extrapolates PAST the last slice).  Snap such
-    # queries to the boundary expiry so the tolerance admits exactly the
-    # boundary slice's value, never a near-boundary interpolation.
-    if T <= T_min + _EXACT_EXPIRY_TOL:
-        T = T_min
-    elif T >= T_max - _EXACT_EXPIRY_TOL:
-        T = T_max
+    T = _snap_to_boundary(T, T_min, T_max, _EXACT_EXPIRY_TOL)
 
     # ── exact slice expiry match ──────────────────────────────────────────
     for i, sl in enumerate(slices):

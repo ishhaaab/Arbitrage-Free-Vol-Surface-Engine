@@ -78,57 +78,17 @@ def _is_missing(value: Any) -> bool:
         return False
 
 
-def filter_option_chain(
+def _build_keep_mask(
+    config: DataQualityConfig,
     df: pd.DataFrame,
     expiry: str,
-    config: DataQualityConfig | None = None,
-) -> tuple[pd.DataFrame, list[DropRecord]]:
-    """Filter a raw option chain DataFrame by data quality thresholds.
+) -> tuple[pd.Series, list[DropRecord]]:
+    """Row-by-row data-quality filter for one option-chain DataFrame.
 
-    Only two thresholds are enforced: ``min_open_interest`` and
-    ``max_bid_ask_pct``.  Volume is recorded in ``DropRecord`` for
-    diagnostic context but is not a pass/fail criterion.
-
-    Parameters
-    ----------
-    df:
-        Raw DataFrame from ``yfinance.Ticker.option_chain()`` — either
-        ``calls`` or ``puts``.  Expected columns: ``strike``,
-        ``openInterest``, ``volume``, ``bid``, ``ask``.
-    expiry:
-        Expiry date string (e.g. ``"2026-08-15"``) for audit records.
-    config:
-        Thresholds.  Uses ``DataQualityConfig()`` defaults if ``None``.
-
-    Returns
-    -------
-    (filtered_df, drops)
-        ``filtered_df`` is the surviving rows; ``drops`` is the list of
-        ``DropRecord`` entries for rows that failed a threshold.
-
-    Missing values are NOT silently treated as zero: a row whose
-    ``openInterest`` is absent (``None``/NaN/pd.NA) is dropped with
-    reason ``OI=missing<...`` and ``missing_fields=("open_interest",)``
-    so it stays distinguishable from a genuinely observed ``OI=0``.
-    The same applies to a one-sided quote (exactly one of ``bid``/``ask``
-    missing): it is dropped with reason ``spread=missing (missing:
-    <side>)`` instead of passing with a mid fabricated from the
-    available side.  Missing ``volume`` is recorded in
-    ``missing_fields`` only — volume is never a criterion.
-
-    An absent COLUMN (the provider omitted the field entirely) is
-    treated the same as a missing value: the market-data fields are read
-    with ``row.get(key)`` and NO zero default, so a DataFrame without an
-    ``openInterest`` column flags every row's OI as missing rather than
-    as an observed zero.  ``strike`` keeps its 0.0 default — a row with
-    no strike is unpriceable either way.
+    Returns the keep mask and the accumulated DropRecords.
     """
-    if config is None:
-        config = DataQualityConfig()
-
-    drops: list[DropRecord] = []
     keep_mask = pd.Series(True, index=df.index)
-
+    drops: list[DropRecord] = []
     for idx, row in df.iterrows():
         strike = float(row.get("strike", 0) or 0)
 
@@ -207,5 +167,57 @@ def filter_option_chain(
                 bid_ask_pct=bid_ask_pct,
                 missing_fields=tuple(missing),
             ))
+    return keep_mask, drops
+
+
+def filter_option_chain(
+    df: pd.DataFrame,
+    expiry: str,
+    config: DataQualityConfig | None = None,
+) -> tuple[pd.DataFrame, list[DropRecord]]:
+    """Filter a raw option chain DataFrame by data quality thresholds.
+
+    Only two thresholds are enforced: ``min_open_interest`` and
+    ``max_bid_ask_pct``.  Volume is recorded in ``DropRecord`` for
+    diagnostic context but is not a pass/fail criterion.
+
+    Parameters
+    ----------
+    df:
+        Raw DataFrame from ``yfinance.Ticker.option_chain()`` — either
+        ``calls`` or ``puts``.  Expected columns: ``strike``,
+        ``openInterest``, ``volume``, ``bid``, ``ask``.
+    expiry:
+        Expiry date string (e.g. ``"2026-08-15"``) for audit records.
+    config:
+        Thresholds.  Uses ``DataQualityConfig()`` defaults if ``None``.
+
+    Returns
+    -------
+    (filtered_df, drops)
+        ``filtered_df`` is the surviving rows; ``drops`` is the list of
+        ``DropRecord`` entries for rows that failed a threshold.
+
+    Missing values are NOT silently treated as zero: a row whose
+    ``openInterest`` is absent (``None``/NaN/pd.NA) is dropped with
+    reason ``OI=missing<...`` and ``missing_fields=("open_interest",)``
+    so it stays distinguishable from a genuinely observed ``OI=0``.
+    The same applies to a one-sided quote (exactly one of ``bid``/``ask``
+    missing): it is dropped with reason ``spread=missing (missing:
+    <side>)`` instead of passing with a mid fabricated from the
+    available side.  Missing ``volume`` is recorded in
+    ``missing_fields`` only — volume is never a criterion.
+
+    An absent COLUMN (the provider omitted the field entirely) is
+    treated the same as a missing value: the market-data fields are read
+    with ``row.get(key)`` and NO zero default, so a DataFrame without an
+    ``openInterest`` column flags every row's OI as missing rather than
+    as an observed zero.  ``strike`` keeps its 0.0 default — a row with
+    no strike is unpriceable either way.
+    """
+    if config is None:
+        config = DataQualityConfig()
+
+    keep_mask, drops = _build_keep_mask(config, df, expiry)
 
     return df[keep_mask].copy(), drops
