@@ -1,5 +1,29 @@
-"""Tests for the repair engine."""
-from datetime import date
+"""Tests for the repair engine.
+
+The repair pipeline (`arbfree_vol.repair.engine.repair`) dispatches to one of
+three model paths; this file covers all three plus the cross-cutting slice
+bookkeeping:
+
+- raw SVI (default): per-slice constrained calibration — ``test_repair_svi_*``
+  and the clean-surface tests at the top.
+- eSSVI (``use_ssvi=True``): sequential H&M calendar-arb-free fit — the
+  ``test_repair_essvi_*`` tests and the ``_DIP_TRUTH_ENGINE`` theta-dip
+  fixtures (degenerate-corner routing / fallback / m66 tripwire).
+- SABR (``use_sabr=True``): B-spline term-structure fit mapped to raw SVI —
+  the ``test_sabr_*`` tests and the SABR->SVI mapping bookkeeping.
+
+Cross-cutting slice bookkeeping (exercised for all three paths):
+
+- ``failed_slices`` / ``fallback_slices``: per-slice fit failure vs. an honest
+  unconstrained fallback.
+- ``sabr_mapping_failed_slices``: SABR->SVI mapping failures (RuntimeError /
+  ValueError) — every slice accounted for, never silently dropped.
+- no-forward-estimate slices: a slice with no ``estimate_forward_curve`` entry
+  is recorded in ``failed_slices``, not silently skipped.
+
+Shared constants and surface-builder helpers live in
+``tests/repair_helpers.py``.
+"""
 import logging
 import pytest
 from pytest import approx
@@ -9,49 +33,13 @@ from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.sabr.model import SABRParams
 
-
-SPOT = 100.0
-R = 0.05
-Q = 0.0
-T = 1.0
-_DUMMY_DATE = date(2030, 1, 1)
-
-
-def _bs_price(otype: OptionType, strike: float,
-              sigma: float = 0.2, tt: float = T) -> float:
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
-    from arbfree_vol.pricing.black_scholes import price
-
-    contract = OptionContract(
-        symbol="X", option_type=otype, strike=strike,
-        expiry_date=_DUMMY_DATE,
-    )
-    model = BlackScholesInput(
-        contract=contract, spot=SPOT, expiry_time=tt,
-        risk_free=R, div_yield=Q, volatility=sigma,
-    )
-    return price(model)
-
-
-def _clean_surface(n_strikes: int = 7) -> VolSurface:
-    """Build a surface with calls and puts across n_strikes, all priced at
-    sigma=0.2 from the same model — no arb violations by construction."""
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-    quotes: list[Quote] = []
-    for K in strikes:
-        quotes.append(
-            Quote(strike=K, option_type=OptionType.CALL,
-                  price=_bs_price(OptionType.CALL, K))
-        )
-        quotes.append(
-            Quote(strike=K, option_type=OptionType.PUT,
-                  price=_bs_price(OptionType.PUT, K))
-        )
-
-    return VolSurface(
-        spot=SPOT, risk_free=R, div_yield=Q,
-        slices=[ExpirySlice(expiry_time=T, quotes=quotes)],
-    )
+from tests.repair_helpers import (
+    SPOT, R, Q, T, _DUMMY_DATE,
+    _DIP_TRUTH_ENGINE, _SVI_TRUTH_ENGINE,
+    _bs_price, _clean_surface,
+    _ssvi_priced_surface, _svi_priced_surface,
+    _flat_bs_surface, _forward_curve_missing,
+)
 
 
 def test_repair_clean_surface_rejects_nothing() -> None:
@@ -555,41 +543,6 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
 # that is silently certified arb-free — the SAME margin-check gap as
 # mutmut_66 (docs/code_review_findings.md §6.7).  The test is xfail
 # until a post-fit margin check lands and must NOT bless that corner.
-_DIP_TRUTH_ENGINE = [
-    (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
-    (0.50, dict(theta=0.03, rho=-0.2, psi=0.35)),  # theta + chi dip
-    (1.00, dict(theta=0.12, rho=0.1, psi=0.4)),
-    (2.00, dict(theta=0.07, rho=0.2, psi=0.55)),   # theta dip again
-]
-
-
-def _ssvi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
-    """Price a surface from SSVI ground truth so the (k, w) data the
-    engine sees matches the fitted model's conventions exactly."""
-    from math import sqrt, exp
-    from arbfree_vol.ssvi.model import ssvi_w
-
-    ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
-    if n_strikes is not None:
-        ks = ks[:n_strikes]
-    slices: list[ExpirySlice] = []
-    for T, t in truth:
-        F = SPOT * exp((R - Q) * T)
-        quotes: list[Quote] = []
-        for k in ks:
-            K = F * exp(k)
-            w = ssvi_w(k, t["theta"], t["rho"], t["psi"])
-            sigma = sqrt(max(w / T, 1e-12))
-            quotes.append(Quote(
-                strike=K, option_type=OptionType.CALL,
-                price=_bs_price(OptionType.CALL, K, sigma=sigma, tt=T),
-            ))
-            quotes.append(Quote(
-                strike=K, option_type=OptionType.PUT,
-                price=_bs_price(OptionType.PUT, K, sigma=sigma, tt=T),
-            ))
-        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
-    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
 @pytest.mark.xfail(
@@ -738,45 +691,6 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
 # calibration fails entirely the same way the eSSVI path treats a total
 # fit failure: recorded in failed_slices, excluded from the fitted output,
 # and logged — never silently dropped.
-# Two expiries sharing one valid raw-SVI parameter set (a=0.04, b=0.4,
-# rho=-0.4, m=0.05, sigma=0.15).  The values themselves are not
-# load-bearing: they just need to produce a well-formed,
-# non-arbitrageable smile so the bookkeeping tests (failed-slice
-# recording, few-point skip) run on valid input.  Two expiries (0.25, 1.0)
-# let those tests assert per-slice accounting.
-_SVI_TRUTH_ENGINE = [
-    (0.25, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
-    (1.00, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
-]
-
-
-def _svi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
-    """Price a surface from raw SVI ground truth so the (k, w) data the
-    engine sees matches the fitted model's conventions exactly."""
-    from math import sqrt, exp
-    from arbfree_vol.svi.model import svi_total_variance
-
-    ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
-    if n_strikes is not None:
-        ks = ks[:n_strikes]
-    slices: list[ExpirySlice] = []
-    for T, t in truth:
-        F = SPOT * exp((R - Q) * T)
-        quotes: list[Quote] = []
-        for k in ks:
-            K = F * exp(k)
-            w = svi_total_variance(k, t["a"], t["b"], t["rho"], t["m"], t["sigma"])
-            sigma = sqrt(max(w / T, 1e-12))
-            quotes.append(Quote(
-                strike=K, option_type=OptionType.CALL,
-                price=_bs_price(OptionType.CALL, K, sigma=sigma, tt=T),
-            ))
-            quotes.append(Quote(
-                strike=K, option_type=OptionType.PUT,
-                price=_bs_price(OptionType.PUT, K, sigma=sigma, tt=T),
-            ))
-        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
-    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
 def test_repair_svi_reports_slice_with_no_fit(monkeypatch) -> None:
@@ -949,32 +863,6 @@ def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
         "repair_infeasible must be True when fitted eSSVI slices cross "
         "outside the raw-SVI detector grid"
     )
-
-
-def _flat_bs_surface(expiries: list[float], n_strikes: int = 7) -> VolSurface:
-    """Build a clean multi-slice surface priced at flat BS vol 0.2.
-
-    Mirrors the surface construction used by the existing SABR repair
-    tests (``test_sabr_failure_marks_failed_slices`` etc.) so the
-    mapping-failure tests exercise the same pipeline path.
-    """
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-
-    slices: list[ExpirySlice] = []
-    for T_val in expiries:
-        quotes: list[Quote] = []
-        for K in strikes:
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.CALL,
-                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
-            )
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.PUT,
-                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
-            )
-        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
-
-    return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
 def test_sabr_mapping_success_records_slices_in_fitted_outputs(monkeypatch) -> None:
@@ -1159,33 +1047,6 @@ def test_sabr_mapping_wrap_records_failed_slices_on_value_error(caplog, monkeypa
 # repair paths used to silently ``continue`` past such slices; they now log
 # a warning and record the expiry in ``failed_slices`` — same "report,
 # don't raise" philosophy as the calibration-failure bookkeeping.
-def _forward_curve_missing(expiry_to_drop: float):
-    """Build a fake ``estimate_forward_curve`` that omits one expiry.
-
-    Returns a function matching repair()'s call signature
-    ``estimate_forward_curve(cleaned_surface)``.  Every expiry except
-    ``expiry_to_drop`` maps to the theoretical forward
-    ``spot * exp((r - q) * T)``; the dropped expiry is absent from the
-    dict, which makes ``fwd_curve.get(T)`` return None in the repair
-    loops.
-
-    The fake is installed at the engine's own import site
-    (``arbfree_vol.repair.engine.estimate_forward_curve``), so ONLY
-    repair()'s step-4 call is affected — ``detect_with_forward`` keeps
-    its own module-level import of the real estimator, so violation
-    detection stays deterministic.
-    """
-    from math import exp
-
-    def _estimate(surface):
-        curve = {}
-        for sl in surface.slices:
-            if sl.expiry_time == expiry_to_drop:
-                continue
-            curve[sl.expiry_time] = surface.spot * exp((R - Q) * sl.expiry_time)
-        return curve
-
-    return _estimate
 
 
 def test_repair_svi_records_slice_with_no_forward(caplog, monkeypatch) -> None:
