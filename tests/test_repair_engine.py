@@ -26,7 +26,6 @@ Shared constants and surface-builder helpers live in
 """
 import logging
 import pytest
-from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
@@ -34,12 +33,22 @@ from arbfree_vol.repair.engine import repair
 from arbfree_vol.sabr.model import SABRParams
 
 from tests.repair_helpers import (
-    SPOT, R, Q, T, _DUMMY_DATE,
+    SPOT, R, Q, T,
     _DIP_TRUTH_ENGINE, _SVI_TRUTH_ENGINE,
     _bs_price, _clean_surface,
     _ssvi_priced_surface, _svi_priced_surface,
     _flat_bs_surface, _forward_curve_missing,
 )
+
+
+def _always_raise_fit(points, prev=None, **kwargs):
+    """Fit-failure stub: every hard-fit call raises."""
+    raise RuntimeError("simulated total fit failure")
+
+
+def _never_fallback(points):
+    """Fallback-failure stub: every unconstrained call raises."""
+    raise RuntimeError("simulated fallback failure")
 
 
 def test_repair_clean_surface_rejects_nothing() -> None:
@@ -349,27 +358,7 @@ def test_repair_essvi_sequential_is_calendar_arb_free() -> None:
     - theta strictly increasing
     - chi = theta*psi strictly increasing
     """
-    from math import exp
-
-    expiries = [0.25, 0.5, 1.0]
-    n_strikes = 7
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-
-    slices: list[ExpirySlice] = []
-    for T in expiries:
-        quotes: list[Quote] = []
-        for K in strikes:
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.CALL,
-                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T))
-            )
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.PUT,
-                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T))
-            )
-        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
-
-    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+    surface = _flat_bs_surface([0.25, 0.5, 1.0])
 
     report = repair(surface, use_ssvi=True)
 
@@ -417,25 +406,7 @@ def test_repair_sabr_term_structure_reduces_violations() -> None:
     from arbfree_vol.sabr.term_structure import EPS_FLOOR
     from arbfree_vol.arbitrage.report import ViolationType
 
-    expiries = [0.25, 0.5, 1.0]
-    n_strikes = 7
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-
-    slices: list[ExpirySlice] = []
-    for T_val in expiries:
-        quotes: list[Quote] = []
-        for K in strikes:
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.CALL,
-                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
-            )
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.PUT,
-                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
-            )
-        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
-
-    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+    surface = _flat_bs_surface([0.25, 0.5, 1.0])
     report = repair(surface, use_sabr=True)
 
     assert report.metrics.n_slices_fitted == 3, (
@@ -476,25 +447,7 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
     """
     import arbfree_vol.ssvi.term_structure as ts
 
-    expiries = [0.25, 0.5, 1.0]
-    n_strikes = 7
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-
-    slices: list[ExpirySlice] = []
-    for T in expiries:
-        quotes: list[Quote] = []
-        for K in strikes:
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.CALL,
-                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T))
-            )
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.PUT,
-                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T))
-            )
-        slices.append(ExpirySlice(expiry_time=T, quotes=quotes))
-
-    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+    surface = _flat_bs_surface([0.25, 0.5, 1.0])
 
     # Monkeypatch _fit_slice to fail on the 2nd call
     call_count = {"n": 0}
@@ -668,14 +621,8 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
     fitted output with a warning — no crash, no silent hole."""
     import arbfree_vol.ssvi.term_structure as ts
 
-    def _always_raise(points, prev=None, **kwargs):
-        raise RuntimeError("simulated total fit failure")
-
-    def _no_fallback(points):
-        raise RuntimeError("simulated fallback failure")
-
-    monkeypatch.setattr(ts, "_fit_slice", _always_raise)
-    monkeypatch.setattr(ts, "fit_ssvi_slice", _no_fallback)
+    monkeypatch.setattr(ts, "_fit_slice", _always_raise_fit)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _never_fallback)
 
     report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
 
@@ -760,24 +707,7 @@ def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
     monkeypatch.setattr(engine_mod, "fit_sabr_term_structure", _raise)
 
     expiries = [0.25, 0.5, 1.0]
-    n_strikes = 7
-    strikes = [SPOT * (1 + 0.1 * (i - n_strikes // 2)) for i in range(n_strikes)]
-
-    slices: list[ExpirySlice] = []
-    for T_val in expiries:
-        quotes: list[Quote] = []
-        for K in strikes:
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.CALL,
-                      price=_bs_price(OptionType.CALL, K, sigma=0.2, tt=T_val))
-            )
-            quotes.append(
-                Quote(strike=K, option_type=OptionType.PUT,
-                      price=_bs_price(OptionType.PUT, K, sigma=0.2, tt=T_val))
-            )
-        slices.append(ExpirySlice(expiry_time=T_val, quotes=quotes))
-
-    surface = VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
+    surface = _flat_bs_surface(expiries)
 
     # Must not raise
     report = repair(surface, use_sabr=True)
@@ -1132,14 +1062,8 @@ def test_repair_essvi_failed_slices_sorted_with_no_forward(monkeypatch) -> None:
         engine_mod, "estimate_forward_curve", _forward_curve_missing(0.25),
     )
 
-    def _always_raise(points, prev=None, **kwargs):
-        raise RuntimeError("simulated total fit failure")
-
-    def _no_fallback(points):
-        raise RuntimeError("simulated fallback failure")
-
-    monkeypatch.setattr(ts, "_fit_slice", _always_raise)
-    monkeypatch.setattr(ts, "fit_ssvi_slice", _no_fallback)
+    monkeypatch.setattr(ts, "_fit_slice", _always_raise_fit)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", _never_fallback)
 
     report = repair(surface, use_ssvi=True)
 
@@ -1174,3 +1098,78 @@ def test_repair_sabr_records_slice_with_no_forward(caplog, monkeypatch) -> None:
     )
     assert [s.expiry_time for s in report.fitted_sabr_slices] == [0.25]
     assert "SABR path: no forward estimate for slice T=0.5000" in caplog.text
+
+
+# ── Shared per-slice prep prologue (_prepare_slice) ──────────────────────
+# All three repair paths route their per-slice prep through the single
+# helper; these tests pin the helper's contract: forward-lookup-first
+# ordering, the exact warning byte-formats the end-to-end bookkeeping
+# tests rely on, and the silent TOO_FEW skip.
+
+
+def test_prepare_slice_ok() -> None:
+    """A well-formed slice preps to OK with sorted (k, w) points."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _clean_surface(n_strikes=7)
+    fwd_curve = {T: SPOT}
+
+    prep = engine_mod._prepare_slice(surface.slices[0], surface, fwd_curve, "SVI")
+
+    assert prep.status is engine_mod._PrepStatus.OK
+    assert prep.forward == SPOT
+    assert len(prep.points) == 7
+    ks = [k for k, _ in prep.points]
+    assert ks == sorted(ks)
+
+
+@pytest.mark.parametrize("path", ["SVI", "eSSVI", "SABR"])
+def test_prepare_slice_no_forward_warning_text(path, caplog) -> None:
+    """The no-forward warning byte-format is shared across the three paths
+    (three end-to-end tests assert these exact strings)."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _clean_surface(n_strikes=7)
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        prep = engine_mod._prepare_slice(surface.slices[0], surface, {}, path)
+
+    assert prep.status is engine_mod._PrepStatus.NO_FORWARD
+    assert (
+        f"{path} path: no forward estimate for slice T={T:.4f}; "
+        "slice recorded as failed"
+    ) in caplog.text
+
+
+def test_prepare_slice_too_few_points() -> None:
+    """A slice with fewer than 5 (k,w) points preps to TOO_FEW with no points."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _clean_surface(n_strikes=7)
+    small = surface.slices[0]
+    small_slice = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
+
+    prep = engine_mod._prepare_slice(small_slice, surface, {T: SPOT}, "SVI")
+
+    assert prep.status is engine_mod._PrepStatus.TOO_FEW
+    assert prep.points == ()
+
+
+def test_prepare_slice_no_forward_takes_precedence() -> None:
+    """The forward lookup runs BEFORE the point-count check: even a
+    4-quote slice preps to NO_FORWARD when the forward is missing."""
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _clean_surface(n_strikes=7)
+    small = surface.slices[0]
+    small_slice = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
+
+    prep = engine_mod._prepare_slice(small_slice, surface, {}, "SVI")
+
+    assert prep.status is engine_mod._PrepStatus.NO_FORWARD
