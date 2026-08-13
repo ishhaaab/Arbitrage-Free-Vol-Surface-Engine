@@ -500,6 +500,51 @@ def _hard_fit_is_degenerate_corner(
     return bad_rmse
 
 
+def _fit_one_slice(
+    expiry: float,
+    pts: list[tuple[float, float]],
+    last_valid_prev: SSVIParams | None,
+) -> tuple[str, SSVIParams | None]:
+    """Fit one slice with hard constraints, falling back on failure.
+
+    Returns ``(kind, params)`` where ``kind`` is ``"hard"`` (a
+    hard-constrained H&M arb-free fit), ``"fallback"`` (the
+    unconstrained per-slice fit), or ``"failed"`` (both fits failed,
+    ``params`` is ``None``).
+
+    A hard fit pinned on the H&M boundary corner (m66 pattern) is
+    raised as a ``RuntimeError`` so the generic "hard-constrained fit
+    failed" warning below still fires, matching the prior inline
+    behavior's two-warning degenerate-corner path.
+    """
+    try:
+        params = _fit_slice(pts, prev=last_valid_prev)
+        if last_valid_prev is not None and _hard_fit_is_degenerate_corner(last_valid_prev, params, pts):
+            _theta_delta, _chi_delta, _ratio = _hm_boundary_deltas(last_valid_prev, params)
+            _logger.warning(
+                "eSSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback",
+                expiry, _theta_delta, _chi_delta, _ratio, _slice_rmse(params, pts),
+            )
+            raise RuntimeError("hard fit is a degenerate H&M boundary corner")
+        return ("hard", params)
+    except RuntimeError as e:
+        _logger.warning(
+            "eSSVI hard-constrained fit failed for T=%.4f (%s); "
+            "falling back to unconstrained per-slice fit",
+            expiry, e,
+        )
+    try:
+        params = fit_ssvi_slice(pts)
+    except (RuntimeError, ValueError) as e2:
+        _logger.error(
+            "eSSVI fallback fit also failed for T=%.4f (%s); "
+            "skipping this slice",
+            expiry, e2,
+        )
+        return ("failed", None)
+    return ("fallback", params)
+
+
 def fit_ssvi_surface_sequential(
     slices_data: list[tuple[float, list[tuple[float, float]]]],
 ) -> SequentialFitResult:
@@ -561,38 +606,24 @@ def fit_ssvi_surface_sequential(
         # Record the prev_T that will be used for this slice
         prev_T_for_this_slice = last_valid_prev_T
 
-        try:
-            params = _fit_slice(pts, prev=last_valid_prev)
-            if last_valid_prev is not None and _hard_fit_is_degenerate_corner(last_valid_prev, params, pts):
-                _theta_delta, _chi_delta, _ratio = _hm_boundary_deltas(last_valid_prev, params)
-                _logger.warning("eSSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback", expiry, _theta_delta, _chi_delta, _ratio, _slice_rmse(params, pts))
-                raise RuntimeError("hard fit is a degenerate H&M boundary corner")
-            last_valid_prev = params  # update only on hard-constrained success
+        kind, params = _fit_one_slice(expiry, pts, last_valid_prev)
+
+        if kind == "hard":
+            # update only on hard-constrained success
+            last_valid_prev = params
             last_valid_prev_T = expiry  # update for NEXT slice
             fitted.append((expiry, params))
             fitted_slices_prev.append(prev_T_for_this_slice)
-        except RuntimeError as e:
-            _logger.warning(
-                "eSSVI hard-constrained fit failed for T=%.4f (%s); "
-                "falling back to unconstrained per-slice fit",
-                expiry, e,
-            )
-            try:
-                params = fit_ssvi_slice(pts)
-                fitted.append((expiry, params))
-                fallback.append(expiry)
-                fitted_slices_prev.append(prev_T_for_this_slice)
-                # do NOT update last_valid_prev or last_valid_prev_T
-                # — fallback slices aren't arb-free
-            except (RuntimeError, ValueError) as e2:
-                _logger.error(
-                    "eSSVI fallback fit also failed for T=%.4f (%s); "
-                    "skipping this slice",
-                    expiry, e2,
-                )
-                failed.append(expiry)
-                # failed slices are NOT in fitted_slices, so no entry
-                # in fitted_slices_prev
+        elif kind == "fallback":
+            fitted.append((expiry, params))
+            fallback.append(expiry)
+            fitted_slices_prev.append(prev_T_for_this_slice)
+            # do NOT update last_valid_prev / last_valid_prev_T —
+            # fallback slices aren't arb-free
+        else:  # failed
+            failed.append(expiry)
+            # failed slices are NOT in fitted_slices, so no entry
+            # in fitted_slices_prev
 
     if len(fitted) >= 2:
         params_only = [p for _, p in fitted]
@@ -724,6 +755,73 @@ def verify_ssvi_calendar_free(
     return True
 
 
+def _hm_breakdown_entry(
+    params: SSVIParams,
+    prev_params: SSVIParams,
+    slice_T: float,
+    prev_T: float,
+    tol: float,
+) -> dict:
+    """Build one H&M Prop 3.1 sub-condition breakdown dict.
+
+    Computes the theta/chi/rho·chi fields and the ratio condition for
+    ``params`` relative to ``prev_params``, returning the full dict
+    whose keys are pinned by ``verify_hm_condition_breakdown``'s
+    docstring.  When ``chi`` does not genuinely increase
+    (``chi_delta < tol``) the ratio is reported as undefined (``None``)
+    and never listed as a failing condition.
+    """
+    theta_self = params.theta
+    theta_prev = prev_params.theta
+    theta_ok = theta_self >= theta_prev - tol
+
+    chi_self = params.theta * params.psi
+    chi_prev = prev_params.theta * prev_params.psi
+    chi_ok = chi_self >= chi_prev - tol
+
+    rho_chi_self = params.rho * chi_self
+    rho_chi_prev = prev_params.rho * chi_prev
+
+    # The ratio condition |(rho*chi)'| / chi' <= 1 is only meaningful
+    # when chi genuinely increases.  When chi is flat or decreases the
+    # denominator is <= 0; clamping it to `tol` (the old behaviour)
+    # manufactured a huge, misleading ratio.  Report the ratio as
+    # undefined (None) in that case and never list it as a failing
+    # condition — a chi dip is the primary failure, and the ratio is a
+    # derived diagnostic, not an independent model violation.
+    chi_delta = chi_self - chi_prev
+    if chi_delta >= tol:
+        ratio_value = abs(rho_chi_self - rho_chi_prev) / chi_delta
+        ratio_ok = ratio_value <= 1.0 + tol
+    else:
+        ratio_value = None
+        ratio_ok = None
+
+    failing: list[str] = []
+    if not theta_ok:
+        failing.append("theta")
+    if not chi_ok:
+        failing.append("chi")
+    if ratio_ok is False:
+        failing.append("ratio")
+
+    return {
+        "slice_T": slice_T,
+        "prev_T": prev_T,
+        "theta_self": theta_self,
+        "theta_prev": theta_prev,
+        "theta_ok": theta_ok,
+        "chi_self": chi_self,
+        "chi_prev": chi_prev,
+        "chi_ok": chi_ok,
+        "rho_chi_self": rho_chi_self,
+        "rho_chi_prev": rho_chi_prev,
+        "ratio_value": ratio_value,
+        "ratio_ok": ratio_ok,
+        "failing_conditions": failing,
+    }
+
+
 def verify_hm_condition_breakdown(
     fitted_slices: list[tuple[float, SSVIParams]],
     fitted_prev_Ts: list[float | None] | None = None,
@@ -792,57 +890,9 @@ def verify_hm_condition_breakdown(
         if prev_T is None or prev_T not in params_by_T:
             continue
 
-        prev_params = params_by_T[prev_T]
-
-        theta_self = params.theta
-        theta_prev = prev_params.theta
-        theta_ok = theta_self >= theta_prev - tol
-
-        chi_self = params.theta * params.psi
-        chi_prev = prev_params.theta * prev_params.psi
-        chi_ok = chi_self >= chi_prev - tol
-
-        rho_chi_self = params.rho * chi_self
-        rho_chi_prev = prev_params.rho * chi_prev
-
-        # The ratio condition |(rho*chi)'| / chi' <= 1 is only meaningful
-        # when chi genuinely increases.  When chi is flat or decreases the
-        # denominator is <= 0; clamping it to `tol` (the old behaviour)
-        # manufactured a huge, misleading ratio.  Report the ratio as
-        # undefined (None) in that case and never list it as a failing
-        # condition — a chi dip is the primary failure, and the ratio is a
-        # derived diagnostic, not an independent model violation.
-        chi_delta = chi_self - chi_prev
-        if chi_delta >= tol:
-            ratio_value = abs(rho_chi_self - rho_chi_prev) / chi_delta
-            ratio_ok = ratio_value <= 1.0 + tol
-        else:
-            ratio_value = None
-            ratio_ok = None
-
-        failing: list[str] = []
-        if not theta_ok:
-            failing.append("theta")
-        if not chi_ok:
-            failing.append("chi")
-        if ratio_ok is False:
-            failing.append("ratio")
-
-        results.append({
-            "slice_T": slice_T,
-            "prev_T": prev_T,
-            "theta_self": theta_self,
-            "theta_prev": theta_prev,
-            "theta_ok": theta_ok,
-            "chi_self": chi_self,
-            "chi_prev": chi_prev,
-            "chi_ok": chi_ok,
-            "rho_chi_self": rho_chi_self,
-            "rho_chi_prev": rho_chi_prev,
-            "ratio_value": ratio_value,
-            "ratio_ok": ratio_ok,
-            "failing_conditions": failing,
-        })
+        results.append(
+            _hm_breakdown_entry(params, params_by_T[prev_T], slice_T, prev_T, tol)
+        )
 
     return results
 
