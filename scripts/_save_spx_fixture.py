@@ -18,7 +18,7 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from arbfree_vol.ingestion.yfinance import fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain
 
 
 def _sanitize(obj):

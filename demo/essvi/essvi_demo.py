@@ -15,7 +15,7 @@ import matplotlib; matplotlib.use("Agg")
 from pathlib import Path
 import argparse
 
-from arbfree_vol.ingestion.yfinance import fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.viz.surface import plot_surface
 from arbfree_vol.viz.smiles import plot_smiles

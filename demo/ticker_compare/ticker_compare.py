@@ -31,7 +31,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from arbfree_vol.ingestion.yfinance import fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
 

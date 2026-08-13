@@ -11,7 +11,7 @@ from arbfree_vol.models.option import OptionType
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_fetch_chain_type(mock_ticker_class) -> None:
     """Smoke test: fetch_chain returns a VolSurface with structure."""
     import pandas as pd
@@ -68,11 +68,11 @@ def test_fetch_chain_type(mock_ticker_class) -> None:
     mock_ticker.option_chain.return_value = mock_chain
 
     # Patch date.today to avoid expiry-time dependence
-    with patch("arbfree_vol.ingestion.yfinance.date") as mock_date:
+    with patch("arbfree_vol.ingestion.yahoo.date") as mock_date:
         mock_date.today.return_value = today
         mock_date.fromisoformat.side_effect = date.fromisoformat
 
-        from arbfree_vol.ingestion.yfinance import fetch_chain
+        from arbfree_vol.ingestion.yahoo import fetch_chain
         surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
     assert isinstance(surface, VolSurface)
@@ -82,8 +82,8 @@ def test_fetch_chain_type(mock_ticker_class) -> None:
     assert len(surface.slices) == 2  # should get 2 weekly expiries
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class, caplog) -> None:
     """When ^IRX or dividend yield is missing, the surface still builds
     with the documented fallbacks — and a WARNING states exactly which
@@ -118,8 +118,8 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class,
     mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
     mock_ticker.option_chain.return_value = mock_chain
 
-    from arbfree_vol.ingestion.yfinance import fetch_chain
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
     assert surface.risk_free == 0.05  # default fallback — values unchanged
@@ -136,8 +136,8 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class,
     assert len(surface.slices) >= 1
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_no_fallback_warning_when_rates_available(
     mock_date_class, mock_ticker_class, caplog,
 ) -> None:
@@ -170,8 +170,8 @@ def test_fetch_chain_no_fallback_warning_when_rates_available(
     mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
     mock_ticker.option_chain.return_value = mock_chain
 
-    from arbfree_vol.ingestion.yfinance import fetch_chain
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=2)
 
     assert surface.risk_free == approx(0.0485)
@@ -208,8 +208,8 @@ def _mock_index_chain(mock_ticker_class, symbol="^SPX"):
     return mock_ticker
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
     mock_date_class, mock_ticker_class, caplog,
 ) -> None:
@@ -245,8 +245,8 @@ def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
     mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
     mock_ticker.option_chain.return_value = mock_chain
 
-    from arbfree_vol.ingestion.yfinance import fetch_chain
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, _, _ = fetch_chain("SPY", max_expiries=2)
 
     # q=0.0 is used as OBSERVED (the value is unchanged), and the warning
@@ -261,15 +261,15 @@ def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
     )
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_index_q_mix_is_logged(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:
     """When some index slices get a per-expiry parity q and others do
     not, the resulting MIXED q-quality surface is logged explicitly."""
     from datetime import date as real_date
-    import arbfree_vol.ingestion.yfinance as yf_mod
+    import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
     today = real_date(2030, 7, 15)
@@ -288,7 +288,7 @@ def test_fetch_chain_index_q_mix_is_logged(
         fake_estimate,
     )
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
 
     assert "MIXED" in caplog.text, (
@@ -302,15 +302,15 @@ def test_fetch_chain_index_q_mix_is_logged(
     assert surface.div_yield == approx(0.01)
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:
     """All slices fail parity -> representative ETF yield fallback is
     logged, and the surface carries the ETF q."""
     from datetime import date as real_date
-    import arbfree_vol.ingestion.yfinance as yf_mod
+    import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
     today = real_date(2030, 7, 15)
@@ -326,7 +326,7 @@ def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
         lambda symbol: 0.013,
     )
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
 
     assert "representative ETF yield" in caplog.text, (
@@ -337,8 +337,8 @@ def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
         assert sl.div_yield is None  # per-slice q untouched
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_index_representative_zero_yield_preserved(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:
@@ -356,7 +356,7 @@ def test_fetch_chain_index_representative_zero_yield_preserved(
     the same semantics on the representative fallback)."""
     import pandas as pd
     from datetime import date as real_date
-    import arbfree_vol.ingestion.yfinance as yf_mod
+    import arbfree_vol.ingestion.yahoo as yf_mod
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker
@@ -392,7 +392,7 @@ def test_fetch_chain_index_representative_zero_yield_preserved(
         lambda sl, spot, r: None,
     )
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
 
     assert surface.div_yield == 0.0
@@ -411,15 +411,15 @@ def test_fetch_chain_index_representative_zero_yield_preserved(
     )
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
     mock_date_class, mock_ticker_class, monkeypatch, caplog,
 ) -> None:
     """All slices fail parity AND no representative ETF -> q=0.0
     fallback-of-last-resort is logged explicitly."""
     from datetime import date as real_date
-    import arbfree_vol.ingestion.yfinance as yf_mod
+    import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
     today = real_date(2030, 7, 15)
@@ -435,7 +435,7 @@ def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
         lambda symbol: None,
     )
 
-    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
 
     assert "hardcoded to 0.0" in caplog.text, (
@@ -444,8 +444,8 @@ def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
     assert surface.div_yield == 0.0
 
 
-@patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-@patch("arbfree_vol.ingestion.yfinance.date")
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_disable_quality_filter(mock_date_class, mock_ticker_class) -> None:
     """disable_quality_filter=True skips the filter and returns empty drops."""
     import pandas as pd
@@ -481,7 +481,7 @@ def test_fetch_chain_disable_quality_filter(mock_date_class, mock_ticker_class) 
     mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
     mock_ticker.option_chain.return_value = mock_chain
 
-    from arbfree_vol.ingestion.yfinance import fetch_chain
+    from arbfree_vol.ingestion.yahoo import fetch_chain
 
     # With filter disabled: low-OI strikes pass through, quality_drops is empty
     surface_raw, _, quality_drops_raw = fetch_chain(

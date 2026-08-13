@@ -2,7 +2,7 @@
 
 Single source of truth for the index representative-ETF mapping and the
 per-expiry put-call-parity dividend yield estimators.  Both
-``ingestion.yfinance`` and ``ingestion.openbb`` re-import these names so
+``ingestion.yahoo`` and ``ingestion.openbb`` re-import these names so
 their call sites keep working unchanged, and so a fix to the estimation
 logic lands in exactly one place.
 

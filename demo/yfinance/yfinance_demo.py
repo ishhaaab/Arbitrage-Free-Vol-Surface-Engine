@@ -1,6 +1,6 @@
 """Demo: yfinance -> repair with SVI/eSSVI/SABR -> fitted surface -> Greeks -> Dupire -> 7 plots.
 
-Uses the ``ingestion.yfinance`` module which sources real risk-free
+Uses the ``ingestion.yahoo`` module which sources real risk-free
 rates (^IRX) and dividend yields, fetches mid prices, and applies
 the cleaning layer before building the surface.
 
@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from arbfree_vol.ingestion.yfinance import fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface
 from arbfree_vol.pricing.local_vol import dupire

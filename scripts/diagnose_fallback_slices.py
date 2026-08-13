@@ -79,7 +79,7 @@ def fetch_spy_data() -> tuple[VolSurface, list]:
         print("yfinance not installed. Using synthetic fallback data.")
         return _build_synthetic_data()
 
-    from arbfree_vol.ingestion.yfinance import fetch_chain
+    from arbfree_vol.ingestion.yahoo import fetch_chain
     try:
         surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=20, min_T_years=7.0 / 365.0)
         return surface, rejected

@@ -469,7 +469,7 @@ characteristics).
 **Files added/modified:**
 - `src/arbfree_vol/data/quality.py`: `DataQualityConfig`, `DropRecord`,
   `filter_option_chain()`.
-- `src/arbfree_vol/ingestion/yfinance.py`: `fetch_chain()` now accepts
+- `src/arbfree_vol/ingestion/yahoo.py`: `fetch_chain()` now accepts
   an optional `quality_config` parameter and returns a 3-tuple
   `(surface, rejected, quality_drops)`.
 - `demo/yfinance/yfinance_demo.py`: displays quality drop counts and

@@ -267,15 +267,15 @@ class TestFixA_IngestionPaths:
     """FIX A end-to-end: the real ingestion paths surface the
     missing-vs-zero semantics through their quality_drops audit trail."""
 
-    @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-    @patch("arbfree_vol.ingestion.yfinance.date")
+    @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+    @patch("arbfree_vol.ingestion.yahoo.date")
     def test_yfinance_fetch_chain_reports_missing_and_zero_oi(
         self, mock_date_class, mock_ticker_class
     ) -> None:
         """yfinance fetch_chain: a NaN-OI strike drops as OI=missing,
         an observed OI=0 strike drops as OI=0<10 — never the same."""
         from datetime import date as real_date
-        from arbfree_vol.ingestion.yfinance import fetch_chain
+        from arbfree_vol.ingestion.yahoo import fetch_chain
 
         mock_ticker = MagicMock()
         mock_ticker_class.return_value = mock_ticker
@@ -441,14 +441,14 @@ class TestFixB_YfinanceFallbackWarnings:
         mock_ticker.option_chain.return_value = mock_chain
         return mock_ticker
 
-    @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-    @patch("arbfree_vol.ingestion.yfinance.date")
+    @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+    @patch("arbfree_vol.ingestion.yahoo.date")
     def test_r_warning_when_irx_fetch_fails(
         self, mock_date_class, mock_ticker_class, caplog
     ) -> None:
         """^IRX empty → WARNING names the symbol and substitutes r=0.05."""
         from datetime import date as real_date
-        from arbfree_vol.ingestion.yfinance import fetch_chain
+        from arbfree_vol.ingestion.yahoo import fetch_chain
 
         self._mock_fetch_chain(
             mock_ticker_class,
@@ -459,22 +459,22 @@ class TestFixB_YfinanceFallbackWarnings:
         mock_date_class.today.return_value = today
         mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
 
-        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
             surface, _, _ = fetch_chain("SPY", max_expiries=2)
 
         assert surface.risk_free == 0.05
         assert "Risk-free rate unavailable for SPY" in caplog.text
         assert "substituting r=0.05" in caplog.text
 
-    @patch("arbfree_vol.ingestion.yfinance.yf.Ticker")
-    @patch("arbfree_vol.ingestion.yfinance.date")
+    @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+    @patch("arbfree_vol.ingestion.yahoo.date")
     def test_q_warning_when_dividend_yield_missing(
         self, mock_date_class, mock_ticker_class, caplog
     ) -> None:
         """dividendYield missing from ticker info → WARNING names the
         symbol and substitutes q=0.0."""
         from datetime import date as real_date
-        from arbfree_vol.ingestion.yfinance import fetch_chain
+        from arbfree_vol.ingestion.yahoo import fetch_chain
 
         self._mock_fetch_chain(
             mock_ticker_class,
@@ -485,7 +485,7 @@ class TestFixB_YfinanceFallbackWarnings:
         mock_date_class.today.return_value = today
         mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
 
-        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
             surface, _, _ = fetch_chain("SPY", max_expiries=2)
 
         assert surface.div_yield == 0.0

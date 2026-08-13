@@ -55,7 +55,7 @@ if _project_root not in sys.path:
 from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
-from arbfree_vol.ingestion.yfinance import fetch_chain as yf_fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain as yf_fetch_chain
 from arbfree_vol.models.surface import VolSurface
 
 _logger = logging.getLogger(__name__)

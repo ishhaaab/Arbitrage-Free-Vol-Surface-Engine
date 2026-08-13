@@ -51,7 +51,7 @@ logging.basicConfig(level=logging.WARNING)
 
 def fetch_yf_data(symbol: str, disable_quality_filter: bool = False):
     """Fetch option data via yfinance."""
-    from arbfree_vol.ingestion.yfinance import fetch_chain as yf_fetch_chain
+    from arbfree_vol.ingestion.yahoo import fetch_chain as yf_fetch_chain
     surface, rejected, quality_drops = yf_fetch_chain(
         symbol,
         max_expiries=40,

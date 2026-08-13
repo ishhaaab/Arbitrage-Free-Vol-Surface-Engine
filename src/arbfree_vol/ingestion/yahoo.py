@@ -1,5 +1,8 @@
 """Fetch live option chains from yfinance and build a VolSurface.
 
+This module is named ``yahoo`` (not ``yfinance``) so it does not
+shadow the third-party ``yfinance`` package it imports internally.
+
 Attempts to source real risk-free rates and dividend yields.  Falls
 back to pre-pass forward-curve estimation when rates are unavailable.
 

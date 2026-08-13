@@ -2,7 +2,7 @@
 
 OpenBB wraps multiple data providers behind a unified API.  This module
 uses the ``yfinance`` provider by default (same underlying data as
-``ingestion.yfinance`` but via OpenBB's normalised column schema), and
+``ingestion.yahoo`` but via OpenBB's normalised column schema), and
 falls back to other free providers if available.
 
 Requires ``openbb`` — install with ``pip install openbb``.
@@ -159,7 +159,7 @@ def fetch_chain(
         ``disable_quality_filter=False`` still applies default thresholds.
     provider:
         OpenBB data provider.  Default ``"yfinance"`` (same underlying
-        data as ``ingestion.yfinance``).  Other free providers may work
+        data as ``ingestion.yahoo``).  Other free providers may work
         without API keys (e.g. ``"cboe"``).
 
     Returns
