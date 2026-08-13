@@ -407,8 +407,10 @@ class TestOpenBBFetchChainMainPath:
         monkeypatch.setattr("yfinance.Ticker", _ZeroRepTicker)
         # Parity estimation fails for all slices so the representative
         # fallback path runs with the REAL helper (not monkeypatched).
-        monkeypatch.setattr(openbb_mod, "_estimate_index_dividend_yield",
-                            lambda sl, spot, r: None)
+        monkeypatch.setattr(
+            "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+            lambda sl, spot, r: None,
+        )
 
         with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.openbb"):
             surface, _, _ = openbb_mod.fetch_chain("^SPX")

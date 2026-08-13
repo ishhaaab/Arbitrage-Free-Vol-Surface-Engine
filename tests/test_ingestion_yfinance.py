@@ -283,7 +283,10 @@ def test_fetch_chain_index_q_mix_is_logged(
         calls["n"] += 1
         return 0.01 if calls["n"] == 1 else None
 
-    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield", fake_estimate)
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        fake_estimate,
+    )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
@@ -314,10 +317,14 @@ def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
     mock_date_class.today.return_value = today
     mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
 
-    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
-                        lambda sl, spot, r: None)
-    monkeypatch.setattr(yf_mod, "_get_representative_dividend_yield",
-                        lambda symbol: 0.013)
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: None,
+    )
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._get_representative_dividend_yield",
+        lambda symbol: 0.013,
+    )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
@@ -380,8 +387,10 @@ def test_fetch_chain_index_representative_zero_yield_preserved(
 
     # Parity estimation fails for all slices so the representative
     # fallback path runs with the REAL helper (not monkeypatched).
-    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
-                        lambda sl, spot, r: None)
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: None,
+    )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)
@@ -417,10 +426,14 @@ def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
     mock_date_class.today.return_value = today
     mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
 
-    monkeypatch.setattr(yf_mod, "_estimate_index_dividend_yield",
-                        lambda sl, spot, r: None)
-    monkeypatch.setattr(yf_mod, "_get_representative_dividend_yield",
-                        lambda symbol: None)
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: None,
+    )
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._get_representative_dividend_yield",
+        lambda symbol: None,
+    )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yfinance"):
         surface, _, _ = yf_mod.fetch_chain("^SPX", max_expiries=2)

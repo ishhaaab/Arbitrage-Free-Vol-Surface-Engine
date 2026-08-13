@@ -16,19 +16,17 @@ import warnings
 from datetime import date
 from typing import Any
 
-from arbfree_vol.data.quality import (
-    DataQualityConfig,
-    DropRecord,
-    filter_option_chain,
-)
+from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
-from arbfree_vol.ingestion.cleaning import RejectionRecord, clean_quotes
+from arbfree_vol.ingestion.cleaning import RejectionRecord
+from arbfree_vol.ingestion._common import build_slice, row_to_quote as _row_to_quote
 from arbfree_vol.ingestion._index_rates import (
     _estimate_index_dividend_yield,
     _get_representative_dividend_yield,
+    estimate_index_dividend_yields,
 )
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
 
 _logger = logging.getLogger(__name__)
 
@@ -67,38 +65,6 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
     if isinstance(val, float) and math.isnan(val):
         return default
     return float(val)
-
-
-def _row_to_quote(row: Any, otype: OptionType) -> Quote | None:
-    """Convert an OpenBB DataFrame row to a Quote.
-
-    Uses the **mid price** (``(bid + ask) / 2``) when both bid and ask
-    are available — this reflects the live market, not stale
-    ``lastPrice``.  Falls back to ``lastPrice`` (the normalized form of
-    OpenBB's ``last_trade_price``; see ``_normalise_columns``) if either
-    bid or ask is missing.  Returns ``None`` when no valid price can be
-    determined.
-    """
-    bid = _safe_float(row.get("bid"), None)
-    ask = _safe_float(row.get("ask"), None)
-    last = _safe_float(row.get("lastPrice"), None)
-
-    if bid is not None and ask is not None:
-        price = (bid + ask) / 2.0
-    elif last is not None:
-        price = last
-        bid = None
-        ask = None
-    else:
-        return None
-
-    return Quote(
-        strike=float(row["strike"]),
-        option_type=otype,
-        price=price,
-        bid=bid,
-        ask=ask,
-    )
 
 
 def _normalise_columns(df):
@@ -356,108 +322,19 @@ def fetch_chain(
         calls_raw = exp_df[exp_df["option_type"].str.lower().isin(["call", "c"])].copy()
         puts_raw = exp_df[exp_df["option_type"].str.lower().isin(["put", "p"])].copy()
 
-        # Apply data-quality filter to raw DataFrames before building Quotes
-        if disable_quality_filter:
-            calls_filtered = calls_raw
-            puts_filtered = puts_raw
-        else:
-            calls_filtered, calls_drops = filter_option_chain(
-                calls_raw, exp_str, quality_config
-            )
-            puts_filtered, puts_drops = filter_option_chain(
-                puts_raw, exp_str, quality_config
-            )
-            all_quality_drops.extend(calls_drops)
-            all_quality_drops.extend(puts_drops)
-
-        quotes: list[Quote] = []
-
-        for _, row in calls_filtered.iterrows():
-            qq = _row_to_quote(row, OptionType.CALL)
-            if qq is not None:
-                quotes.append(qq)
-
-        for _, row in puts_filtered.iterrows():
-            qq = _row_to_quote(row, OptionType.PUT)
-            if qq is not None:
-                quotes.append(qq)
-
-        if not quotes:
-            continue
-
-        # apply cleaning rules to this slice
-        sl_raw = ExpirySlice(expiry_time=T, quotes=quotes)
-        kept, rejected = clean_quotes(sl_raw, spot)
+        sl, rejected, drops = build_slice(
+            calls_raw, puts_raw, exp_str, T, spot,
+            quality_config, disable_quality_filter,
+        )
+        all_quality_drops.extend(drops)
         all_rejected.extend(rejected)
-
-        if not kept:
-            continue
-
-        slices.append(ExpirySlice(expiry_time=T, quotes=kept))
+        if sl is not None:
+            slices.append(sl)
 
     # For index symbols, estimate q per-expiry via put-call parity.
     # If all slices fail estimation, fall back to representative ETF yield.
     if _is_index and slices:
-        from statistics import median as _median
-        per_slice_qs: list[float] = []
-        parity_slices: list[float] = []
-        failed_parity_slices: list[float] = []
-        for sl in slices:
-            q_est = _estimate_index_dividend_yield(sl, spot, r)
-            if q_est is not None:
-                sl.div_yield = q_est
-                per_slice_qs.append(q_est)
-                parity_slices.append(sl.expiry_time)
-            else:
-                failed_parity_slices.append(sl.expiry_time)
-        if per_slice_qs:
-            q = _median(per_slice_qs)
-        else:
-            rep_q = _get_representative_dividend_yield(symbol)
-            if rep_q is not None:
-                q = rep_q
-            # else q stays at 0.0 from the initial assignment
-
-        # Visibility only — no value changes.  Report which slices got a
-        # genuine per-expiry parity q and which fell back to the
-        # surface-level q, and where that surface q came from, so a mixed
-        # q-quality surface is never silent.
-        if failed_parity_slices and per_slice_qs:
-            _logger.warning(
-                "Index %s: q quality is MIXED across slices — %d/%d used "
-                "per-expiry put-call parity q (%s); %d/%d used the "
-                "surface-level q (median of parity estimates, q=%.6f) "
-                "(%s)",
-                symbol, len(parity_slices), len(slices), parity_slices,
-                len(failed_parity_slices), len(slices), q,
-                failed_parity_slices,
-            )
-        elif not per_slice_qs:
-            if q != 0.0:
-                _logger.warning(
-                    "Index %s: put-call parity q failed for all %d slices; "
-                    "surface q from representative ETF yield (q=%.6f)",
-                    symbol, len(slices), q,
-                )
-            elif rep_q is not None:
-                # The representative yield was PRESENT and observed as
-                # zero (the helper itself logs the observed-zero
-                # provenance).  This branch must not claim the yield was
-                # unavailable — an observed zero is an observation, not
-                # a substitution.
-                _logger.warning(
-                    "Index %s: put-call parity q failed for all %d slices; "
-                    "representative ETF yield observed as zero; surface "
-                    "q=0.0 as observed",
-                    symbol, len(slices),
-                )
-            else:
-                _logger.warning(
-                    "Index %s: put-call parity q failed for all %d slices "
-                    "and no representative ETF yield available; surface q "
-                    "hardcoded to 0.0",
-                    symbol, len(slices),
-                )
+        q = estimate_index_dividend_yields(slices, spot, r, symbol)
 
     if not slices:
         raise ValueError(

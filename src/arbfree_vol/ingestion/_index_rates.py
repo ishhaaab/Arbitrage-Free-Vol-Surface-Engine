@@ -157,3 +157,82 @@ def _get_representative_dividend_yield(symbol: str) -> float | None:
             symbol, rep, exc_info=True,
         )
     return None
+
+
+def estimate_index_dividend_yields(
+    slices: list[ExpirySlice],
+    spot: float,
+    r: float,
+    symbol: str,
+) -> float:
+    """Per-expiry put-call-parity q for index slices, with ETF fallback.
+
+    Mutates each slice's ``div_yield`` where parity estimation succeeds and
+    returns the surface-level q (median of parity estimates, else the
+    representative ETF yield, else 0.0).  Logs mixed-quality provenance.
+    """
+    from statistics import median as _median
+
+    per_slice_qs: list[float] = []
+    parity_slices: list[float] = []
+    failed_parity_slices: list[float] = []
+    for sl in slices:
+        q_est = _estimate_index_dividend_yield(sl, spot, r)
+        if q_est is not None:
+            sl.div_yield = q_est
+            per_slice_qs.append(q_est)
+            parity_slices.append(sl.expiry_time)
+        else:
+            failed_parity_slices.append(sl.expiry_time)
+
+    q = 0.0
+    if per_slice_qs:
+        q = _median(per_slice_qs)
+    else:
+        rep_q = _get_representative_dividend_yield(symbol)
+        if rep_q is not None:
+            q = rep_q
+        # else q stays at 0.0 from the initial assignment
+
+    # Visibility only — no value changes.  Report which slices got a
+    # genuine per-expiry parity q and which fell back to the
+    # surface-level q, and where that surface q came from, so a mixed
+    # q-quality surface is never silent.
+    if failed_parity_slices and per_slice_qs:
+        _logger.warning(
+            "Index %s: q quality is MIXED across slices — %d/%d used "
+            "per-expiry put-call parity q (%s); %d/%d used the "
+            "surface-level q (median of parity estimates, q=%.6f) "
+            "(%s)",
+            symbol, len(parity_slices), len(slices), parity_slices,
+            len(failed_parity_slices), len(slices), q,
+            failed_parity_slices,
+        )
+    elif not per_slice_qs:
+        if q != 0.0:
+            _logger.warning(
+                "Index %s: put-call parity q failed for all %d slices; "
+                "surface q from representative ETF yield (q=%.6f)",
+                symbol, len(slices), q,
+            )
+        elif rep_q is not None:
+            # The representative yield was PRESENT and observed as
+            # zero (the helper itself logs the observed-zero
+            # provenance).  This branch must not claim the yield was
+            # unavailable — an observed zero is an observation, not
+            # a substitution.
+            _logger.warning(
+                "Index %s: put-call parity q failed for all %d slices; "
+                "representative ETF yield observed as zero; surface "
+                "q=0.0 as observed",
+                symbol, len(slices),
+            )
+        else:
+            _logger.warning(
+                "Index %s: put-call parity q failed for all %d slices "
+                "and no representative ETF yield available; surface q "
+                "hardcoded to 0.0",
+                symbol, len(slices),
+            )
+
+    return q
