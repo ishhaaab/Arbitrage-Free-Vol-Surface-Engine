@@ -1,6 +1,8 @@
 from math import log, sqrt
 from statistics import mean
 import logging
+from enum import Enum, auto
+from dataclasses import dataclass
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.models.option import OptionType
@@ -136,6 +138,60 @@ def _fit_slice(sl: ExpirySlice,
     )
 
 
+class _PrepStatus(Enum):
+    OK = auto()
+    NO_FORWARD = auto()
+    TOO_FEW = auto()
+
+
+@dataclass(frozen=True)
+class _SlicePrep:
+    status: _PrepStatus
+    expiry_time: float
+    forward: float | None = None
+    points: tuple[tuple[float, float], ...] = ()
+
+
+def _prepare_slice(
+    sl: ExpirySlice,
+    surface: VolSurface,
+    fwd_curve: dict[float, float],
+    path: str,
+) -> _SlicePrep:
+    """Shared per-slice prep for all three repair paths.
+
+    Applies the identical bookkeeping semantics each path used to
+    implement inline: a slice with no forward estimate is a FAILURE
+    (recorded by the caller in its failed list), a slice with fewer
+    than 5 (k, w) points is a SKIP (neither fitted nor recorded),
+    and the forward check wins over the point-count check.  ``path``
+    is the model name used in the no-forward warning (``"SVI"``,
+    ``"eSSVI"``, ``"SABR"``) so the per-path log text is preserved.
+    """
+    F = fwd_curve.get(sl.expiry_time)
+    if F is None:
+        _logger.warning(
+            "%s path: no forward estimate for slice T=%.4f; "
+            "slice recorded as failed",
+            path, sl.expiry_time,
+        )
+        return _SlicePrep(_PrepStatus.NO_FORWARD, sl.expiry_time)
+
+    strike_w = slice_total_variance(surface, sl)
+    if len(strike_w) < 5:
+        _logger.warning(
+            "slice T=%.4f has %d (k,w) points — need >= 5; skipping",
+            sl.expiry_time, len(strike_w),
+        )
+        return _SlicePrep(_PrepStatus.TOO_FEW, sl.expiry_time)
+
+    pts = sorted(
+        (log(strike / F), w)
+        for strike, w in strike_w.items()
+    )
+    return _SlicePrep(_PrepStatus.OK, sl.expiry_time, forward=F, points=tuple(pts))
+
+
 def _repair_svi(
     cleaned_surface: VolSurface,
     fwd_curve: dict[float, float],
@@ -154,17 +210,15 @@ def _repair_svi(
 
     prev_svi: SVIParams | None = None
     for sl in sorted_slices:
-        F= fwd_curve.get(sl.expiry_time)
-        if F is None:
-            _logger.warning(
-                "SVI path: no forward estimate for slice T=%.4f; "
-                "slice recorded as failed",
-                sl.expiry_time,
-            )
-            failed_slices.append(sl.expiry_time)
+        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "SVI")
+        if prep.status is _PrepStatus.NO_FORWARD:
+            failed_slices.append(prep.expiry_time)
             continue
+        if prep.status is _PrepStatus.TOO_FEW:
+            continue
+        assert prep.forward is not None
         try:
-            fs= _fit_slice(sl, F, cleaned_surface, prev_slice=prev_svi)
+            fs= _fit_slice(sl, prep.forward, cleaned_surface, prev_slice=prev_svi)
         except RuntimeError as exc:
             # Honest bookkeeping: a slice whose calibration fails
             # entirely is recorded in failed_slices (mirroring the
@@ -221,30 +275,15 @@ def _repair_essvi(
     slice_meta: list[tuple[ExpirySlice, float]] = []  # (sl, F)
     no_forward_slices: list[float] = []  # expiries with no forward estimate
     for sl in sorted_slices:
-        F = fwd_curve.get(sl.expiry_time)
-        if F is None:
-            _logger.warning(
-                "eSSVI path: no forward estimate for slice T=%.4f; "
-                "slice recorded as failed",
-                sl.expiry_time,
-            )
-            no_forward_slices.append(sl.expiry_time)
+        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "eSSVI")
+        if prep.status is _PrepStatus.NO_FORWARD:
+            no_forward_slices.append(prep.expiry_time)
             continue
-        strike_w = slice_total_variance(cleaned_surface, sl)
-        if len(strike_w) < 5:
-            _logger.warning(
-                "slice T=%.4f has %d (k,w) points — need >= 5; "
-                "skipping SSVI fit",
-                sl.expiry_time, len(strike_w),
-            )
+        if prep.status is _PrepStatus.TOO_FEW:
             continue
-        pts = [
-            (log(strike / F), w)
-            for strike, w in strike_w.items()
-        ]
-        pts.sort()
-        slices_data.append((sl.expiry_time, pts))
-        slice_meta.append((sl, F))
+        assert prep.forward is not None
+        slices_data.append((prep.expiry_time, list(prep.points)))
+        slice_meta.append((sl, prep.forward))
 
     if slices_data:
         seq_result = fit_ssvi_surface_sequential(slices_data)
@@ -360,30 +399,15 @@ def _repair_sabr(
     sabr_meta: list[tuple[ExpirySlice, float, int]] = []  # (sl, F, n_total)
 
     for sl in sorted_slices:
-        F = fwd_curve.get(sl.expiry_time)
-        if F is None:
-            _logger.warning(
-                "SABR path: no forward estimate for slice T=%.4f; "
-                "slice recorded as failed",
-                sl.expiry_time,
-            )
-            failed_slices.append(sl.expiry_time)
+        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "SABR")
+        if prep.status is _PrepStatus.NO_FORWARD:
+            failed_slices.append(prep.expiry_time)
             continue
-        strike_w = slice_total_variance(cleaned_surface, sl)
-        if len(strike_w) < 5:
-            _logger.warning(
-                "SABR term-structure: slice T=%.4f has %d (k,w) points — "
-                "need >= 5; skipping",
-                sl.expiry_time, len(strike_w),
-            )
+        if prep.status is _PrepStatus.TOO_FEW:
             continue
-        pts = [
-            (log(strike / F), w)
-            for strike, w in strike_w.items()
-        ]
-        pts.sort()
-        sabr_slices_data.append((sl.expiry_time, F, pts))
-        sabr_meta.append((sl, F, len(sl.quotes)))
+        assert prep.forward is not None
+        sabr_slices_data.append((prep.expiry_time, prep.forward, list(prep.points)))
+        sabr_meta.append((sl, prep.forward, len(sl.quotes)))
 
     if sabr_slices_data:
         try:
