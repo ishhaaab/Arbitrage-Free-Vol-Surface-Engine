@@ -1,5 +1,6 @@
 numpy>=1.26
 scipy>=1.11
+pandas>=2.0
 pydantic>=2.0
 pytest>=8.0
 ruff>=0.6

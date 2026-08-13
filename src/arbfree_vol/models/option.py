@@ -13,7 +13,7 @@ class OffendingQuote:
     """Structured reference to a quote flagged by an arb check.
 
     Used by the repair engine to map a violation back to the specific
-    quote(s) that should be rejected.  Lives in the kernel because
+    quote(s) that should be rejected.  Lives in models because
     both `arbitrage` and `repair` need it.
     """
     strike: float

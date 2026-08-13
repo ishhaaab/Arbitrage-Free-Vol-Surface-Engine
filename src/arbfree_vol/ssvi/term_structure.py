@@ -604,6 +604,11 @@ def verify_hm_condition(
 ) -> bool:
     """Check the Hendriks-Martini Prop 3.1 no-calendar-spread conditions.
 
+    These parameter conditions are NECESSARY AND SUFFICIENT for the
+    absence of calendar-spread arbitrage between two eSSVI slices (with
+    maturity-dependent rho) — see Hendriks & Martini (2019) Prop 3.1,
+    as restated in Corbetta et al. (2019), arXiv:1804.04924, Sec 2.2.
+
     Parameters
     ----------
     params_seq : list of SSVIParams
@@ -663,13 +668,13 @@ def verify_ssvi_calendar_free(
 ) -> bool:
     """Post-fit calendar-arbitrage verification on native eSSVI slices.
 
-    ``verify_hm_condition`` checks the Hendriks & Martini Prop 3.1
-    parameter conditions, which are necessary but not sufficient for
-    calendar-spread absence: a pair can satisfy theta/chi monotonicity
-    and the ``|ratio| <= 1`` bound yet still cross in the wings
-    (``w_{i+1}(k) < w_i(k)`` for some ``k``).  This function checks the
-    actual no-calendar-spread condition directly on the native SSVI
-    slices over a dense log-moneyness grid.
+    ``verify_hm_condition`` already certifies no-calendar-spread
+    absence in closed form (the Hendriks & Martini Prop 3.1 conditions
+    are necessary and sufficient).  This function is a DISCRETE NUMERIC
+    complement / defense-in-depth against optimizer or numerical error:
+    it directly evaluates ``w_{i+1}(k) >= w_i(k)`` on a dense
+    log-moneyness grid, catching any residual crossing that the
+    parameter check's tolerance might leave behind.
 
     Parameters
     ----------
