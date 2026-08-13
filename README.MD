@@ -1,37 +1,37 @@
 # arbfree-vol-surface
 
-A library that turns a messy option chain into a clean, arbitrage-aware implied volatility surface. Feed it raw quotes; get back a calibrated surface you can query for IV, Greeks, local vol, and PCA modes. Hard-constrained eSSVI slices satisfy the implemented Gatheral–Jacquier conditions and the grid-based calendar check; slices that fall back to an unconstrained per-slice fit are not arbitrage-free and are surfaced via `RepairReport.fallback_slices` / `repair_infeasible`.
+Turns a messy option chain into a clean implied vol surface that won't blow up exotic pricers. You give it raw quotes and it hands back a calibrated surface you can query for IV, Greeks, local vol, and PCA modes. The slices fit with hard-constrained eSSVI satisfy the Gatheral–Jacquier conditions and a grid-based calendar check. Slices that fall back to an unconstrained per-slice fit are not arbitrage-free; they get flagged in `RepairReport.fallback_slices` / `repair_infeasible` rather than passed off as clean.
 
-## The problem
+## Why this exists
 
-An implied vol surface is what the market is charging for convexity at every strike and every expiry. Exotic pricers, risk systems, and vol desks all lean on it.
+An implied vol surface is what the market charges for convexity at every strike and expiry. Exotic desks, risk systems, and basically anyone pricing something off vol depends on it being sane.
 
-Raw option quotes are noisy: bid/ask gaps, stale prints, crossed markets, illiquid strikes. Fit a surface straight to those quotes and it will break basic no-arbitrage conditions — put-call parity, monotonicity, butterfly, calendar, wide-spread. Before the surface is usable, someone has to clean the data, find the violations, and fit a smooth model. This project does all of that in one pipeline.
+Raw quotes are garbage though. Bid/ask gaps, stale prints, crossed markets, strikes nobody trades. Fit a surface straight to that mess and you'll violate put-call parity, monotonicity, butterfly, calendar, all the basic no-arb conditions. This library cleans the data, finds the violations, and fits a smooth model in one pass.
 
-## What it does
+## What it actually does
 
-Five stages:
+Five steps:
 
-1. **Clean the quotes.** Eight cleaning rules drop bad prices, crossed markets, wide spreads, and near-expiry options. A separate pre-ingestion liquidity filter (`data/quality.py`) removes low-open-interest / wide-spread strikes. Every rejected quote is kept with a reason, so you can see why it was dropped.
-2. **Detect arbitrage.** Five classic static-arbitrage checks: put-call parity, strike monotonicity, butterfly (convexity), calendar, and wide-spread.
-3. **Repair the surface.** Reject the offending quotes, estimate a forward price per expiry from the median of put-call parity pairs, then refit a smile model with a penalty term that pushes against arbitrage during calibration.
-4. **Query it.** The fitted surface answers `iv_at(strike, expiry)` and aggregates portfolio Greeks (delta, gamma, vega, theta, rho).
-5. **Build on it.** Downstream modules extract Dupire local vol and run PCA on a time series of surfaces to find the dominant ways the surface moves.
+1. Clean the quotes. Eight rules drop bad prices, crossed markets, wide spreads, and near-expiry contracts. There's also a pre-ingestion liquidity filter (`data/quality.py`) that removes low-open-interest and wide-spread strikes. Every rejected quote is kept with a reason, so you can see what got thrown out and why.
+2. Detect arbitrage. Five static checks: put-call parity, strike monotonicity, butterfly (convexity), calendar, and wide-spread.
+3. Repair. Reject the offending quotes, estimate a forward per expiry from the median of the put-call parity pairs, then refit a smile model with a penalty pushing against arbitrage during calibration.
+4. Query. The fitted surface gives you `iv_at(strike, expiry)` and portfolio Greeks (delta, gamma, vega, theta, rho).
+5. Build on it. Downstream modules pull Dupire local vol and run PCA over a time series of surfaces to find the dominant ways the surface moves.
 
-Three smile models are supported: raw SVI (Gatheral 2004), eSSVI (Gatheral-Jacquier 2014), and SABR (Hagan 2002). All three map back to a common SVI parameterization, so everything downstream works the same regardless of which you pick.
+Three smile models: raw SVI (Gatheral 2004), eSSVI (Gatheral–Jacquier 2014), and SABR (Hagan 2002). All three convert to a common SVI parameterization, so the rest of the pipeline doesn't care which you used.
 
 ## Quick start
 
 ```bash
-pytest tests/ -q                                              # the full test suite (expected XPASS tripwires are documented in the suite)
+pytest tests/ -q                                              # full test suite
 python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
-python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; use --symbol TICKER for others)
+python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; --symbol TICKER for others)
 python demo/ticker_compare/ticker_compare.py                  # live cross-ticker comparison, 3 plots (SPY/QQQ/IWM by default)
 ```
 
 ## Live showcase (SPY options)
 
-Run `python demo/yfinance/yfinance_demo.py --symbol SPY` to pull live SPY options, repair them with all three smile models, interpolate the fitted surface, extract Dupire local vol, compute portfolio Greeks, and produce the seven plots below.
+`python demo/yfinance/yfinance_demo.py --symbol SPY` pulls live SPY options, repairs them with all three models, interpolates the surface, extracts Dupire local vol, computes portfolio Greeks, and writes the seven plots below.
 
 ### 3D implied volatility surface
 
@@ -63,31 +63,31 @@ Run `python demo/yfinance/yfinance_demo.py --symbol SPY` to pull live SPY option
 
 ## How the modules fit
 
-- `models/` — typed boundary objects: `OptionContract`, `Quote`, `ExpirySlice`, `VolSurface`.
-- `pricing/` — Black-Scholes pricing, analytic Greeks, the implied-vol solver (Newton with a Brent fallback), and Dupire local vol.
-- `ingestion/` — Yahoo Finance fetcher (with real risk-free rates), a CSV loader, and the eight-rule cleaning layer.
-- `arbitrage/` — the static-arbitrage detectors, at the quote level and on the fitted SVI curves.
-- `svi/`, `ssvi/`, `sabr/` — the three smile models and their calibrators.
-- `repair/` — the orchestrator that cleans, detects, fits, and re-validates.
-- `surface/` — the fitted-surface query layer: `iv_at` and portfolio Greeks.
-- `dynamics.py` — SVD-based PCA on a time series of surfaces (no sklearn).
-- `viz/` — all the matplotlib plots.
+- `models/` typed boundary objects: `OptionContract`, `Quote`, `ExpirySlice`, `VolSurface`.
+- `pricing/` Black-Scholes pricing, analytic Greeks, the implied-vol solver (Newton with a Brent fallback), and Dupire local vol.
+- `ingestion/` Yahoo Finance fetcher (real risk-free rates), a CSV loader, and the eight-rule cleaning layer.
+- `arbitrage/` the static-arbitrage detectors, at the quote level and on the fitted SVI curves.
+- `svi/`, `ssvi/`, `sabr/` the three smile models and their calibrators.
+- `repair/` the orchestrator that cleans, detects, fits, and re-validates.
+- `surface/` the query layer: `iv_at` and portfolio Greeks.
+- `dynamics.py` SVD-based PCA over a surface time series (no sklearn).
+- `viz/` the matplotlib plots.
 
-## Design conventions
+## Design notes
 
-A few decisions are baked into the code:
+A few things baked into the code that are worth knowing:
 
-- **Pydantic at the edges, dataclasses inside.** Input and output types are validated Pydantic models. Everything in the hot path (Greeks, violations, fitted slices) is a frozen `@dataclass`. No Pydantic in the numerical loops.
-- **Report, don't raise.** Detection lists every violation in one pass instead of throwing on the first. Repair tells you what it couldn't fix instead of pretending it fixed everything.
-- **Median forward curve.** The per-expiry forward is the median of strike-level put-call parity estimates, not the mean, so one bad quote can't drag it around.
-- **Constrained calibration.** The raw-SVI fit objective adds a penalty for butterfly-arbitrage violations (eSSVI uses hard constraints; SABR uses a calendar soft penalty), so the model is steered away from impossible shapes instead of minimized blindly.
-- **Pluggable smile models.** `repair(use_ssvi=..., use_sabr=...)` switches models, and a `to_raw_svi_params()` adapter keeps the rest of the pipeline unchanged.
+- Pydantic at the edges, dataclasses inside. Inputs and outputs are validated Pydantic models. The hot path (Greeks, violations, fitted slices) uses frozen `@dataclass`. No Pydantic in the numerical loops.
+- Detection reports every violation in one pass instead of throwing on the first. Repair tells you what it couldn't fix instead of pretending it did.
+- The per-expiry forward is the median of the strike-level put-call parity estimates, not the mean, so a single bad quote can't yank it around.
+- Constrained calibration. The raw-SVI objective adds a penalty for butterfly violations (eSSVI uses hard constraints, SABR a calendar soft penalty), so the fit gets steered away from impossible shapes instead of minimized blind.
+- Pluggable models. `repair(use_ssvi=..., use_sabr=...)` swaps the model, and `to_raw_svi_params()` keeps everything downstream unchanged.
 
-## What's done, and what isn't
+## Status
 
-The core engine is built and tested: ingestion, cleaning, the five static-arbitrage checks, three smile models, the repair loop, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery — with the expected XPASS tripwires documented in the suite, and it grows with the codebase.
+The core engine is built and tested: ingestion, cleaning, the five arbitrage checks, three smile models, repair, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery, and it grows with the codebase.
 
-This is not a production service yet. There's no CLI, no REST API, no database, and no dashboard. Visualization is static PNGs. The raw-SVI path is not arbitrage-free by construction; the eSSVI path is, but only in the implemented sense — slices that fit within the H&M hard constraints AND pass the grid-based calendar check are certified, while slices that fall back to an unconstrained per-slice fit are surfaced via `RepairReport.fallback_slices` / `repair_infeasible` rather than certified. SABR is fit as a comparison model, not as an arb-free construction, so its residuals are reported rather than eliminated. And it's demonstrated on a handful of US equities and ETFs (SPY by default; QQQ, AAPL, MSFT, NVDA also work via `--symbol`). See `demo/ticker_compare/` for a side-by-side comparison across multiple tickers. European options only.
+It's not a production service. No CLI, no REST API, no database, no dashboard. Plots are static PNGs. The raw-SVI path is not arbitrage-free by construction; eSSVI is, but only in the sense that slices fitting within the H&M hard constraints and passing the grid-based calendar check get certified, while fallback slices get surfaced through `RepairReport.fallback_slices` / `repair_infeasible`. SABR is fit as a comparison model, not an arb-free construction, so its residuals are reported rather than eliminated. Demonstrated on a handful of US equities and ETFs (SPY default; QQQ, AAPL, MSFT, NVDA via `--symbol`). See `demo/ticker_compare/`. European options only.
 
 ## Roadmap
 
