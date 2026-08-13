@@ -348,7 +348,15 @@ def detect_with_forward(surface:VolSurface) -> ArbitrageReport:
 
     Recommended for real market data (yfinance, CBOE, etc.).
     Synthetic / test data can safely use ``detect()``.
+
+    Does NOT mutate the input surface: it operates on a deep copy,
+    and the forward-implied per-slice rate is a detection-time
+    correction only.
     """
+    # Work on a deep copy so the caller's surface is never mutated:
+    # populate_per_slice_r writes the forward-implied per-slice risk-free
+    # rate into each slice, which is a detection-time correction only.
+    surface = surface.model_copy(deep=True)
     fwd_curve = estimate_forward_curve(surface)
     populate_per_slice_r(surface, fwd_curve)
 
