@@ -38,14 +38,18 @@ References
    SSVI slices", arXiv:1804.04924, Sec 2.2-2.3.
 .. [GJ14] Gatheral, J. & Jacquier, A. (2014). "Arbitrage-free SVI
    volatility surfaces", Quant. Finance 14(1), 59-71.
+
+Module layout
+-------------
+This file holds the sequential fit pipeline and remains the public
+namespace; butterfly constraints live in ``_butterfly``, H&M margin
+helpers in ``_hm_margin``, post-fit verifiers in ``_hm_verify``.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from math import sqrt
-from statistics import mean
 
 import numpy as np
 from numpy.typing import NDArray
@@ -56,44 +60,30 @@ from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 _logger = logging.getLogger(__name__)
 
-# Margin applied to the two STRICT Gatheral-Jacquier condition-1
-# residuals.  GJ (2014) Theorem 4.2 makes condition 1 STRICT
-# (``theta*psi*(1+|rho|) < 4``) while condition 2 is non-strict
-# (``theta*psi^2*(1+|rho|) <= 4``).  scipy optimizer constraints are
-# closed sets — a bare ``> 0`` cannot be expressed, so an exact equality
-# with the condition-1 boundary would be accepted as feasible.  We
-# approximate the paper's strictness by requiring a small positive
-# margin (>= this eps) on the two condition-1 residuals in
-# ``_butterfly_constraints``.
-#
-# This is an ALIAS of the canonical ``_GJ_STRICT_EPS`` defined once in
-# ``ssvi/model.py`` — the production constraint path and the public
-# strict-mode diagnostic ``gatheral_jacquier_condition(strict=True)``
-# share one constant and can never diverge.
-_GJ_CONDITION1_STRICT_EPS: float = _GJ_STRICT_EPS
-
-# Floors applied to the two Hendriks-Martini calendar constraints in
-# ``_fit_slice`` (non-decreasing theta, non-decreasing chi).  Hoisted to
-# named module constants so the post-fit H&M margin check below can
-# reference the same eps values it must sit 10x away from.
-_EPS_THETA: float = 1e-9
-_EPS_CHI: float = 1e-6
-
-# ── Post-fit margin check for degenerate H&M boundary corners (m66) ──
-# docs/code_review_findings.md §6.7: a hard eSSVI fit can converge to a
-# feasible-but-wrong corner pinned exactly ON the H&M Prop 3.1 boundary
-# (theta_delta = eps_theta, chi_delta = eps_chi, ratio ~ 1.0) with an
-# anomalously bad per-slice RMSE, and the optimizer reports it as a
-# successful certified arb-free fit.  Measured m66 corner (mutmut_66 /
-# the dip fixture): theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
-# ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
-# These thresholds are provisional and pending review — see
-# docs/code_review_findings.md §6.7 "Proposed fix direction".
-_HM_BOUNDARY_MARGIN_THETA: float = 1e-8   # 10x eps_theta
-_HM_BOUNDARY_MARGIN_CHI: float = 1e-5     # 10x eps_chi
-_HM_BOUNDARY_MARGIN_RATIO: float = 1e-3
-_HM_RMSE_RATIO_MAX: float = 5.0
-_HM_RMSE_FLOOR: float = 1e-9
+# Re-exports preserving the pre-split import surface: the pure leaf
+# helpers now live in the private sibling modules below, and importing
+# them from ``term_structure`` keeps every existing ``from
+# arbfree_vol.ssvi.term_structure import ...`` call site working
+# unchanged.
+from arbfree_vol.ssvi._butterfly import _GJ_CONDITION1_STRICT_EPS, _butterfly_constraints
+from arbfree_vol.ssvi._hm_margin import (
+    _EPS_THETA,
+    _EPS_CHI,
+    _HM_BOUNDARY_MARGIN_THETA,
+    _HM_BOUNDARY_MARGIN_CHI,
+    _HM_BOUNDARY_MARGIN_RATIO,
+    _HM_RMSE_RATIO_MAX,
+    _HM_RMSE_FLOOR,
+    _slice_rmse,
+    _hm_boundary_deltas,
+    _within_boundary_window,
+)
+from arbfree_vol.ssvi._hm_verify import (
+    verify_hm_condition,
+    verify_ssvi_calendar_free,
+    verify_hm_condition_breakdown,
+    _hm_breakdown_entry,
+)
 
 
 @dataclass
@@ -126,41 +116,6 @@ class SequentialFitResult:
     fallback_slices: list[float]
     failed_slices: list[float]
     fitted_slices_prev: list[float | None] = field(default_factory=list)
-
-
-def _butterfly_constraints(
-    theta: float, rho: float, p: float,
-) -> NDArray[np.float64]:
-    """Return the four Gatheral-Jacquier butterfly residual values.
-
-    Each residual is  ``4 - lhs >= 0``  for a safe slice.  The four
-    values correspond to the smooth split of the two GJ bounds into
-    pairs using (1+rho) and (1-rho) instead of (1+|rho|):
-
-    .. math::
-        4 - \\theta\\,p\\,(1+\\rho) \\ge 0, \\quad
-        4 - \\theta\\,p\\,(1-\\rho) \\ge 0, \\\\
-        4 - \\theta\\,p^2\\,(1+\\rho) \\ge 0, \\quad
-        4 - \\theta\\,p^2\\,(1-\\rho) \\ge 0.
-
-    The first two residuals (linear in ``p``) are the smooth split of
-    Gatheral-Jacquier condition 1, ``theta*p*(1+|rho|) < 4``, which is
-    STRICT in Theorem 4.2; the last two (quadratic in ``p``) are the
-    split of condition 2, ``theta*p^2*(1+|rho|) <= 4``, which is
-    non-strict.  Because scipy constraints are closed sets (a bare
-    ``> 0`` cannot be expressed), the two condition-1 residuals are
-    shifted by ``_GJ_CONDITION1_STRICT_EPS`` so that an exact equality
-    with the condition-1 boundary is rejected as infeasible.  The two
-    condition-2 residuals are left unshifted — the boundary is allowed.
-
-    Reference: Gatheral & Jacquier (2014), Theorem 4.2.
-    """
-    return np.array([
-        4.0 - theta * p * (1.0 + rho) - _GJ_CONDITION1_STRICT_EPS,
-        4.0 - theta * p * (1.0 - rho) - _GJ_CONDITION1_STRICT_EPS,
-        4.0 - theta * p * p * (1.0 + rho),
-        4.0 - theta * p * p * (1.0 - rho),
-    ])
 
 
 def _initial_guess(
@@ -365,56 +320,6 @@ def _fit_slice(
         theta=float(theta),
         rho=float(np.tanh(u)),
         psi=float(np.exp(v)),
-    )
-
-
-def _slice_rmse(
-    params: SSVIParams, points: list[tuple[float, float]],
-) -> float:
-    """Root-mean-square total-variance error of ``params`` over ``points``.
-
-    ``sqrt(mean((ssvi_w(k, theta, rho, psi) - w)^2))`` over every
-    ``(k, w)`` in ``points``.  Used by the post-fit H&M margin check to
-    compare the hard-constrained fit's per-slice residual with the
-    unconstrained fit's baseline.
-    """
-    return sqrt(mean(
-        (ssvi_w(k, params.theta, params.rho, params.psi) - w) ** 2
-        for k, w in points
-    ))
-
-
-def _hm_boundary_deltas(
-    prev: SSVIParams, params: SSVIParams,
-) -> tuple[float, float, float]:
-    """Compute the H&M Prop 3.1 boundary deltas for a candidate hard fit.
-
-    Returns ``(theta_delta, chi_delta, ratio)`` where
-    ``theta_delta = theta - theta_prev``,
-    ``chi_delta = chi - chi_prev`` (``chi = theta * psi``) and
-    ``ratio = |rho*chi - rho_prev*chi_prev| / max(chi_delta, eps_chi)``.
-
-    Both the degenerate-corner predicate (:func:`_hard_fit_is_degenerate_corner`)
-    and its logging call site in ``fit_ssvi_surface_sequential`` must use
-    this single source of truth, so the decision and the log can never
-    disagree.
-    """
-    theta_delta = params.theta - prev.theta
-    chi_delta = params.theta * params.psi - prev.theta * prev.psi
-    ratio = abs(
-        params.rho * params.theta * params.psi
-        - prev.rho * prev.theta * prev.psi
-    ) / max(chi_delta, _EPS_CHI)
-    return theta_delta, chi_delta, ratio
-
-
-def _within_boundary_window(theta_delta: float, chi_delta: float,
-                            ratio: float) -> bool:
-    """True iff the hard fit sits within the H&M boundary margin window."""
-    return (
-        theta_delta <= _HM_BOUNDARY_MARGIN_THETA
-        and chi_delta <= _HM_BOUNDARY_MARGIN_CHI
-        and ratio >= 1.0 - _HM_BOUNDARY_MARGIN_RATIO
     )
 
 
@@ -640,259 +545,3 @@ def fit_ssvi_surface_sequential(
         failed_slices=failed,
         fitted_slices_prev=fitted_slices_prev,
     )
-
-
-def verify_hm_condition(
-    params_seq: list[SSVIParams],
-    *,
-    tol: float = 1e-8,
-) -> bool:
-    """Check the Hendriks-Martini Prop 3.1 no-calendar-spread conditions.
-
-    These parameter conditions are NECESSARY AND SUFFICIENT for the
-    absence of calendar-spread arbitrage between two eSSVI slices (with
-    maturity-dependent rho) — see Hendriks & Martini (2019) Prop 3.1,
-    as restated in Corbetta et al. (2019), arXiv:1804.04924, Sec 2.2.
-
-    Parameters
-    ----------
-    params_seq : list of SSVIParams
-        Ordered by ascending maturity.
-    tol : float
-        Numerical tolerance on the inequality checks.
-
-    Returns
-    -------
-    bool
-        ``True`` iff all three conditions hold within tolerance.
-
-    Conditions checked:
-
-    (a) theta non-decreasing  ``theta_i <= theta_{i+1} + tol``
-    (b) chi = theta*psi non-decreasing  ``chi_i <= chi_{i+1} + tol``
-    (c) For each adjacent pair:
-        ``| rho_{i+1}*chi_{i+1} - rho_i*chi_i | / max(chi_{i+1}-chi_i, tol)
-        <= 1 + tol``
-
-    Reference: Hendriks & Martini (2019), J. Comput. Finance 22(5),
-    Prop 3.1.
-    """
-    n = len(params_seq)
-    if n <= 1:
-        return True
-
-    chis = [p.theta * p.psi for p in params_seq]
-
-    for i in range(n - 1):
-        # (a) theta non-decreasing
-        if params_seq[i + 1].theta < params_seq[i].theta - tol:
-            return False
-
-        # (b) chi non-decreasing
-        if chis[i + 1] < chis[i] - tol:
-            return False
-
-        # (c) | rho_{i+1}*chi_{i+1} - rho_i*chi_i | / (chi_{i+1}-chi_i) <= 1
-        denom = chis[i + 1] - chis[i]
-        denom = max(denom, tol)
-        numerator = (
-            params_seq[i + 1].rho * chis[i + 1]
-            - params_seq[i].rho * chis[i]
-        )
-        if abs(numerator) / denom > 1.0 + tol:
-            return False
-
-    return True
-
-
-def verify_ssvi_calendar_free(
-    params_seq: list[SSVIParams],
-    *,
-    k_grid: NDArray[np.float64] | None = None,
-    tol: float = 1e-4,
-) -> bool:
-    """Post-fit calendar-arbitrage verification on native eSSVI slices.
-
-    ``verify_hm_condition`` already certifies no-calendar-spread
-    absence in closed form (the Hendriks & Martini Prop 3.1 conditions
-    are necessary and sufficient).  This function is a DISCRETE NUMERIC
-    complement / defense-in-depth against optimizer or numerical error:
-    it directly evaluates ``w_{i+1}(k) >= w_i(k)`` on a dense
-    log-moneyness grid, catching any residual crossing that the
-    parameter check's tolerance might leave behind.
-
-    Parameters
-    ----------
-    params_seq : list of SSVIParams
-        Ordered by ascending maturity.
-    k_grid : NDArray[np.float64], optional
-        Log-moneyness grid.  Defaults to ``linspace(-3, 3, 241)`` — the
-        same range the SABR-to-SVI mapping uses.
-    tol : float
-        Absolute tolerance on the total-variance gap (the codebase's de
-        facto arb tolerance of ``1e-4``).
-
-    Returns
-    -------
-    bool
-        ``True`` iff for every adjacent pair and every grid point
-        ``w_{i+1}(k) >= w_i(k) - tol``.
-
-    This is a discrete check: violations strictly between grid points or
-    beyond the grid are not certified.  It complements, not replaces,
-    ``verify_hm_condition``.
-    """
-    if params_seq is None or len(params_seq) < 2:
-        return True
-    if k_grid is None:
-        k_grid = np.linspace(-3.0, 3.0, 241)
-    for i in range(len(params_seq) - 1):
-        t1, r1, p1 = params_seq[i].theta, params_seq[i].rho, params_seq[i].psi
-        t2, r2, p2 = params_seq[i + 1].theta, params_seq[i + 1].rho, params_seq[i + 1].psi
-        for k in k_grid:
-            if ssvi_w(float(k), t1, r1, p1) - ssvi_w(float(k), t2, r2, p2) > tol:
-                return False
-    return True
-
-
-def _hm_breakdown_entry(
-    params: SSVIParams,
-    prev_params: SSVIParams,
-    slice_T: float,
-    prev_T: float,
-    tol: float,
-) -> dict:
-    """Build one H&M Prop 3.1 sub-condition breakdown dict.
-
-    Computes the theta/chi/rho·chi fields and the ratio condition for
-    ``params`` relative to ``prev_params``, returning the full dict
-    whose keys are pinned by ``verify_hm_condition_breakdown``'s
-    docstring.  When ``chi`` does not genuinely increase
-    (``chi_delta < tol``) the ratio is reported as undefined (``None``)
-    and never listed as a failing condition.
-    """
-    theta_self = params.theta
-    theta_prev = prev_params.theta
-    theta_ok = theta_self >= theta_prev - tol
-
-    chi_self = params.theta * params.psi
-    chi_prev = prev_params.theta * prev_params.psi
-    chi_ok = chi_self >= chi_prev - tol
-
-    rho_chi_self = params.rho * chi_self
-    rho_chi_prev = prev_params.rho * chi_prev
-
-    # The ratio condition |(rho*chi)'| / chi' <= 1 is only meaningful
-    # when chi genuinely increases.  When chi is flat or decreases the
-    # denominator is <= 0; clamping it to `tol` (the old behaviour)
-    # manufactured a huge, misleading ratio.  Report the ratio as
-    # undefined (None) in that case and never list it as a failing
-    # condition — a chi dip is the primary failure, and the ratio is a
-    # derived diagnostic, not an independent model violation.
-    chi_delta = chi_self - chi_prev
-    if chi_delta >= tol:
-        ratio_value = abs(rho_chi_self - rho_chi_prev) / chi_delta
-        ratio_ok = ratio_value <= 1.0 + tol
-    else:
-        ratio_value = None
-        ratio_ok = None
-
-    failing: list[str] = []
-    if not theta_ok:
-        failing.append("theta")
-    if not chi_ok:
-        failing.append("chi")
-    if ratio_ok is False:
-        failing.append("ratio")
-
-    return {
-        "slice_T": slice_T,
-        "prev_T": prev_T,
-        "theta_self": theta_self,
-        "theta_prev": theta_prev,
-        "theta_ok": theta_ok,
-        "chi_self": chi_self,
-        "chi_prev": chi_prev,
-        "chi_ok": chi_ok,
-        "rho_chi_self": rho_chi_self,
-        "rho_chi_prev": rho_chi_prev,
-        "ratio_value": ratio_value,
-        "ratio_ok": ratio_ok,
-        "failing_conditions": failing,
-    }
-
-
-def verify_hm_condition_breakdown(
-    fitted_slices: list[tuple[float, SSVIParams]],
-    fitted_prev_Ts: list[float | None] | None = None,
-    *,
-    tol: float = 1e-8,
-) -> list[dict]:
-    """Return per-fitted-slice H&M Prop 3.1 sub-condition breakdown.
-
-    For each fitted slice (except the first if no valid predecessor),
-    reports which of the three H&M sub-conditions fails relative to the
-    slice's actual predecessor in the calibration.
-
-    Parameters
-    ----------
-    fitted_slices : list of (T, SSVIParams)
-        Ordered by ascending T.  Typically ``SequentialFitResult.fitted_slices``.
-    fitted_prev_Ts : list of T | None, optional
-        The actual ``prev_T`` used in the calibration for each fitted slice.
-        If provided, must have the same length as ``fitted_slices``.
-        If ``None``, falls back to using the immediately preceding fitted
-        slice (legacy behavior — INCORRECT when there are consecutive
-        fallbacks, because ``fit_ssvi_surface_sequential`` does not
-        update ``last_valid_prev`` on fallback).
-    tol : float
-        Numerical tolerance on the inequality checks.
-
-    Returns
-    -------
-    list of dict, one per fitted slice with a valid ``prev``:
-        - "slice_T": float — T of this slice
-        - "prev_T": float — T of the actual predecessor
-        - "theta_self", "theta_prev": float
-        - "theta_ok": bool — True if theta_self >= theta_prev - tol
-        - "chi_self", "chi_prev": float — chi = theta * psi
-        - "chi_ok": bool — True if chi_self >= chi_prev - tol
-        - "rho_chi_self", "rho_chi_prev": float — rho * chi
-        - "ratio_value": float or None — |rho_chi_self - rho_chi_prev| /
-          (chi_self - chi_prev) when chi genuinely increases
-          (chi_delta >= tol); else None (undefined).  A flat or decreasing
-          chi makes the ratio denominator <= 0 — the old clamped-to-tol
-          denominator manufactured a huge, misleading ratio, so the value
-          is now reported as undefined instead.
-        - "ratio_ok": bool or None — True if ratio_value <= 1 + tol;
-          None when the ratio is undefined (chi not increasing)
-        - "failing_conditions": list of str — subset of {"theta", "chi",
-          "ratio"}.  "ratio" is listed ONLY when chi increases and the
-          slope condition fails — never as a derived consequence of a chi
-          dip (that is the "chi" failure).
-
-    Slices with no valid predecessor (``prev_T`` is None or not in the
-    fitted-slices dict) are skipped (not included in the output).
-    """
-    params_by_T: dict[float, SSVIParams] = {T: p for T, p in fitted_slices}
-    results: list[dict] = []
-
-    for i, (slice_T, params) in enumerate(fitted_slices):
-        # Determine the predecessor T
-        if fitted_prev_Ts is not None and i < len(fitted_prev_Ts):
-            prev_T = fitted_prev_Ts[i]
-        elif i > 0:
-            prev_T = fitted_slices[i - 1][0]
-        else:
-            prev_T = None
-
-        # Skip if no valid predecessor
-        if prev_T is None or prev_T not in params_by_T:
-            continue
-
-        results.append(
-            _hm_breakdown_entry(params, params_by_T[prev_T], slice_T, prev_T, tol)
-        )
-
-    return results
-
