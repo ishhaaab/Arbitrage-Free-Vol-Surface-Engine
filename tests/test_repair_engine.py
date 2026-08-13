@@ -738,6 +738,12 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
 # calibration fails entirely the same way the eSSVI path treats a total
 # fit failure: recorded in failed_slices, excluded from the fitted output,
 # and logged — never silently dropped.
+# Two expiries sharing one valid raw-SVI parameter set (a=0.04, b=0.4,
+# rho=-0.4, m=0.05, sigma=0.15).  The values themselves are not
+# load-bearing: they just need to produce a well-formed,
+# non-arbitrageable smile so the bookkeeping tests (failed-slice
+# recording, few-point skip) run on valid input.  Two expiries (0.25, 1.0)
+# let those tests assert per-slice accounting.
 _SVI_TRUTH_ENGINE = [
     (0.25, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
     (1.00, dict(a=0.04, b=0.4, rho=-0.4, m=0.05, sigma=0.15)),
