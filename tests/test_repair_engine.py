@@ -1156,6 +1156,7 @@ def test_prepare_slice_too_few_points() -> None:
 
     assert prep.status is engine_mod._PrepStatus.TOO_FEW
     assert prep.points == ()
+    assert prep.forward is None
 
 
 def test_prepare_slice_no_forward_takes_precedence() -> None:
