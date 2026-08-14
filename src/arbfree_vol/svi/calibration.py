@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from math import sqrt
 
 from arbfree_vol.svi.model import SVIParams, svi_total_variance, svi_g
@@ -27,6 +28,101 @@ _WARM_START_MAX_NFEV = 150
 def _min_total_variance(a: float, b: float, rho: float, sigma: float) -> float:
     """Minimum total variance of the SVI curve: a + b * sigma * sqrt(1 - rho^2)."""
     return a + b * sigma * sqrt(1.0 - rho * rho)
+
+
+def _penalty_term(pen: float, value: float) -> float:
+    """One smooth-penalty residual: ``sqrt(arb_penalty) * sqrt(max(value, 0))``."""
+    return pen * sqrt(max(value, 0.0))
+
+
+def _build_residuals(
+    points: list[tuple[float, float]],
+    k_grid: np.ndarray,
+    sqrt_pen: float,
+    prev_slice: SVIParams | None,
+) -> Callable[[np.ndarray], list[float]]:
+    """Return the augmented residual vector for constrained SVI fitting.
+
+    Concatenates the data-fit residuals with three penalty groups:
+    butterfly (``g(k) < 0``), minimum total variance (``< 0``), and —
+    when ``prev_slice`` is supplied — calendar (``w(k) < w_prev(k)``).
+    Each penalty term is zero whenever its constraint holds, so a fully
+    feasible fit reduces to the standard ``calibrate()`` objective.
+    """
+    def residuals(p):
+        a, b, rho, m, sigma = p
+
+        # ----- data fit -----
+        data_res = [svi_total_variance(k, a, b, rho, m, sigma) - w for k, w in points]
+
+        # ----- butterfly (g(k) >= 0) penalty on the fixed k-grid -----
+        arb_res = [
+            _penalty_term(sqrt_pen, -svi_g(k, a, b, rho, m, sigma))
+            for k in k_grid
+        ]
+
+        # ----- min-variance penalty (w_min >= 0) -----
+        w_min = _min_total_variance(a, b, rho, sigma)
+        min_var_res = [_penalty_term(sqrt_pen, -w_min)]
+
+        # ----- calendar penalty: w(k) >= w_prev(k) for all k on grid -----
+        # Only added when a previous fitted slice is supplied.  Penalises
+        # the current slice's total variance dipping below the previous
+        # (shorter-T) slice's at any k, which is calendar arbitrage.
+        if prev_slice is not None:
+            cal_res = [
+                _penalty_term(
+                    sqrt_pen,
+                    svi_total_variance(k, prev_slice.a, prev_slice.b,
+                                       prev_slice.rho, prev_slice.m,
+                                       prev_slice.sigma)
+                    - svi_total_variance(k, a, b, rho, m, sigma),
+                )
+                for k in k_grid
+            ]
+        else:
+            cal_res = []
+
+        return data_res + arb_res + min_var_res + cal_res
+
+    return residuals
+
+
+def _run_multistart(
+    residuals: Callable[[np.ndarray], list[float]],
+    starts: list[list[float]],
+    bounds,
+):
+    """Run ``least_squares`` from each start and return the best result.
+
+    Only successful, finite-cost runs are eligible: a failed run can
+    otherwise win on a spuriously low residual cost and mask a valid
+    successful start.  A start whose residual vector is non-finite at its
+    initial point makes ``least_squares`` raise ``ValueError``; that start
+    is treated as a failed start (never crashing the repair pipeline),
+    mirroring the ``RuntimeError`` path.  Returns ``(best, last_failure)``
+    where ``best`` is ``None`` if every start failed.
+    """
+    best = None
+    best_cost = float("inf")
+    last_failure = None
+    for x0 in starts:
+        try:
+            result = least_squares(residuals, x0, bounds=bounds, max_nfev=5000)
+        except ValueError as exc:
+            # An unevaluable start (non-finite residuals at x0) is a
+            # failed start, not a crash — live SPY produced extreme
+            # warm-start params (b ~ 30, rho ~ 0.997) that triggered this.
+            last_failure = exc
+            continue
+        if not result.success:
+            last_failure = result
+            continue
+        cost = float(np.sum(np.square(result.fun)))
+        if np.isfinite(cost) and cost < best_cost:
+            best_cost = cost
+            best = result
+    return best, last_failure
 
 
 def calibrate(points: list[tuple[float,float]],
@@ -88,43 +184,9 @@ def calibrate_constrained(
     if len(points) < 5:
         raise ValueError("need at least 5 points to fit SVI")
 
-    def residuals(p):
-        a, b, rho, m, sigma = p
-
-        # ----- data fit -----
-        data_res = [svi_total_variance(k, a, b, rho, m, sigma) - w for k, w in points]
-
-        # ----- butterfly (g(k) >= 0) penalty on a fixed k-grid -----
-        k_grid = np.linspace(k_min, k_max, n_k)
-        sqrt_pen = sqrt(arb_penalty)
-        arb_res = [
-            sqrt_pen * sqrt(max(-svi_g(k, a, b, rho, m, sigma), 0.0))
-            for k in k_grid
-        ]
-
-        # ----- min-variance penalty (w_min >= 0) -----
-        w_min = _min_total_variance(a, b, rho, sigma)
-        min_var_res = [sqrt_pen * sqrt(max(-w_min, 0.0))]
-
-        # ----- calendar penalty: w(k) >= w_prev(k) for all k on grid -----
-        # Only added when a previous fitted slice is supplied.  Penalises
-        # the current slice's total variance dipping below the previous
-        # (shorter-T) slice's at any k, which is calendar arbitrage.
-        if prev_slice is not None:
-            cal_res = [
-                sqrt_pen * sqrt(max(
-                    svi_total_variance(k, prev_slice.a, prev_slice.b,
-                                       prev_slice.rho, prev_slice.m,
-                                       prev_slice.sigma)
-                    - svi_total_variance(k, a, b, rho, m, sigma),
-                    0.0,
-                ))
-                for k in k_grid
-            ]
-        else:
-            cal_res = []
-
-        return data_res + arb_res + min_var_res + cal_res
+    k_grid = np.linspace(k_min, k_max, n_k)
+    sqrt_pen = sqrt(arb_penalty)
+    residuals = _build_residuals(points, k_grid, sqrt_pen, prev_slice)
 
     bounds = ([-np.inf, 0, -0.999, -np.inf, 1e-6], [np.inf, np.inf, 0.999, np.inf, np.inf])
 
@@ -149,35 +211,11 @@ def calibrate_constrained(
         starts.append([unconstrained.a, unconstrained.b, unconstrained.rho,
                        unconstrained.m, unconstrained.sigma])
     except (ValueError, RuntimeError):
+        # Warm start is best-effort: skip it if the unconstrained fit
+        # fails, rather than aborting the constrained multi-start.
         pass
 
-    # Only successful, finite-cost runs are eligible: a failed run can
-    # otherwise win on a spuriously low residual cost and mask a valid
-    # successful start.
-    best = None
-    best_cost = float("inf")
-    last_failure = None
-    for x0 in starts:
-        try:
-            result = least_squares(residuals, x0, bounds=bounds, max_nfev=5000)
-        except ValueError as exc:
-            # A start whose constrained residual vector is non-finite at
-            # the initial point cannot even be evaluated (scipy raises
-            # ValueError).  Seen on live market data where the
-            # unconstrained warm start converged to extreme parameters
-            # (e.g. b ~ 30, rho ~ 0.997).  Such a start is useless —
-            # treat it as a failed start rather than crashing the whole
-            # repair pipeline.  Not a RuntimeError, so _fit_slice's
-            # except RuntimeError would not otherwise catch it.
-            last_failure = exc
-            continue
-        if not result.success:
-            last_failure = result
-            continue
-        cost = float(np.sum(np.square(result.fun)))
-        if np.isfinite(cost) and cost < best_cost:
-            best_cost = cost
-            best = result
+    best, last_failure = _run_multistart(residuals, starts, bounds)
 
     if best is None:
         # All starts failed — report the message from the first failed
