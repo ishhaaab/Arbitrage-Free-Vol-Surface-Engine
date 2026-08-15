@@ -233,3 +233,25 @@ def test_clamp_to_sabr_domain_boundary_inputs() -> None:
                    nu=clamp_to_sabr_domain("nu", 0.0))
     assert p.rho < 0.999
     assert p.alpha > 0 and p.nu > 0
+
+
+def test_default_k_grid_is_center_weighted() -> None:
+    """The SABR->SVI mapping grid is center-weighted: 200 points spanning
+    [-3, 3], with 100 UNIQUE points in the traded-moneyness band k in
+    [-1, 1].
+
+    The concatenated segments duplicate the band boundaries (-1.0 ends
+    the first wing segment and 1.0 starts the last), so the inclusive
+    count in the band is 102 while the unique count is 100 — the
+    documented 100/200 center weighting (see ``_DEFAULT_K_GRID``).
+    """
+    from arbfree_vol.sabr import model as sabr_model
+
+    grid = sabr_model._DEFAULT_K_GRID
+
+    assert len(grid) == 200
+    assert grid[0] == -3.0
+    assert grid[-1] == 3.0
+    band = grid[(grid >= -1.0) & (grid <= 1.0)]
+    assert len(band) == 102  # -1.0 and 1.0 each duplicated by a wing segment
+    assert len(np.unique(band)) == 100  # the documented center weighting

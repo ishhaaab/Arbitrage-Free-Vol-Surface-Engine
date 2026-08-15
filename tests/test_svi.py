@@ -135,3 +135,32 @@ def test_calibrate_constrained_better_than_unconstrained_on_noisy_input() -> Non
 def test_calibrate_constrained_raises_with_too_few_points() -> None:
     with pytest.raises(ValueError):
         calibrate_constrained([(-0.1, 0.05), (0.0, 0.04), (0.1, 0.05)])
+
+
+def test_calibrate_constrained_warm_start_budget_capped(monkeypatch) -> None:
+    """The constrained multi-start's warm-start fit runs under the capped
+    evaluation budget ``_WARM_START_MAX_NFEV`` (150).
+
+    The warm start is a best-effort seed: it must converge fast on
+    clean/synthetic data but fail fast on real 100+ point slices instead
+    of burning scipy's default budget.  The cap is pinned here so a
+    future re-tuning of the constant is a deliberate, tested change.
+    """
+    from arbfree_vol.svi import calibration as calib_mod
+
+    assert calib_mod._WARM_START_MAX_NFEV == 150
+
+    calls = {}
+
+    def _fake_calibrate(points, max_nfev=None):
+        calls["max_nfev"] = max_nfev
+        # A valid arbitrage-free-ish param set; the constrained multi-start
+        # still runs real least_squares, which is the existing test path.
+        return SVIParams(a=0.04, b=0.1, rho=-0.3, m=0.0, sigma=0.2)
+
+    monkeypatch.setattr(calib_mod, "calibrate", _fake_calibrate)
+
+    points = _points_from(TRUE_FLAT, np.linspace(-0.4, 0.4, 9))
+    calibrate_constrained(points)
+
+    assert calls["max_nfev"] == calib_mod._WARM_START_MAX_NFEV == 150
