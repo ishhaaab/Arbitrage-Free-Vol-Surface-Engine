@@ -688,12 +688,12 @@ def test_repair_svi_reports_slice_with_no_fit(monkeypatch) -> None:
     Mirrors ``test_repair_essvi_reports_slice_with_no_fit`` for the
     default (raw SVI) path.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.svi as svi_strategies
 
     def _raise(*args, **kwargs):
         raise RuntimeError("simulated calibration failure")
 
-    monkeypatch.setattr(engine_mod, "calibrate_constrained", _raise)
+    monkeypatch.setattr(svi_strategies, "calibrate_constrained", _raise)
 
     report = repair(_svi_priced_surface(_SVI_TRUTH_ENGINE))
 
@@ -739,12 +739,12 @@ def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
     ``fit_sabr_term_structure`` silently returned SABRParams(0.2, 0.5,
     0.0, 0.3) that flowed into fitted_sabr_slices as if fitted.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     def _raise(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure", _raise)
+    monkeypatch.setattr(sabr_strategies, "fit_sabr_term_structure", _raise)
 
     expiries = [0.25, 0.5, 1.0]
     surface = _flat_bs_surface(expiries)
@@ -770,7 +770,7 @@ def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:
     SABR->SVI mapping are stubbed so the test stays fast and
     deterministic — the prep/booking logic is what is being pinned.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     surface = _flat_bs_surface([0.25, 1.0])
     # Shrink the T=1.0 slice to 4 quotes (2 strikes -> 2 (k,w) points)
@@ -781,11 +781,11 @@ def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        engine_mod, "fit_sabr_term_structure",
+        sabr_strategies, "fit_sabr_term_structure",
         lambda slices_data: [SABRParams(alpha=0.1, beta=0.5, rho=0.0, nu=0.5)],
     )
     monkeypatch.setattr(
-        engine_mod, "sabr_to_raw_svi_params",
+        sabr_strategies, "sabr_to_raw_svi_params",
         lambda *args: (0.04, 0.4, -0.4, 0.0, 0.1),
     )
 
@@ -842,7 +842,7 @@ def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
     it.  fallback_slices and failed_slices must stay empty — the fit
     succeeded; it is the certification that must fail.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.essvi as essvi_strategies
     from arbfree_vol.ssvi.model import SSVIParams
     from arbfree_vol.ssvi.term_structure import SequentialFitResult
 
@@ -860,7 +860,7 @@ def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
         return fake_result
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(engine_mod, "fit_ssvi_surface_sequential", _fake_sequential)
+    monkeypatch.setattr(essvi_strategies, "fit_ssvi_surface_sequential", _fake_sequential)
 
     try:
         report = repair(
@@ -891,7 +891,7 @@ def test_sabr_mapping_success_records_slices_in_fitted_outputs(monkeypatch) -> N
     ValueError mapping raises), which together replace the old
     all-succeeded-or-all-failed conditional pair.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     expiries = [0.25, 0.5, 1.0]
     params = [SABRParams(alpha=0.1, beta=0.5, rho=0.0, nu=0.5)
@@ -901,9 +901,9 @@ def test_sabr_mapping_success_records_slices_in_fitted_outputs(monkeypatch) -> N
         # Valid raw-SVI tuple (a, b, rho, m, sigma).
         return (0.04, 0.4, -0.4, 0.0, 0.1)
 
-    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
+    monkeypatch.setattr(sabr_strategies, "fit_sabr_term_structure",
                         lambda slices_data: params)
-    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _cheap_mapping)
+    monkeypatch.setattr(sabr_strategies, "sabr_to_raw_svi_params", _cheap_mapping)
 
     report = repair(_flat_bs_surface(expiries), use_sabr=True)
 
@@ -949,13 +949,13 @@ def test_sabr_mapping_real_optimizer_accounts_for_every_slice(monkeypatch) -> No
     the optimizer outcome — the accounting invariant must hold no matter
     which branch the optimizer takes.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     expiries = [0.25, 0.5, 1.0]
     adversarial = [SABRParams(alpha=3.0, beta=0.5, rho=0.995, nu=0.2)
                    for _ in expiries]
 
-    monkeypatch.setattr(engine_mod, "fit_sabr_term_structure",
+    monkeypatch.setattr(sabr_strategies, "fit_sabr_term_structure",
                         lambda slices_data: adversarial)
 
     report = repair(_flat_bs_surface(expiries), use_sabr=True)
@@ -995,14 +995,14 @@ def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
     path that keeps repair() usable when some future real slice exceeds
     even the raised budget.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     expiries = [0.25, 0.5, 1.0]
 
     def _raise_mapping(*args, **kwargs):
         raise RuntimeError("mapping boom")
 
-    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _raise_mapping)
+    monkeypatch.setattr(sabr_strategies, "sabr_to_raw_svi_params", _raise_mapping)
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
         report = repair(_flat_bs_surface(expiries), use_sabr=True)
@@ -1030,14 +1030,14 @@ def test_sabr_mapping_wrap_records_failed_slices_on_value_error(caplog, monkeypa
     recorded in ``sabr_mapping_failed_slices`` — same honest bookkeeping
     as the RuntimeError path.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     expiries = [0.25, 0.5, 1.0]
 
     def _raise_value_error(*args, **kwargs):
         raise ValueError("array must not contain infs or NaNs")
 
-    monkeypatch.setattr(engine_mod, "sabr_to_raw_svi_params", _raise_value_error)
+    monkeypatch.setattr(sabr_strategies, "sabr_to_raw_svi_params", _raise_value_error)
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
         report = repair(_flat_bs_surface(expiries), use_sabr=True)
@@ -1194,14 +1194,14 @@ def test_repair_sabr_records_slice_with_no_forward(caplog, monkeypatch) -> None:
 
 def test_prepare_slice_ok() -> None:
     """A well-formed slice preps to OK with sorted (k, w) points."""
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies as strategies_mod
 
     surface = _clean_surface(n_strikes=7)
     fwd_curve = {T: SPOT}
 
-    prep = engine_mod._prepare_slice(surface.slices[0], surface, fwd_curve, "SVI")
+    prep = strategies_mod._prepare_slice(surface.slices[0], surface, fwd_curve, "SVI")
 
-    assert prep.status is engine_mod._PrepStatus.OK
+    assert prep.status is strategies_mod._PrepStatus.OK
     assert prep.forward == SPOT
     assert len(prep.points) == 7
     ks = [k for k, _ in prep.points]
@@ -1212,14 +1212,14 @@ def test_prepare_slice_ok() -> None:
 def test_prepare_slice_no_forward_warning_text(path, caplog) -> None:
     """The no-forward warning byte-format is shared across the three paths
     (three end-to-end tests assert these exact strings)."""
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies as strategies_mod
 
     surface = _clean_surface(n_strikes=7)
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
-        prep = engine_mod._prepare_slice(surface.slices[0], surface, {}, path)
+        prep = strategies_mod._prepare_slice(surface.slices[0], surface, {}, path)
 
-    assert prep.status is engine_mod._PrepStatus.NO_FORWARD
+    assert prep.status is strategies_mod._PrepStatus.NO_FORWARD
     assert (
         f"{path} path: no forward estimate for slice T={T:.4f}; "
         "slice recorded as failed"
@@ -1228,7 +1228,7 @@ def test_prepare_slice_no_forward_warning_text(path, caplog) -> None:
 
 def test_prepare_slice_too_few_points() -> None:
     """A slice with fewer than 5 (k,w) points preps to TOO_FEW with no points."""
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies as strategies_mod
 
     surface = _clean_surface(n_strikes=7)
     small = surface.slices[0]
@@ -1237,9 +1237,9 @@ def test_prepare_slice_too_few_points() -> None:
         quotes=small.quotes[:4],
     )
 
-    prep = engine_mod._prepare_slice(small_slice, surface, {T: SPOT}, "SVI")
+    prep = strategies_mod._prepare_slice(small_slice, surface, {T: SPOT}, "SVI")
 
-    assert prep.status is engine_mod._PrepStatus.TOO_FEW
+    assert prep.status is strategies_mod._PrepStatus.TOO_FEW
     assert prep.points == ()
     assert prep.forward is None
 
@@ -1247,7 +1247,7 @@ def test_prepare_slice_too_few_points() -> None:
 def test_prepare_slice_no_forward_takes_precedence() -> None:
     """The forward lookup runs BEFORE the point-count check: even a
     4-quote slice preps to NO_FORWARD when the forward is missing."""
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies as strategies_mod
 
     surface = _clean_surface(n_strikes=7)
     small = surface.slices[0]
@@ -1256,9 +1256,9 @@ def test_prepare_slice_no_forward_takes_precedence() -> None:
         quotes=small.quotes[:4],
     )
 
-    prep = engine_mod._prepare_slice(small_slice, surface, {}, "SVI")
+    prep = strategies_mod._prepare_slice(small_slice, surface, {}, "SVI")
 
-    assert prep.status is engine_mod._PrepStatus.NO_FORWARD
+    assert prep.status is strategies_mod._PrepStatus.NO_FORWARD
 
 
 def test_fit_slice_returns_none_for_few_points(caplog) -> None:
@@ -1272,7 +1272,7 @@ def test_fit_slice_returns_none_for_few_points(caplog) -> None:
     ``_fit_slice`` directly, and assert it returns None (a SKIP, not a
     failure) and logs the warning.
     """
-    import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.repair.strategies.svi as svi_strategies
 
     surface = _clean_surface(n_strikes=7)
     sl = surface.slices[0]
@@ -1282,8 +1282,70 @@ def test_fit_slice_returns_none_for_few_points(caplog) -> None:
     )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
-        result = engine_mod._fit_slice(small_slice, SPOT, surface)
+        result = svi_strategies._fit_slice(small_slice, SPOT, surface)
 
     assert result is None
     assert "slice T=1.0000 has 2 (k,w) points after IV solving" in caplog.text
     assert "need >= 5; skipping" in caplog.text
+
+
+# ── Strategy-selection seam (repair → get_strategy → strategy.fit) ───────
+# The pipeline is model-agnostic: ``repair`` resolves the model flags via
+# ``get_strategy`` and ``_run_pipeline`` talks only to the
+# ``RepairStrategy`` protocol.  These tests pin the seam: the selector,
+# the load-bearing log-prefix names, and the fake-strategy contract.
+
+
+def test_get_strategy_selects_strategy_class() -> None:
+    """get_strategy() resolves the repair() model flags to strategy classes."""
+    from arbfree_vol.repair.strategies import (
+        get_strategy, SVIStrategy, ESSVIStrategy, SABRStrategy,
+    )
+
+    assert isinstance(get_strategy(), SVIStrategy)
+    assert isinstance(get_strategy(use_ssvi=True), ESSVIStrategy)
+    assert isinstance(get_strategy(use_sabr=True), SABRStrategy)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        get_strategy(use_ssvi=True, use_sabr=True)
+
+
+def test_strategy_names_pin_log_prefixes() -> None:
+    """The strategy ``name`` attributes are the per-path log prefixes the
+    caplog tests assert byte-for-byte (``"SVI"``, ``"eSSVI"``, ``"SABR"``)."""
+    from arbfree_vol.repair.strategies import SVIStrategy, ESSVIStrategy, SABRStrategy
+
+    assert SVIStrategy().name == "SVI"
+    assert ESSVIStrategy().name == "eSSVI"
+    assert SABRStrategy().name == "SABR"
+
+
+def test_run_pipeline_with_fake_strategy() -> None:
+    """``_run_pipeline`` consumes any ``RepairStrategy`` — no model needed.
+
+    A fake strategy records its ``fit`` call and returns an empty
+    ``_PathFitResult``; the pipeline must call ``fit`` exactly once, fit
+    nothing, and still assemble a full report carrying the cleaned
+    surface — proving the pipeline/strategy seam works without any model
+    import.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+    from arbfree_vol.repair.strategies import _PathFitResult
+
+    class _FakeStrategy:
+        name = "FAKE"
+
+        def __init__(self):
+            self.fit_calls = []
+
+        def fit(self, cleaned_surface, fwd_curve):
+            self.fit_calls.append((cleaned_surface, fwd_curve))
+            return _PathFitResult(fitted=[], failed_slices=[])
+
+    fake = _FakeStrategy()
+    report = engine_mod._run_pipeline(_clean_surface(n_strikes=7), fake)
+
+    assert len(fake.fit_calls) == 1
+    assert report.metrics.n_slices_fitted == 0
+    assert report.fitted_slices == ()
+    assert report.failed_slices == []
+    assert report.cleaned_surface is not None

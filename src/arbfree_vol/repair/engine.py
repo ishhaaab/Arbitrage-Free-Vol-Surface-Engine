@@ -1,34 +1,26 @@
-from math import log, sqrt
-from statistics import mean
-import logging
-from enum import Enum, auto
-from dataclasses import dataclass, field
+"""Model-agnostic repair pipeline.
+
+``repair`` runs the quote-rejection / forward-estimation / refit
+sequence and delegates the actual per-model fitting to a
+``RepairStrategy`` selected by ``get_strategy``.  The pipeline itself
+has no knowledge of any model API: all SVI / eSSVI / SABR imports and
+fitting logic live in ``arbfree_vol.repair.strategies``, so adding a
+model family means adding one strategy module there and nothing else.
+"""
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.arbitrage.report import ArbitrageReport
 from arbfree_vol.arbitrage.quote_detect import detect_with_forward
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
-from arbfree_vol.svi.calibration import calibrate_constrained
-from arbfree_vol.svi.model import svi_total_variance, SVIParams
-from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
-from arbfree_vol.ssvi.term_structure import (
-    fit_ssvi_surface_sequential,
-    verify_hm_condition,
-    verify_ssvi_calendar_free,
-)
-from arbfree_vol.sabr.model import SABRParams, sabr_total_variance, to_raw_svi_params as sabr_to_raw_svi_params
-from arbfree_vol.sabr.term_structure import fit_sabr_term_structure
-from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice, FittedSABRSlice
 from arbfree_vol.repair.report import (
     RejectedQuote,
     RepairMetrics,
     RepairReport,
 )
-
-_logger = logging.getLogger(__name__)
 from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.repair.strategies import RepairStrategy, get_strategy, _PathFitResult
 
 
 def _build_rejection_set(
@@ -88,462 +80,7 @@ def _build_cleaned_surface(surface: VolSurface,
     )
 
 
-def _fit_slice(sl: ExpirySlice,
-               forward_price: float,
-               surface: VolSurface,
-               prev_slice: SVIParams | None = None) -> FittedSlice | None:
-
-    """Fit SVI to one cleaned slice using the estimated forward price.
-
-    Returns None if fewer than 5 (k, w) points are available (a SKIP,
-    mirroring the eSSVI path — tiny slices are neither fitted nor
-    recorded as failed).  A calibration failure (``RuntimeError`` from
-    ``calibrate_constrained``) PROPAGATES to the caller, which records
-    the slice in ``failed_slices`` — a slice must not vanish with zero
-    record.
-    """
-    # total variance uses the surface r/q for IV solving (independent of forward)
-    strike_w= slice_total_variance(surface, sl)
-    if len(strike_w) < 5:
-        _logger.warning(
-            "slice T=%.4f has %d (k,w) points after IV solving — need >= 5; skipping",
-            sl.expiry_time, len(strike_w),
-        )
-        return None
-
-    # build (k, w) points using the estimated forward, not surface r/q
-    points= [
-        (log(strike / forward_price), w)
-        for strike, w in strike_w.items()
-    ]
-    points.sort()
-
-    params= calibrate_constrained(points, prev_slice=prev_slice)
-
-    # RMSE in w-space
-    errors= [
-        (svi_total_variance(k, params.a, params.b, params.rho, params.m, params.sigma) - w) ** 2
-        for k, w in points
-    ]
-    rmse= sqrt(mean(errors))
-
-    return FittedSlice(
-        expiry_time=sl.expiry_time,
-        params=params,
-        rmse=rmse,
-        forward_price=forward_price,
-        n_quotes_total=len(sl.quotes),
-        n_quotes_used=len(points),
-        data_points=tuple(points),
-    )
-
-
-class _PrepStatus(Enum):
-    OK = auto()
-    NO_FORWARD = auto()
-    TOO_FEW = auto()
-
-
-@dataclass(frozen=True)
-class _SlicePrep:
-    status: _PrepStatus
-    expiry_time: float
-    forward: float | None = None
-    points: tuple[tuple[float, float], ...] = ()
-
-
-@dataclass
-class _PathFitResult:
-    """Accumulated per-path fit outcome, replacing heterogeneous tuples.
-
-    Each ``_repair_*`` helper returns one of these with only the fields
-    relevant to its model populated; ``repair()`` reads them by name.
-    Adding a new bookkeeping dimension is now a one-file change instead
-    of a signature + unpacking + report ripple.
-    """
-    fitted: list[FittedSlice]
-    failed_slices: list[float]
-    fitted_ssvi: list[FittedSSVISlice] = field(default_factory=list)
-    fitted_sabr: list[FittedSABRSlice] = field(default_factory=list)
-    fallback_slices: list[float] = field(default_factory=list)
-    sabr_mapping_failed: list[float] = field(default_factory=list)
-    repair_infeasible: bool = False
-
-
-def _prepare_slice(
-    sl: ExpirySlice,
-    surface: VolSurface,
-    fwd_curve: dict[float, float],
-    path: str,
-) -> _SlicePrep:
-    """Shared per-slice prep for all three repair paths.
-
-    Applies the identical bookkeeping semantics each path used to
-    implement inline: a slice with no forward estimate is a FAILURE
-    (recorded by the caller in its failed list), a slice with fewer
-    than 5 (k, w) points is a SKIP (neither fitted nor recorded),
-    and the forward check wins over the point-count check.  ``path``
-    is the model name used in the no-forward warning (``"SVI"``,
-    ``"eSSVI"``, ``"SABR"``) so the per-path log text is preserved.
-    """
-    F = fwd_curve.get(sl.expiry_time)
-    if F is None:
-        _logger.warning(
-            "%s path: no forward estimate for slice T=%.4f; "
-            "slice recorded as failed",
-            path, sl.expiry_time,
-        )
-        return _SlicePrep(_PrepStatus.NO_FORWARD, sl.expiry_time)
-
-    strike_w = slice_total_variance(surface, sl)
-    if len(strike_w) < 5:
-        _logger.warning(
-            "slice T=%.4f has %d (k,w) points — need >= 5; skipping",
-            sl.expiry_time, len(strike_w),
-        )
-        return _SlicePrep(_PrepStatus.TOO_FEW, sl.expiry_time)
-
-    pts = sorted(
-        (log(strike / F), w)
-        for strike, w in strike_w.items()
-    )
-    return _SlicePrep(_PrepStatus.OK, sl.expiry_time, forward=F, points=tuple(pts))
-
-
-def _repair_svi(
-    cleaned_surface: VolSurface,
-    fwd_curve: dict[float, float],
-) -> _PathFitResult:
-    """Raw-SVI path: constrained per-slice calibration.
-
-    Fits each cleaned slice with ``_fit_slice`` under the constrained
-    SVI calibration, carrying the previous slice's params as the
-    calendar-penalty prior (``prev_slice``).  A ``RuntimeError`` from
-    ``calibrate_constrained`` records the slice in ``failed_slices``
-    rather than silently dropping it.
-    """
-    fitted: list[FittedSlice] = []
-    failed_slices: list[float] = []
-    sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
-
-    prev_svi: SVIParams | None = None
-    for sl in sorted_slices:
-        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "SVI")
-        if prep.status is _PrepStatus.NO_FORWARD:
-            failed_slices.append(prep.expiry_time)
-            continue
-        if prep.status is _PrepStatus.TOO_FEW:
-            continue
-        assert prep.forward is not None
-        try:
-            fs= _fit_slice(sl, prep.forward, cleaned_surface, prev_slice=prev_svi)
-        except RuntimeError as exc:
-            # Honest bookkeeping: a slice whose calibration fails
-            # entirely is recorded in failed_slices (mirroring the
-            # eSSVI path), not silently dropped from the report.
-            _logger.warning(
-                "SVI constrained calibration failed for slice T=%.4f: "
-                "%s; slice recorded as failed",
-                sl.expiry_time, exc,
-            )
-            failed_slices.append(sl.expiry_time)
-            continue
-        if fs is not None:
-            fitted.append(fs)
-            prev_svi = fs.params
-
-    return _PathFitResult(fitted=fitted, failed_slices=failed_slices)
-
-
-def _repair_essvi(
-    cleaned_surface: VolSurface,
-    fwd_curve: dict[float, float],
-) -> _PathFitResult:
-    """Fit eSSVI slices sequentially by increasing maturity.
-
-    Uses the Hendriks & Martini (2019) Prop 3.1 no-calendar-spread
-    condition enforced as a HARD optimizer constraint:
-
-      (a) theta non-decreasing,
-      (b) chi = theta*psi non-decreasing,
-      (c) |(rho*chi)_{i+1} - (rho*chi)_i| / (chi_{i+1} - chi_i) <= 1.
-
-    Both Gatheral-Jacquier (2014) butterfly bounds
-    ``theta*psi*(1+|rho|) <= 4`` and ``theta*psi^2*(1+|rho|) <= 4``
-    are enforced per slice.  Per-slice rho is fully free
-    (tanh-reparametrised, no cross-slice functional form).  The
-    discrete formulation follows Corbetta et al. (2019),
-    arXiv:1804.04924, Sec 2.2-2.3.  Slices that fit within the hard
-    constraints are arbitrage-free by construction; slices that fall
-    back to the unconstrained fit (see ``RepairReport.fallback_slices``
-    and ``repair_infeasible``) are NOT — the grid-based calendar
-    detector (detect_svi_surface) is then load-bearing and reports
-    those violations as remaining_violations, not merely a redundant
-    regression assertion.
-    """
-    fitted: list[FittedSlice] = []
-    fitted_ssvi: list[FittedSSVISlice] = []
-    fallback_slices: list[float] = []
-    failed_slices: list[float] = []
-    repair_infeasible = False
-    sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
-
-    # ── eSSVI sequential path (Hendriks & Martini 2019) ────
-    slices_data: list[tuple[float, list[tuple[float, float]]]] = []
-    slice_meta: list[tuple[ExpirySlice, float]] = []  # (sl, F)
-    no_forward_slices: list[float] = []  # expiries with no forward estimate
-    for sl in sorted_slices:
-        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "eSSVI")
-        if prep.status is _PrepStatus.NO_FORWARD:
-            no_forward_slices.append(prep.expiry_time)
-            continue
-        if prep.status is _PrepStatus.TOO_FEW:
-            continue
-        assert prep.forward is not None
-        slices_data.append((prep.expiry_time, list(prep.points)))
-        slice_meta.append((sl, prep.forward))
-
-    if slices_data:
-        seq_result = fit_ssvi_surface_sequential(slices_data)
-        params_list = seq_result.fitted_slices
-        fallback_slices = seq_result.fallback_slices
-        failed_slices = seq_result.failed_slices
-        fitted_by_T: dict[float, SSVIParams] = {T: p for T, p in params_list}
-
-        for (sl, F), (T, pts) in zip(slice_meta, slices_data):
-            ssvi_params = fitted_by_T.get(T)
-            if ssvi_params is None:
-                _logger.warning(
-                    "eSSVI: no fit for T=%.4f; skipping in fitted output",
-                    T,
-                )
-                continue
-
-            errors = [
-                (ssvi_w(k, ssvi_params.theta,
-                        ssvi_params.rho, ssvi_params.psi) - w) ** 2
-                for k, w in pts
-            ]
-            rmse = sqrt(mean(errors))
-
-            a, b, rho_raw, m, sigma = to_raw_svi_params(
-                ssvi_params.theta, ssvi_params.rho, ssvi_params.psi
-            )
-            raw_svi_params = SVIParams(
-                a=a, b=b, rho=rho_raw, m=m, sigma=sigma
-            )
-
-            fitted.append(FittedSlice(
-                expiry_time=sl.expiry_time,
-                params=raw_svi_params,
-                rmse=rmse,
-                forward_price=F,
-                n_quotes_total=len(sl.quotes),
-                n_quotes_used=len(pts),
-                data_points=tuple(pts),
-            ))
-            fitted_ssvi.append(FittedSSVISlice(
-                expiry_time=sl.expiry_time,
-                ssvi=SSVIParams(
-                    theta=ssvi_params.theta,
-                    rho=ssvi_params.rho,
-                    psi=ssvi_params.psi,
-                ),
-                rmse=rmse,
-                forward_price=F,
-                n_quotes_total=len(sl.quotes),
-                n_quotes_used=len(pts),
-                essvi=None,
-            ))
-
-        # Check calendar-arb feasibility of the fit
-        if len(params_list) >= 2:
-            params_only_sorted = [p for _, p in sorted(params_list, key=lambda x: x[0])]
-            repair_infeasible = (
-                not verify_hm_condition(params_only_sorted)
-                or not verify_ssvi_calendar_free(params_only_sorted)
-            )
-        else:
-            repair_infeasible = False
-
-    # Slices with no forward estimate were never submitted to the
-    # sequential fit, so they are absent from seq_result.failed_slices.
-    # Append them AFTER the reassignment above so the record survives
-    # (and also covers the case where slices_data is empty).
-    failed_slices.extend(no_forward_slices)
-
-    return _PathFitResult(fitted=fitted, fitted_ssvi=fitted_ssvi, fallback_slices=fallback_slices, failed_slices=failed_slices, repair_infeasible=repair_infeasible)
-
-
-def _map_sabr_to_svi(
-    sabr_params: SABRParams, forward_price: float, expiry_time: float,
-) -> SVIParams | None:
-    """Map SABR params to raw SVI params, degrading to None instead of aborting.
-
-    ``sabr_to_raw_svi_params`` runs under a raised evaluation budget
-    (``max_nfev=50000``); that budget (B) reduces how often the per-slice
-    mapping raises.  This wrap (A) is the actual correctness guarantee:
-    no ``max_nfev`` is provably sufficient over a continuous parameter
-    space, and scipy can raise either RuntimeError (budget exhausted) or
-    ValueError (non-finite residuals), so both are caught and reported
-    through the same logged, inspectable failure path.
-    """
-    try:
-        a_svi, b_svi, rho_svi, m_svi, sigma_svi = sabr_to_raw_svi_params(
-            sabr_params, forward_price, expiry_time,
-        )
-    except RuntimeError as exc:
-        _logger.warning(
-            "SABR->SVI mapping failed for slice T=%.4f "
-            "(alpha=%.6f beta=%.6f rho=%.6f nu=%.6f): %s; "
-            "slice recorded as failed-mapping",
-            expiry_time, sabr_params.alpha, sabr_params.beta,
-            sabr_params.rho, sabr_params.nu, exc,
-        )
-        return None
-    except ValueError as exc:
-        _logger.warning(
-            "SABR->SVI mapping failed for slice T=%.4f "
-            "(alpha=%.6f beta=%.6f rho=%.6f nu=%.6f) with "
-            "ValueError: %s; slice recorded as failed-mapping",
-            expiry_time, sabr_params.alpha, sabr_params.beta,
-            sabr_params.rho, sabr_params.nu, exc,
-        )
-        return None
-    return SVIParams(a=a_svi, b=b_svi, rho=rho_svi, m=m_svi, sigma=sigma_svi)
-
-
-def _repair_sabr(
-    cleaned_surface: VolSurface,
-    fwd_curve: dict[float, float],
-) -> _PathFitResult:
-    """Fit the SABR model (Hagan et al. 2002) as a COMPARISON
-    parametrisation alongside the arbitrage-certified eSSVI primary
-    surface.
-
-    The SABR parameters alpha(t), nu(t) and rho(t) are modelled as
-    cubic B-spline curves across expiries with coefficient-level
-    reparametrisation (tanh for rho, exp+floor for alpha/nu) keeping
-    curves in-range between knots via the convex-hull property — no
-    runtime clamping needed.  A cross-slice calendar-arb SOFT penalty
-    is included in the objective.  Verification is EMPIRICAL and
-    grid-based via ``detect_svi_surface`` — NOT a closed-form /
-    by-construction guarantee.  The SABR parameters are mapped to raw
-    SVI via ``to_raw_svi_params``, and the native SABR parameters are
-    stored in ``fitted_sabr_slices``.  Dynamic SABR is a
-    not-implemented research extension.
-
-    The SABR->SVI mapping runs under a raised evaluation budget
-    (``max_nfev=50000`` in ``to_raw_svi_params``); that budget (B)
-    reduces how often the per-slice mapping raises.  The mapping call
-    is ALSO wrapped so that when some future real slice exceeds even
-    the raised budget, ``repair()`` degrades to a logged, inspectable
-    failure (the slice's expiry is recorded in
-    ``sabr_mapping_failed_slices``) instead of crashing — that wrap
-    (A) is the actual correctness guarantee, since no ``max_nfev`` is
-    provably sufficient over a continuous parameter space.
-    """
-    fitted: list[FittedSlice] = []
-    fitted_sabr: list[FittedSABRSlice] = []
-    failed_slices: list[float] = []
-    sabr_mapping_failed: list[float] = []
-    sorted_slices = sorted(cleaned_surface.slices, key=lambda sl: sl.expiry_time)
-
-    # ── SABR B-spline term-structure path ───────────────────
-    # Build slices_data for joint fit across expiries
-    sabr_slices_data: list[tuple[float, float, list[tuple[float, float]]]] = []
-    sabr_meta: list[tuple[ExpirySlice, float, int]] = []  # (sl, F, n_total)
-
-    for sl in sorted_slices:
-        prep = _prepare_slice(sl, cleaned_surface, fwd_curve, "SABR")
-        if prep.status is _PrepStatus.NO_FORWARD:
-            failed_slices.append(prep.expiry_time)
-            continue
-        if prep.status is _PrepStatus.TOO_FEW:
-            continue
-        assert prep.forward is not None
-        sabr_slices_data.append((prep.expiry_time, prep.forward, list(prep.points)))
-        sabr_meta.append((sl, prep.forward, len(sl.quotes)))
-
-    if sabr_slices_data:
-        try:
-            sabr_params_list = fit_sabr_term_structure(sabr_slices_data)
-        except RuntimeError as exc:
-            _logger.warning(
-                "SABR term-structure fit failed: %s; marking %d slice(s) failed",
-                exc, len(sabr_meta),
-            )
-            failed_slices.extend(
-                sl.expiry_time for sl, _F, _n in sabr_meta
-            )
-        else:
-            for (sl, F, n_total), sabr_params, (T_i, _F_i, pts) in zip(
-                sabr_meta, sabr_params_list, sabr_slices_data,
-            ):
-                # Per-slice RMSE in w-space
-                a = sabr_params.alpha
-                b = sabr_params.beta
-                r = sabr_params.rho
-                n = sabr_params.nu
-                errors = [
-                    (sabr_total_variance(k, F, T_i, a, b, r, n) - w) ** 2
-                    for k, w in pts
-                ]
-                rmse = sqrt(mean(errors))
-
-                # Map to raw SVI params for the SVI-based pipeline
-                raw_svi_params = _map_sabr_to_svi(sabr_params, F, T_i)
-                if raw_svi_params is None:
-                    sabr_mapping_failed.append(sl.expiry_time)
-                    continue
-
-                fitted.append(FittedSlice(
-                    expiry_time=sl.expiry_time,
-                    params=raw_svi_params,
-                    rmse=rmse,
-                    forward_price=F,
-                    n_quotes_total=n_total,
-                    n_quotes_used=len(pts),
-                    data_points=tuple(pts),
-                ))
-                fitted_sabr.append(FittedSABRSlice(
-                    expiry_time=sl.expiry_time,
-                    sabr=sabr_params,
-                    rmse=rmse,
-                    forward_price=F,
-                    n_quotes_total=n_total,
-                    n_quotes_used=len(pts),
-                ))
-
-    return _PathFitResult(fitted=fitted, fitted_sabr=fitted_sabr, failed_slices=failed_slices, sabr_mapping_failed=sabr_mapping_failed)
-
-
-def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) -> RepairReport:
-    """Repair a volatility surface by rejecting arb violating quotes,
-    re-estimating the forward curve, and refitting SVI slices.
-
-    Dispatches to one of three model-specific strategies, each an
-    extracted helper: ``_repair_svi`` (raw SVI), ``_repair_essvi``
-    (eSSVI), or ``_repair_sabr`` (SABR) — see those helpers for the
-    per-model fitting details.
-
-    ``RepairReport.failed_slices`` records expiries that could not be
-    fitted at all — eSSVI slices where both the hard fit and the
-    unconstrained fallback fail, raw-SVI slices whose constrained
-    calibration raises, and (in every path) slices for which the forward
-    curve has no estimate.  The no-forward case is logged with a warning
-    and recorded, never silently skipped.  The list is SORTED by expiry
-    and DEDUPLICATED before being stored in the report: the eSSVI path
-    reassigns ``failed_slices`` from the sequential fit result and then
-    appends the no-forward expiries, which can otherwise produce
-    non-chronological lists (a no-forward expiry sorting BEFORE a
-    failed-fit expiry).  Consumers may rely on chronological order.
-
-    ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
-    """
-    if use_ssvi and use_sabr:
-        raise ValueError("use_ssvi and use_sabr are mutually exclusive")
-
+def _run_pipeline(surface: VolSurface, strategy: RepairStrategy) -> RepairReport:
     n_total_quotes= sum(len(sl.quotes) for sl in surface.slices)
     n_slices_input= len(surface.slices)
 
@@ -572,18 +109,14 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     failed_slices: list[float] = []
     sabr_mapping_failed: list[float] = []
     if cleaned_surface is not None:
-        if use_ssvi:
-            path_result = _repair_essvi(cleaned_surface, fwd_curve)
-            fitted, fitted_ssvi = path_result.fitted, path_result.fitted_ssvi
-            fallback_slices, failed_slices = path_result.fallback_slices, path_result.failed_slices
-            repair_infeasible = path_result.repair_infeasible
-        elif use_sabr:
-            path_result = _repair_sabr(cleaned_surface, fwd_curve)
-            fitted, fitted_sabr = path_result.fitted, path_result.fitted_sabr
-            failed_slices, sabr_mapping_failed = path_result.failed_slices, path_result.sabr_mapping_failed
-        else:
-            path_result = _repair_svi(cleaned_surface, fwd_curve)
-            fitted, failed_slices = path_result.fitted, path_result.failed_slices
+        path_result: _PathFitResult = strategy.fit(cleaned_surface, fwd_curve)
+        fitted = path_result.fitted
+        fitted_ssvi = path_result.fitted_ssvi
+        fitted_sabr = path_result.fitted_sabr
+        fallback_slices = path_result.fallback_slices
+        failed_slices = path_result.failed_slices
+        sabr_mapping_failed = path_result.sabr_mapping_failed
+        repair_infeasible = path_result.repair_infeasible
 
     # step 6: detect remaining violations on the fitted surface
     if fitted:
@@ -630,3 +163,29 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
         failed_slices=failed_slices,
         sabr_mapping_failed_slices=sabr_mapping_failed,
     )
+
+
+def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) -> RepairReport:
+    """Repair a volatility surface by rejecting arb violating quotes,
+    re-estimating the forward curve, and refitting SVI slices.
+
+    Dispatches to one of three model-specific strategies in
+    ``arbfree_vol.repair.strategies``: ``SVIStrategy`` (raw SVI),
+    ``ESSVIStrategy`` (eSSVI), or ``SABRStrategy`` (SABR) — see those
+    strategies for the per-model fitting details.
+
+    ``RepairReport.failed_slices`` records expiries that could not be
+    fitted at all — eSSVI slices where both the hard fit and the
+    unconstrained fallback fail, raw-SVI slices whose constrained
+    calibration raises, and (in every path) slices for which the forward
+    curve has no estimate.  The no-forward case is logged with a warning
+    and recorded, never silently skipped.  The list is SORTED by expiry
+    and DEDUPLICATED before being stored in the report: the eSSVI path
+    reassigns ``failed_slices`` from the sequential fit result and then
+    appends the no-forward expiries, which can otherwise produce
+    non-chronological lists (a no-forward expiry sorting BEFORE a
+    failed-fit expiry).  Consumers may rely on chronological order.
+
+    ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
+    """
+    return _run_pipeline(surface, get_strategy(use_ssvi, use_sabr))
