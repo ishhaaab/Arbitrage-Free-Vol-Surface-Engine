@@ -162,6 +162,46 @@ def test_repair_metrics_consistency() -> None:
     assert 0.0 <= m.rejection_rate <= 1.0
 
 
+def test_repair_all_quotes_rejected_returns_empty_report() -> None:
+    """When every quote is arb-violating, repair() must not crash: it
+    rejects all quotes, returns ``cleaned_surface is None``, fits nothing,
+    and reports zero remaining violations.
+
+    Construction: every call and put is priced at 10.0, so C - P = 0 at
+    every strike.  With an EVEN number of strikes the estimated forward
+    (the median of the per-strike ``e^{rT}(C-P) + K = K`` estimates)
+    lands BETWEEN strikes, so every strike's parity residual
+    ``|C - P - e^{-rT}(F - K)|`` exceeds the 0.05 threshold — both the
+    call and the put at each strike are flagged as offending, and all
+    12 quotes are rejected.  The rejection set therefore covers the
+    entire surface and ``_build_cleaned_surface`` has no survivors.
+    """
+    strikes = [90.0, 92.0, 100.0, 108.0, 110.0, 112.0]
+    quotes: list[Quote] = []
+    for K in strikes:
+        quotes.append(Quote(strike=K, option_type=OptionType.CALL, price=10.0))
+        quotes.append(Quote(strike=K, option_type=OptionType.PUT, price=10.0))
+    surface = VolSurface(
+        spot=SPOT, risk_free=R, div_yield=Q,
+        slices=[ExpirySlice(expiry_time=T, quotes=quotes)],
+    )
+
+    report = repair(surface)
+
+    # Everything is rejected — no quote survives to be fitted.
+    assert report.metrics.n_rejected == report.metrics.n_total_quotes == 12
+    assert report.metrics.n_slices_fitted == 0
+    assert len(report.fitted_slices) == 0
+    # One parity violation per strike (both sides offending).
+    assert report.metrics.n_violations_before == len(strikes)
+    # No survivors -> no cleaned surface, no fit, nothing to verify.
+    assert report.cleaned_surface is None
+    assert report.remaining_violations.violations == []
+    assert report.metrics.n_violations_after == 0
+    # Nothing was attempted, so nothing is recorded as failed.
+    assert report.failed_slices == []
+
+
 def test_repair_with_ssvi_populates_fitted_ssvi_slices() -> None:
     surface = _clean_surface(n_strikes=7)
 
@@ -720,6 +760,51 @@ def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
     assert len(report.fitted_slices) == 0
 
 
+def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:
+    """A slice with fewer than 5 (k,w) points is skipped from the SABR
+    fit with a warning — not fitted, not failed, no crash.
+
+    Mirrors ``test_repair_svi_skips_slice_with_few_points`` and the
+    eSSVI variant for the SABR path, whose ``_prepare_slice`` TOO_FEW
+    branch is otherwise untested.  The term-structure fit and the
+    SABR->SVI mapping are stubbed so the test stays fast and
+    deterministic — the prep/booking logic is what is being pinned.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _flat_bs_surface([0.25, 1.0])
+    # Shrink the T=1.0 slice to 4 quotes (2 strikes -> 2 (k,w) points)
+    small = surface.slices[-1]
+    surface.slices[-1] = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
+
+    monkeypatch.setattr(
+        engine_mod, "fit_sabr_term_structure",
+        lambda slices_data: [SABRParams(alpha=0.1, beta=0.5, rho=0.0, nu=0.5)],
+    )
+    monkeypatch.setattr(
+        engine_mod, "sabr_to_raw_svi_params",
+        lambda *args: (0.04, 0.4, -0.4, 0.0, 0.1),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        report = repair(surface, use_sabr=True)
+
+    assert report.metrics.n_slices_input == 2
+    assert report.metrics.n_slices_fitted == 1, (
+        f"expected the tiny slice to be skipped, got "
+        f"{report.metrics.n_slices_fitted} fitted"
+    )
+    fitted_Ts = [s.expiry_time for s in report.fitted_sabr_slices]
+    assert fitted_Ts == [0.25]
+    assert 1.0 not in report.failed_slices
+    assert 1.0 not in report.fallback_slices
+    assert 1.0 not in report.sabr_mapping_failed_slices
+    assert "slice T=1.0000 has 2 (k,w) points" in caplog.text
+
+
 def test_repair_infeasible_true_when_grid_finds_remaining_violations() -> None:
     """repair_infeasible must be True when the grid-based
     detect_svi_surface finds remaining violations, even if the eSSVI
@@ -1174,3 +1259,31 @@ def test_prepare_slice_no_forward_takes_precedence() -> None:
     prep = engine_mod._prepare_slice(small_slice, surface, {}, "SVI")
 
     assert prep.status is engine_mod._PrepStatus.NO_FORWARD
+
+
+def test_fit_slice_returns_none_for_few_points(caplog) -> None:
+    """The <5-point guard inside ``_fit_slice`` is a direct-call safety
+    net: after the ``_prepare_slice`` extraction every repair() path
+    pre-checks the point count, so the guard is unreachable through
+    repair() — but the helper documents its own contract when called
+    directly with a too-small slice.
+
+    Build a slice with 4 quotes (2 strikes -> 2 (k,w) points), call
+    ``_fit_slice`` directly, and assert it returns None (a SKIP, not a
+    failure) and logs the warning.
+    """
+    import arbfree_vol.repair.engine as engine_mod
+
+    surface = _clean_surface(n_strikes=7)
+    sl = surface.slices[0]
+    small_slice = ExpirySlice(
+        expiry_time=sl.expiry_time,
+        quotes=sl.quotes[:4],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
+        result = engine_mod._fit_slice(small_slice, SPOT, surface)
+
+    assert result is None
+    assert "slice T=1.0000 has 2 (k,w) points after IV solving" in caplog.text
+    assert "need >= 5; skipping" in caplog.text
