@@ -990,6 +990,13 @@ def test_degenerate_corner_with_failed_baseline_routes_to_fallback(monkeypatch) 
         "a boundary-window hard fit must be routed to fallback even when "
         f"the baseline fit fails; got fallback_slices={result.fallback_slices}"
     )
+    assert 2.00 not in result.failed_slices, (
+        f"the fallback must succeed; got failed_slices={result.failed_slices}"
+    )
+    fitted_by_T = dict(result.fitted_slices)
+    assert 2.00 in fitted_by_T
+    # The fallback recovers the true dip params.
+    assert fitted_by_T[2.00].theta == pytest.approx(0.07, rel=0.02)
 
 
 def test_fit_slice_raises_on_too_few_points() -> None:
