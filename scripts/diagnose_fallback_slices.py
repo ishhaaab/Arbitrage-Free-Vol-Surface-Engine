@@ -626,155 +626,167 @@ def run_diagnostics():
     summary_rows = []
 
     for fallback_T in result.fallback_slices:
-        print(f"\n{'-' * 72}")
-        print(f"  FALLBACK SLICE: T = {fallback_T:.4f}")
-        print(f"{'-' * 72}")
-
         pts = data_by_T.get(fallback_T)
         if pts is None:
             print("  ERROR: No data found for this T")
             continue
+        row = _diagnose_slice(fallback_T, pts, result)
+        if row is not None:
+            summary_rows.append(row)
 
-        # (a) Slice analytics
-        analytics = compute_slice_analytics(fallback_T, pts)
-        print(f"\n  Slice data:")
-        print(f"    T          = {analytics['T']:.4f}")
-        print(f"    n_points   = {analytics['n_points']}")
-        print(f"    ATM vol    = {analytics['atm_vol']:.4f}")
-        print(f"    ATM w      = {analytics['atm_w']:.6f}")
-        print(f"    25d skew   = {analytics['skew_25d']:.4f}")
-        print(f"    10d skew   = {analytics['skew_10d']:.4f}")
-        print(f"    k range    = [{analytics['k_range'][0]:.3f}, {analytics['k_range'][1]:.3f}]")
+    _print_summary_and_interpretation(summary_rows)
 
-        # (b) Unconstrained fit
-        print(f"\n  Unconstrained fit (fit_ssvi_slice):")
-        try:
-            unc_params = fit_ssvi_slice(pts)
-            unc_rmse = sqrt(np.mean([
-                (ssvi_w(k, unc_params.theta, unc_params.rho, unc_params.psi) - w) ** 2
-                for k, w in pts
-            ]))
-            print(f"    theta = {unc_params.theta:.6f}")
-            print(f"    rho   = {unc_params.rho:.6f}")
-            print(f"    psi   = {unc_params.psi:.6f}")
-            print(f"    chi   = {unc_params.theta * unc_params.psi:.6f}")
-            print(f"    RMSE  = {unc_rmse:.8f}")
-        except RuntimeError as e:
-            print(f"    FAILED: {e}")
-            unc_params = None
-            unc_rmse = float("nan")
+    return summary_rows
 
-        # (c) Find predecessor (last hard-constrained fit before this T)
-        prev_params = None
-        sorted_fitted = sorted(result.fitted_slices, key=lambda x: x[0])
-        for T_i, p_i in sorted_fitted:
-            if T_i < fallback_T:
-                prev_params = p_i
-            else:
-                break
 
-        if prev_params:
-            print(f"\n  Predecessor slice (last hard-constrained fit):")
-            prev_T = [T for T, p in sorted_fitted if p is prev_params][0]
-            print(f"    T     = {prev_T:.4f}")
-            print(f"    theta = {prev_params.theta:.6f}")
-            print(f"    rho   = {prev_params.rho:.6f}")
-            print(f"    psi   = {prev_params.psi:.6f}")
-            print(f"    chi   = {prev_params.theta * prev_params.psi:.6f}")
+def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -> dict | None:
+    """Run the full diagnostic for one fallback slice.
+
+    Prints the slice analytics, unconstrained fit, predecessor, hard-constrained
+    fit attempts (default seed, warm-start, random restarts), and the H&M
+    neighbour check.  Returns the summary row dict, or None when the slice
+    could not be diagnosed (no data).
+    """
+    print(f"\n{'-' * 72}")
+    print(f"  FALLBACK SLICE: T = {fallback_T:.4f}")
+    print(f"{'-' * 72}")
+
+    # (a) Slice analytics
+    analytics = compute_slice_analytics(fallback_T, pts)
+    print(f"\n  Slice data:")
+    print(f"    T          = {analytics['T']:.4f}")
+    print(f"    n_points   = {analytics['n_points']}")
+    print(f"    ATM vol    = {analytics['atm_vol']:.4f}")
+    print(f"    ATM w      = {analytics['atm_w']:.6f}")
+    print(f"    25d skew   = {analytics['skew_25d']:.4f}")
+    print(f"    10d skew   = {analytics['skew_10d']:.4f}")
+    print(f"    k range    = [{analytics['k_range'][0]:.3f}, {analytics['k_range'][1]:.3f}]")
+
+    # (b) Unconstrained fit
+    print(f"\n  Unconstrained fit (fit_ssvi_slice):")
+    try:
+        unc_params = fit_ssvi_slice(pts)
+        unc_rmse = sqrt(np.mean([
+            (ssvi_w(k, unc_params.theta, unc_params.rho, unc_params.psi) - w) ** 2
+            for k, w in pts
+        ]))
+        print(f"    theta = {unc_params.theta:.6f}")
+        print(f"    rho   = {unc_params.rho:.6f}")
+        print(f"    psi   = {unc_params.psi:.6f}")
+        print(f"    chi   = {unc_params.theta * unc_params.psi:.6f}")
+        print(f"    RMSE  = {unc_rmse:.8f}")
+    except RuntimeError as e:
+        print(f"    FAILED: {e}")
+        unc_params = None
+        unc_rmse = float("nan")
+
+    # (c) Find predecessor (last hard-constrained fit before this T)
+    prev_params = None
+    sorted_fitted = sorted(result.fitted_slices, key=lambda x: x[0])
+    for T_i, p_i in sorted_fitted:
+        if T_i < fallback_T:
+            prev_params = p_i
         else:
-            print(f"\n  No predecessor (this is the first slice or all predecessors are fallback)")
+            break
 
-        # (d) Hard-constrained fit attempts
-        print(f"\n  Hard-constrained fit attempts:")
+    if prev_params:
+        print(f"\n  Predecessor slice (last hard-constrained fit):")
+        prev_T = [T for T, p in sorted_fitted if p is prev_params][0]
+        print(f"    T     = {prev_T:.4f}")
+        print(f"    theta = {prev_params.theta:.6f}")
+        print(f"    rho   = {prev_params.rho:.6f}")
+        print(f"    psi   = {prev_params.psi:.6f}")
+        print(f"    chi   = {prev_params.theta * prev_params.psi:.6f}")
+    else:
+        print(f"\n  No predecessor (this is the first slice or all predecessors are fallback)")
 
-        # Default seed
-        default_result = try_hard_constrained(pts, prev_params, label="default")
-        print(f"\n    [default seed]")
-        if default_result["converged"]:
-            v = default_result["violations"]
+    # (d) Hard-constrained fit attempts
+    print(f"\n  Hard-constrained fit attempts:")
+
+    # Default seed
+    default_result = try_hard_constrained(pts, prev_params, label="default")
+    print(f"\n    [default seed]")
+    if default_result["converged"]:
+        v = default_result["violations"]
+        print(f"      CONVERGED")
+        print(f"      theta = {v['theta']:.6f}, rho = {v['rho']:.6f}, psi = {v['psi']:.6f}")
+        print(f"      chi = {v['chi']:.6f}, bf_min_resid = {v['bf_min_residual']:.6f}")
+        if prev_params and "ratio" in v:
+            print(f"      theta_delta = {v['theta_delta']:.6f}, chi_delta = {v['chi_delta']:.6f}")
+            print(f"      ratio = {v['ratio']:.6f}, ratio_ok = {v['ratio_ok']}")
+    else:
+        print(f"      FAILED: {default_result.get('error', 'unknown')}")
+
+    # Warm-start from unconstrained
+    if unc_params is not None:
+        warm_result = try_warm_start(pts, prev_params, unc_params)
+        print(f"\n    [warm-start from unconstrained]")
+        if warm_result["converged"]:
+            v = warm_result["violations"]
             print(f"      CONVERGED")
             print(f"      theta = {v['theta']:.6f}, rho = {v['rho']:.6f}, psi = {v['psi']:.6f}")
             print(f"      chi = {v['chi']:.6f}, bf_min_resid = {v['bf_min_residual']:.6f}")
             if prev_params and "ratio" in v:
                 print(f"      theta_delta = {v['theta_delta']:.6f}, chi_delta = {v['chi_delta']:.6f}")
                 print(f"      ratio = {v['ratio']:.6f}, ratio_ok = {v['ratio_ok']}")
+            print(f"      final_objective = {warm_result['final_objective']:.8f}")
         else:
-            print(f"      FAILED: {default_result.get('error', 'unknown')}")
+            print(f"      FAILED: {warm_result.get('error', 'unknown')}")
+            print(f"      final_objective = {warm_result.get('final_objective', 'N/A')}")
+    else:
+        warm_result = {"converged": False}
 
-        # Warm-start from unconstrained
-        if unc_params is not None:
-            warm_result = try_warm_start(pts, prev_params, unc_params)
-            print(f"\n    [warm-start from unconstrained]")
-            if warm_result["converged"]:
-                v = warm_result["violations"]
-                print(f"      CONVERGED")
-                print(f"      theta = {v['theta']:.6f}, rho = {v['rho']:.6f}, psi = {v['psi']:.6f}")
-                print(f"      chi = {v['chi']:.6f}, bf_min_resid = {v['bf_min_residual']:.6f}")
-                if prev_params and "ratio" in v:
-                    print(f"      theta_delta = {v['theta_delta']:.6f}, chi_delta = {v['chi_delta']:.6f}")
-                    print(f"      ratio = {v['ratio']:.6f}, ratio_ok = {v['ratio_ok']}")
-                print(f"      final_objective = {warm_result['final_objective']:.8f}")
-            else:
-                print(f"      FAILED: {warm_result.get('error', 'unknown')}")
-                print(f"      final_objective = {warm_result.get('final_objective', 'N/A')}")
+    # Random restarts — each is an independent constrained solve from
+    # its own seed-derived start (no default-seed gate).
+    restart_results = try_random_restarts(pts, prev_params, n_restarts=5)
+    n_restart_converged = sum(1 for r in restart_results if r["converged"])
+    print(f"\n    [5 random restarts — each constrained solve starts from its own seed-derived point]")
+    print(f"      Converged: {n_restart_converged} / 5")
+    for r in restart_results:
+        start = r.get("start")
+        if start is not None:
+            start_str = (f"theta={start.theta:.6f}, rho={start.rho:.6f}, "
+                         f"psi={start.psi:.6f}")
         else:
-            warm_result = {"converged": False}
-
-        # Random restarts — each is an independent constrained solve from
-        # its own seed-derived start (no default-seed gate).
-        restart_results = try_random_restarts(pts, prev_params, n_restarts=5)
-        n_restart_converged = sum(1 for r in restart_results if r["converged"])
-        print(f"\n    [5 random restarts — each constrained solve starts from its own seed-derived point]")
-        print(f"      Converged: {n_restart_converged} / 5")
-        for r in restart_results:
-            start = r.get("start")
-            if start is not None:
-                start_str = (f"theta={start.theta:.6f}, rho={start.rho:.6f}, "
-                             f"psi={start.psi:.6f}")
-            else:
-                start_str = "N/A"
-            if r["converged"]:
-                v = r["violations"]
-                print(f"        {r['label']}: start=({start_str}) -> "
-                      f"theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
-                      f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}, "
-                      f"status={r['optimizer_status']} "
-                      f"({r['optimizer_message']})")
-            else:
-                print(f"        {r['label']}: start=({start_str}) -> FAILED "
-                      f"[status={r['optimizer_status']} "
-                      f"{r['optimizer_message']}]")
-
-        # (e) Check if unconstrained params satisfy H&M with neighbors
-        print(f"\n  Does the unconstrained fit satisfy H&M with neighbors?")
-        if unc_params is not None:
-            hm_check = check_unconstrained_satisfies_hm(
-                result.fitted_slices, fallback_T, unc_params
-            )
-            print(f"    satisfies_with_prev  = {hm_check['satisfies_with_prev']}")
-            print(f"    satisfies_with_next  = {hm_check['satisfies_with_next']}")
-            print(f"    satisfies_both       = {hm_check['satisfies_both']}")
-
-            for pair_name, pair_info in hm_check["details"].items():
-                print(f"    {pair_name}:")
-                for k, v in pair_info.items():
-                    print(f"      {k} = {v}")
+            start_str = "N/A"
+        if r["converged"]:
+            v = r["violations"]
+            print(f"        {r['label']}: start=({start_str}) -> "
+                  f"theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
+                  f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}, "
+                  f"status={r['optimizer_status']} "
+                  f"({r['optimizer_message']})")
         else:
-            hm_check = {"satisfies_both": False}
+            print(f"        {r['label']}: start=({start_str}) -> FAILED "
+                  f"[status={r['optimizer_status']} "
+                  f"{r['optimizer_message']}]")
 
-        # Summary row
-        summary_rows.append({
-            "T": fallback_T,
-            "unc_rmse": unc_rmse,
-            "default_converged": default_result["converged"],
-            "warm_start_converged": warm_result["converged"],
-            "restart_converged": n_restart_converged,
-            "unc_satisfies_hm": hm_check["satisfies_both"],
-        })
+    # (e) Check if unconstrained params satisfy H&M with neighbors
+    print(f"\n  Does the unconstrained fit satisfy H&M with neighbors?")
+    if unc_params is not None:
+        hm_check = check_unconstrained_satisfies_hm(
+            result.fitted_slices, fallback_T, unc_params
+        )
+        print(f"    satisfies_with_prev  = {hm_check['satisfies_with_prev']}")
+        print(f"    satisfies_with_next  = {hm_check['satisfies_with_next']}")
+        print(f"    satisfies_both       = {hm_check['satisfies_both']}")
 
-    _print_summary_and_interpretation(summary_rows)
+        for pair_name, pair_info in hm_check["details"].items():
+            print(f"    {pair_name}:")
+            for k, v in pair_info.items():
+                print(f"      {k} = {v}")
+    else:
+        hm_check = {"satisfies_both": False}
 
-    return summary_rows
+    # Summary row
+    return {
+        "T": fallback_T,
+        "unc_rmse": unc_rmse,
+        "default_converged": default_result["converged"],
+        "warm_start_converged": warm_result["converged"],
+        "restart_converged": n_restart_converged,
+        "unc_satisfies_hm": hm_check["satisfies_both"],
+    }
 
 
 def _print_summary_and_interpretation(summary_rows: list[dict]) -> None:
