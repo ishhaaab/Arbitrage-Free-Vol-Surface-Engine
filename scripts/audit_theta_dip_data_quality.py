@@ -484,19 +484,16 @@ def _run_single_audit(
 
 # ── Main audit ──────────────────────────────────────────────────────
 
-def run_audit(args=None):
-    """Run the full data quality audit across multiple sources/symbols."""
-    if args is None:
-        args = parse_args()
-    print("=" * 72)
-    print("  Data Quality Audit: eSSVI fallback across underlyings / ingestion paths")
-    print("=" * 72)
-    print("  These are UNDERLYING / INGESTION-PATH comparisons, not provider")
-    print("  comparisons: SPY vs ^SPX changes the underlying, and OpenBB is")
-    print("  configured with provider='yfinance', so OpenBB/SPY vs yfinance/SPY")
-    print("  does NOT test provider independence.")
-    print("=" * 72)
+def compute_results(args) -> dict:
+    """Run the per-source data-quality audits and print the comparison table.
 
+    Fetches each source (yfinance/SPY, yfinance/^SPX, OpenBB/SPY), runs the
+    eSSVI fallback audit on each, and prints the underlying/path comparison
+    table.  Returns the ``results`` dict keyed by source ("yfinance_SPY",
+    "yfinance_SPX", "openbb_SPY"); each value is a dict with "raw",
+    "filtered", and "spot", or ``None`` when a source failed or was
+    unavailable.
+    """
     import yfinance as yf
 
     results = {}
@@ -653,6 +650,28 @@ def run_audit(args=None):
               f"{r['n_quality_drops']:>6} "
               f"{r['theta_dips']:>7} "
               f"{r['theta_max_dip_pct']:>8.1f}%")
+
+    return results
+
+
+def run_audit(args=None):
+    """Run the full data quality audit across multiple sources/symbols.
+
+    Delegates the per-source audits and the comparison table to
+    :func:`compute_results`, then prints the tenor-bucket breakdown.
+    """
+    if args is None:
+        args = parse_args()
+    print("=" * 72)
+    print("  Data Quality Audit: eSSVI fallback across underlyings / ingestion paths")
+    print("=" * 72)
+    print("  These are UNDERLYING / INGESTION-PATH comparisons, not provider")
+    print("  comparisons: SPY vs ^SPX changes the underlying, and OpenBB is")
+    print("  configured with provider='yfinance', so OpenBB/SPY vs yfinance/SPY")
+    print("  does NOT test provider independence.")
+    print("=" * 72)
+
+    results = compute_results(args)
 
     # ── Tenor bucket breakdown ───────────────────────────────────────
     print(f"\n{'=' * 72}")
