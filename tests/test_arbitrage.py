@@ -16,37 +16,10 @@ from arbfree_vol.models.option import (
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.pricing.black_scholes import price
 
-SPOT = 100.0
-RISK_FREE = 0.05
-DIV_YIELD = 0.0
-T = 1.0
-
-
-def _bs_price(option_type: OptionType, strike: float, sigma: float = 0.2) -> float:
-    contract = OptionContract(
-        symbol="NVDA",
-        option_type=option_type,
-        strike=strike,
-        expiry_date=date(2026, 11, 27),
-    )
-    model = BlackScholesInput(
-        contract=contract,
-        spot=SPOT,
-        expiry_time=T,
-        risk_free=RISK_FREE,
-        div_yield=DIV_YIELD,
-        volatility=sigma,
-    )
-    return price(model)
-
-
-def _surface(quotes: list[Quote]) -> VolSurface:
-    return VolSurface(
-        spot=SPOT,
-        risk_free=RISK_FREE,
-        div_yield=DIV_YIELD,
-        slices=[ExpirySlice(expiry_time=T, quotes=quotes)],
-    )
+from tests.chain_helpers import (
+    SPOT, RISK_FREE, DIV_YIELD, T,
+    _bs_price, _surface,
+)
 
 
 def test_parity_consistent_surface_is_arbitrage_free() -> None:

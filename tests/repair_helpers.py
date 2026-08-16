@@ -187,3 +187,15 @@ def _forward_curve_missing(expiry_to_drop: float):
         return curve
 
     return _estimate
+
+
+def _dip_truth_surface(n_strikes: int | None = None) -> VolSurface:
+    """The canonical theta-dip surface (``_DIP_TRUTH_ENGINE``) priced for
+    the engine — ``repair(_dip_truth_surface(), use_ssvi=True)``."""
+    return _ssvi_priced_surface(_DIP_TRUTH_ENGINE, n_strikes=n_strikes)
+
+
+def _svi_truth_surface() -> VolSurface:
+    """The canonical raw-SVI truth surface (``_SVI_TRUTH_ENGINE``) priced
+    for the engine."""
+    return _svi_priced_surface(_SVI_TRUTH_ENGINE)

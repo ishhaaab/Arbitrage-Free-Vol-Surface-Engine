@@ -9,16 +9,7 @@ from arbfree_vol.data.quality import (
     filter_option_chain,
 )
 
-
-def _make_chain_df(strikes, oi, volume, bid, ask):
-    """Build a minimal option chain DataFrame."""
-    return pd.DataFrame({
-        "strike": strikes,
-        "openInterest": oi,
-        "volume": volume,
-        "bid": bid,
-        "ask": ask,
-    })
+from tests.chain_helpers import _make_chain_df
 
 
 class TestFilterOptionChain:

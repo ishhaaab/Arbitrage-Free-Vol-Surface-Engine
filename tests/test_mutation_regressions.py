@@ -22,38 +22,14 @@ from arbfree_vol.arbitrage.quote_detect import (
 )
 from arbfree_vol.arbitrage.report import ViolationType
 from arbfree_vol.arbitrage.svi_detect import _check_min_variance
-from arbfree_vol.models.option import (
-    BlackScholesInput,
-    OptionContract,
-    OptionType,
-)
-from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
-from arbfree_vol.pricing.black_scholes import price
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote
 from arbfree_vol.svi.model import SVIParams
 
-SPOT = 100.0
-RISK_FREE = 0.05
-DIV_YIELD = 0.0
-T = 1.0
-
-
-def _bs_price(option_type: OptionType, strike: float, sigma: float = 0.2) -> float:
-    contract = OptionContract(
-        symbol="X", option_type=option_type, strike=strike,
-        expiry_date=date(2030, 1, 1),
-    )
-    model = BlackScholesInput(
-        contract=contract, spot=SPOT, expiry_time=T,
-        risk_free=RISK_FREE, div_yield=DIV_YIELD, volatility=sigma,
-    )
-    return price(model)
-
-
-def _surface(quotes: list[Quote]) -> VolSurface:
-    return VolSurface(
-        spot=SPOT, risk_free=RISK_FREE, div_yield=DIV_YIELD,
-        slices=[ExpirySlice(expiry_time=T, quotes=quotes)],
-    )
+from tests.chain_helpers import (
+    SPOT, RISK_FREE, DIV_YIELD, T,
+    _bs_price, _surface,
+)
 
 
 # ── _parity_rhs: pins S*e^{-qT} - K*e^{-rT} exactly ──────────────────

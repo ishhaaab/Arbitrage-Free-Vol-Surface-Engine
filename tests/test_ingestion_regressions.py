@@ -35,16 +35,7 @@ import pytest
 from arbfree_vol.data.quality import filter_option_chain
 from arbfree_vol.ingestion import openbb as openbb_mod
 
-
-def _make_chain_df(strikes, oi, volume, bid, ask):
-    """Build a minimal option chain DataFrame (yfinance-style columns)."""
-    return pd.DataFrame({
-        "strike": strikes,
-        "openInterest": oi,
-        "volume": volume,
-        "bid": bid,
-        "ask": ask,
-    })
+from tests.chain_helpers import _make_chain_df
 
 
 class TestFixA_MissingVsZeroOpenInterest:

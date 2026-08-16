@@ -23,6 +23,8 @@ from arbfree_vol.ssvi.term_structure import (
 )
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 
+from tests.repair_helpers import _DIP_TRUTH_ENGINE
+
 
 # ── Synthetic ground truth ──────────────────────────────────────────
 # Three slices with theta increasing and chi = theta*psi increasing.
@@ -49,14 +51,18 @@ def _make_slices_data():
     return slices
 
 
+def _sequential_fit_params(slices_data):
+    """Run the sequential fitter and return just the fitted params."""
+    result = fit_ssvi_surface_sequential(slices_data)
+    return [p for _, p in result.fitted_slices]
+
+
 # ── Test 1 ──────────────────────────────────────────────────────────
 def test_theta_and_chi_non_decreasing() -> None:
     """After calibration, theta_i and chi_i=theta_i*psi_i must be
     non-decreasing across slices (Hendriks & Martini 2019, Prop 3.1,
     conditions (a) and (b))."""
-    slices_data = _make_slices_data()
-    result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result.fitted_slices]
+    params = _sequential_fit_params(_make_slices_data())
 
     assert len(params) == 3
 
@@ -81,9 +87,7 @@ def test_pairwise_inequality_holds() -> None:
 
     (Hendriks & Martini 2019, Prop 3.1, condition (c)).
     """
-    slices_data = _make_slices_data()
-    result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result.fitted_slices]
+    params = _sequential_fit_params(_make_slices_data())
 
     chis = [p.theta * p.psi for p in params]
     tol = 1e-8
@@ -103,9 +107,7 @@ def test_pairwise_inequality_holds() -> None:
 def test_grid_calendar_detector_reports_zero() -> None:
     """The grid-based detect_svi_surface must report zero violations on
     a calibrated eSSVI surface (redundant regression check)."""
-    slices_data = _make_slices_data()
-    result = fit_ssvi_surface_sequential(slices_data)
-    params = [p for _, p in result.fitted_slices]
+    params = _sequential_fit_params(_make_slices_data())
 
     svi_pairs: list[tuple[float, object]] = []
     for T, p in zip(_EXPIRIES, params):
@@ -170,22 +172,7 @@ def test_sequential_fit_falls_back_on_infeasible_slice(monkeypatch) -> None:
     """
     import arbfree_vol.ssvi.term_structure as ts
 
-    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
-    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
-    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
-    ks = np.linspace(-1.0, 1.0, 9).tolist()
-
-    def _pts(truth):
-        return [
-            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
-            for k in ks
-        ]
-
-    slices_data = [
-        (0.25, _pts(truth1)),
-        (0.50, _pts(truth2)),
-        (1.00, _pts(truth3)),
-    ]
+    slices_data = _make_slices_data()
 
     # Monkeypatch _fit_slice to fail on the 2nd call
     call_count = {"n": 0}
@@ -215,18 +202,9 @@ def test_sequential_fit_falls_back_on_infeasible_slice(monkeypatch) -> None:
         f"expected 0 failed slices, got {result.failed_slices}"
     )
 
-    print(f"  result expiries: {[T for T, _ in result.fitted_slices]}")
-    print(f"  fallback_slices: {result.fallback_slices}")
-    print(f"  failed_slices: {result.failed_slices}")
-    for i, (T, p) in enumerate(result.fitted_slices):
-        print(f"  slice {i} (T={T}): theta={p.theta:.6f}, rho={p.rho:.4f}, psi={p.psi:.4f}")
-
-    # verify_hm_condition may be False because of the fallback
-    params_only = [p for _, p in result.fitted_slices]
-    hm_ok = verify_hm_condition(params_only)
-    print(f"  verify_hm_condition: {hm_ok}")
-    # We don't assert True or False — just that the function returns
-    # without raising.
+    # verify_hm_condition may be False because of the fallback; the point
+    # is that it runs without raising on a fallback-containing fit.
+    verify_hm_condition([p for _, p in result.fitted_slices])
 
 
 # ── Test 6: failed slice when both fits fail ─────────────────────────
@@ -241,22 +219,7 @@ def test_sequential_fit_reports_failed_slice_when_both_fits_fail(monkeypatch) ->
     """
     import arbfree_vol.ssvi.term_structure as ts
 
-    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
-    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
-    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
-    ks = np.linspace(-1.0, 1.0, 9).tolist()
-
-    def _pts(truth):
-        return [
-            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
-            for k in ks
-        ]
-
-    slices_data = [
-        (0.25, _pts(truth1)),
-        (0.50, _pts(truth2)),
-        (1.00, _pts(truth3)),
-    ]
+    slices_data = _make_slices_data()
 
     # Monkeypatch _fit_slice to fail on the 2nd call
     call_count = {"n": 0}
@@ -448,19 +411,11 @@ def test_slsqp_non_converged_slice_lands_in_fallback(monkeypatch) -> None:
 # unconstrained fit would recover the dips and verify_hm_condition
 # would report a violation with an EMPTY fallback_slices; the tests
 # below would fail.
-_DIP_TRUTH = [
-    (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
-    (0.50, dict(theta=0.03, rho=-0.2, psi=0.35)),  # theta + chi dip
-    (1.00, dict(theta=0.12, rho=0.1, psi=0.4)),
-    (2.00, dict(theta=0.07, rho=0.2, psi=0.55)),   # theta dip again
-]
-
-
 def _dip_slices_data(with_tail: bool = False):
     """Build (expiry, [(k, w)]) data from the dip ground truth."""
     data = [
         (T, [(float(k), ssvi_w(float(k), t["theta"], t["rho"], t["psi"])) for k in _KS])
-        for T, t in _DIP_TRUTH
+        for T, t in _DIP_TRUTH_ENGINE
     ]
     if with_tail:
         data.append(
@@ -477,7 +432,7 @@ def test_hard_constraint_or_fallback_on_incompatible_data() -> None:
     fit recover the theta dips → verify_hm_condition() is False with an
     empty fallback_slices → this test fails.
 
-    Deterministic concrete outcome for ``_DIP_TRUTH`` (verified): the
+    Deterministic concrete outcome for ``_DIP_TRUTH_ENGINE`` (verified): the
     theta-dipping slices T=0.5 and T=2.0 land on the H&M boundary corner
     (theta_delta=1e-9, chi_delta=1e-6, ratio≈1) and are routed to the
     unconstrained fallback; T=0.25 and T=1.0 fit hard.  The fallback set
@@ -505,7 +460,7 @@ def test_fitted_slices_prev_threads_last_hard_constrained_predecessor() -> None:
     """fitted_slices_prev must point at the last HARD-CONSTRAINED slice
     before each fitted slice, skipping fallback slices.
 
-    Deterministic concrete outcome for ``_DIP_TRUTH`` + the T=3.0 tail
+    Deterministic concrete outcome for ``_DIP_TRUTH_ENGINE`` + the T=3.0 tail
     (verified across repeated runs): T=0.5, T=2.0 and T=3.0 all route to
     the unconstrained fallback via the degenerate H&M boundary-corner
     check, so the predecessor chain skips them:
@@ -842,22 +797,7 @@ def test_fallback_slice_fitted_slices_prev_keeps_predecessor(monkeypatch) -> Non
     """
     import arbfree_vol.ssvi.term_structure as ts
 
-    truth1 = dict(theta=0.04, rho=-0.3, psi=0.5)
-    truth2 = dict(theta=0.08, rho=-0.2, psi=0.6)
-    truth3 = dict(theta=0.14, rho=-0.1, psi=0.65)
-    ks = np.linspace(-1.0, 1.0, 9).tolist()
-
-    def _pts(truth):
-        return [
-            (float(k), ssvi_w(float(k), truth["theta"], truth["rho"], truth["psi"]))
-            for k in ks
-        ]
-
-    slices_data = [
-        (0.25, _pts(truth1)),
-        (0.50, _pts(truth2)),
-        (1.00, _pts(truth3)),
-    ]
+    slices_data = _make_slices_data()
 
     # Monkeypatch _fit_slice to fail on the 2nd call (the middle slice).
     call_count = {"n": 0}

@@ -34,9 +34,10 @@ from arbfree_vol.sabr.model import SABRParams
 
 from tests.repair_helpers import (
     SPOT, R, Q, T,
-    _DIP_TRUTH_ENGINE, _SVI_TRUTH_ENGINE,
+    _DIP_TRUTH_ENGINE,
     _bs_price, _clean_surface,
-    _ssvi_priced_surface, _svi_priced_surface,
+    _dip_truth_surface, _svi_truth_surface,
+    _ssvi_priced_surface,
     _flat_bs_surface, _forward_curve_missing,
 )
 
@@ -49,6 +50,16 @@ def _always_raise_fit(points, prev=None, **kwargs):
 def _never_fallback(points):
     """Fallback-failure stub: every unconstrained call raises."""
     raise RuntimeError("simulated fallback failure")
+
+
+def _shrink_last_slice(surface: VolSurface) -> None:
+    """Shrink the last slice to 2 strikes (4 quotes -> 4 (k,w) points),
+    below the 5-point per-slice minimum, in place."""
+    small = surface.slices[-1]
+    surface.slices[-1] = ExpirySlice(
+        expiry_time=small.expiry_time,
+        quotes=small.quotes[:4],
+    )
 
 
 def test_repair_clean_surface_rejects_nothing() -> None:
@@ -527,36 +538,24 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
 
 
 # ── Honest fallback on incompatible data (m66 resolved) ─
-# The m66 post-fit margin check has landed (src/arbfree_vol/ssvi/_hm_margin.py):
-# the xfail tripwire that awaited it is retired, and the contract it guarded
-# ("a genuinely H&M-incompatible T=2.0 dip must route to fallback, be flagged
-# repair_infeasible, and surface remaining violations") is now pinned by
-# test_repair_essvi_routes_degenerate_corner_to_fallback below — the same
-# fixture, same repair() call, with a superset of assertions (both T=0.5 and
-# T=2.0 corners must route to fallback).
+# The m66 post-fit margin check has landed (src/arbfree_vol/ssvi/_hm_margin.py,
+# docs/code_review_findings.md §6.7); the xfail tripwire that awaited it is
+# retired and the contract it guarded is pinned by the test below.
 
 
 def test_repair_essvi_routes_degenerate_corner_to_fallback() -> None:
     """The m66 post-fit margin check must route degenerate H&M boundary
     corners to the fallback path (docs/code_review_findings.md §6.7).
 
-    Same dip fixture as the xfail tripwire above.  With the fix, BOTH
-    theta-dipping slices converge to degenerate corners pinned at the
-    H&M eps floors (theta_delta=eps_theta, chi_delta=eps_chi,
-    ratio~1.0) with anomalously bad per-slice RMSE:
-
-    - T=0.5 flattened onto T=0.25 (hard RMSE ~0.0519 vs the
-      unconstrained fit's ~1.3e-11), and
-    - T=2.0 flattened onto T=1.0 (hard RMSE ~0.0499 vs ~1.1e-13).
-
-    The margin check routes BOTH to fallback_slices; the unconstrained
-    per-slice fallback then recovers the true theta dips (0.03 at
-    T=0.5, 0.07 at T=2.0), and the report honestly flags the remaining
-    calendar violations (repair_infeasible=True,
-    n_violations_after >= 1).  Pre-fix, both corners were silently
-    certified arb-free (fallback_slices=[], repair_infeasible=False).
+    With the fix, BOTH theta-dipping slices converge to degenerate H&M
+    corners (theta_delta/chi_delta at the eps floors, ratio ~1.0) with
+    anomalously bad per-slice RMSE; the margin check routes them to
+    fallback_slices, the unconstrained fallback recovers the true theta
+    dips (0.03 at T=0.5, 0.07 at T=2.0), and the report flags
+    repair_infeasible=True with the remaining calendar violations
+    surfaced.  Pre-fix, both corners were silently certified arb-free.
     """
-    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
+    report = repair(_dip_truth_surface(), use_ssvi=True)
 
     assert 2.0 in report.fallback_slices, (
         f"expected T=2.0 in fallback_slices, got {report.fallback_slices}"
@@ -586,12 +585,7 @@ def test_repair_essvi_skips_slice_with_few_points() -> None:
     fit with a warning — not fitted, not failed, no crash."""
     truth = _DIP_TRUTH_ENGINE + [(3.0, dict(theta=0.10, rho=0.1, psi=0.5))]
     surface = _ssvi_priced_surface(truth)
-    # Shrink the T=3.0 slice to 2 strikes (4 quotes -> 4 (k,w) points)
-    small = surface.slices[-1]
-    surface.slices[-1] = ExpirySlice(
-        expiry_time=small.expiry_time,
-        quotes=small.quotes[:4],
-    )
+    _shrink_last_slice(surface)  # the shrunk slice is the T=3.0 tail
 
     report = repair(surface, use_ssvi=True)
 
@@ -615,7 +609,7 @@ def test_repair_essvi_reports_slice_with_no_fit(monkeypatch) -> None:
     monkeypatch.setattr(ts, "_fit_slice", _always_raise_fit)
     monkeypatch.setattr(ts, "fit_ssvi_slice", _never_fallback)
 
-    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
+    report = repair(_dip_truth_surface(), use_ssvi=True)
 
     assert report.failed_slices == [0.25, 0.5, 1.0, 2.0], (
         f"expected all expiries in failed_slices, got {report.failed_slices}"
@@ -646,7 +640,7 @@ def test_repair_svi_reports_slice_with_no_fit(monkeypatch) -> None:
 
     monkeypatch.setattr(svi_strategies, "calibrate_constrained", _raise)
 
-    report = repair(_svi_priced_surface(_SVI_TRUTH_ENGINE))
+    report = repair(_svi_truth_surface())
 
     assert report.failed_slices == [0.25, 1.0], (
         f"expected both expiries in failed_slices, got {report.failed_slices}"
@@ -660,13 +654,8 @@ def test_repair_svi_skips_slice_with_few_points() -> None:
     fit with a warning — not fitted, not failed, not a fallback.  This is
     a SKIP (like the eSSVI path), not a failure, so the expiry must NOT
     appear in failed_slices."""
-    surface = _svi_priced_surface(_SVI_TRUTH_ENGINE)
-    # Shrink the T=1.0 slice to 4 quotes (2 strikes -> 2 (k,w) points)
-    small = surface.slices[-1]
-    surface.slices[-1] = ExpirySlice(
-        expiry_time=small.expiry_time,
-        quotes=small.quotes[:4],
-    )
+    surface = _svi_truth_surface()
+    _shrink_last_slice(surface)
 
     report = repair(surface)
 
@@ -724,12 +713,7 @@ def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:
     import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
     surface = _flat_bs_surface([0.25, 1.0])
-    # Shrink the T=1.0 slice to 4 quotes (2 strikes -> 2 (k,w) points)
-    small = surface.slices[-1]
-    surface.slices[-1] = ExpirySlice(
-        expiry_time=small.expiry_time,
-        quotes=small.quotes[:4],
-    )
+    _shrink_last_slice(surface)
 
     monkeypatch.setattr(
         sabr_strategies, "fit_sabr_term_structure",
@@ -766,9 +750,7 @@ def test_repair_infeasible_true_when_grid_finds_remaining_violations() -> None:
     kept repair_infeasible=False — yet the raw-SVI grid detects 2
     calendar violations on the fitted surface.
     """
-    report = repair(
-        _ssvi_priced_surface(_DIP_TRUTH_ENGINE, n_strikes=7), use_ssvi=True,
-    )
+    report = repair(_dip_truth_surface(n_strikes=7), use_ssvi=True)
 
     assert report.fallback_slices == [], (
         f"test setup error: expected no fallback, got {report.fallback_slices}"
@@ -814,9 +796,7 @@ def test_repair_infeasible_true_for_wing_crossing_beyond_svi_grid() -> None:
     monkeypatch.setattr(essvi_strategies, "fit_ssvi_surface_sequential", _fake_sequential)
 
     try:
-        report = repair(
-            _ssvi_priced_surface(_DIP_TRUTH_ENGINE, n_strikes=9), use_ssvi=True,
-        )
+        report = repair(_dip_truth_surface(n_strikes=9), use_ssvi=True)
     finally:
         monkeypatch.undo()
 
@@ -974,12 +954,8 @@ def test_sabr_mapping_wrap_records_failed_slices(caplog, monkeypatch) -> None:
 def test_sabr_mapping_wrap_records_failed_slices_on_value_error(caplog, monkeypatch) -> None:
     """The wrap around ``sabr_to_raw_svi_params`` must also catch the
     ValueError that scipy's ``least_squares`` raises on non-finite
-    residuals.
-
-    Pre-fix, only RuntimeError was caught: a ValueError escaped the wrap
-    and aborted ``repair()`` entirely.  Post-fix the slice is logged and
-    recorded in ``sabr_mapping_failed_slices`` — same honest bookkeeping
-    as the RuntimeError path.
+    residuals, recording the slice in ``sabr_mapping_failed_slices``
+    exactly like the RuntimeError path.
     """
     import arbfree_vol.repair.strategies.sabr as sabr_strategies
 
@@ -1026,7 +1002,7 @@ def test_repair_svi_records_slice_with_no_forward(caplog, monkeypatch) -> None:
     )
 
     with caplog.at_level(logging.WARNING, logger="arbfree_vol.repair.engine"):
-        report = repair(_svi_priced_surface(_SVI_TRUTH_ENGINE))
+        report = repair(_svi_truth_surface())
 
     assert report.failed_slices == [1.0], (
         f"expected the no-forward expiry in failed_slices, got "
