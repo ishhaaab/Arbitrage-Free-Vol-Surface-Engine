@@ -772,6 +772,18 @@ def run_diagnostics():
             "unc_satisfies_hm": hm_check["satisfies_both"],
         })
 
+    _print_summary_and_interpretation(summary_rows)
+
+    return summary_rows
+
+
+def _print_summary_and_interpretation(summary_rows: list[dict]) -> None:
+    """Print the fallback-slice summary table and its interpretation.
+
+    The convergence interpretation is drawn from the summary rows: how many
+    slices fail with the default seed, how many of those are fixed by a
+    warm-start, and how many are fundamentally infeasible under H&M.
+    """
     # ── Summary table ────────────────────────────────────────────────
     print(f"\n{'=' * 72}")
     print("  SUMMARY TABLE")
@@ -815,8 +827,6 @@ def run_diagnostics():
         print(f"\n  => OUTCOME C: Mixed results.")
         print(f"     Some slices are convergence failures (warm-start would fix them).")
         print(f"     Others are fundamental infeasibility (document as limitation).")
-
-    return summary_rows
 
 
 # ── Entry point ──────────────────────────────────────────────────────
