@@ -142,24 +142,53 @@ def _normalize_to_calls(
 
     calls: list[tuple[float, float]] = [] # creates an empty list of tuples
     for strike, sides in by_strike.items(): # iterate over K
-        if OptionType.CALL in sides: # if a call exists for some K, use it
-            call_price = sides[OptionType.CALL]
-            if OptionType.PUT in sides: # also have a put then average with parity-implied call
-                if forward_price is not None:
-                    parity_call = sides[OptionType.PUT] + exp(-r * s.expiry_time) * (forward_price - strike)
-                else:
-                    parity_call = sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
-                call_price = (call_price + parity_call) / 2.0
-
-        else:
-            if forward_price is not None:
-                call_price = sides[OptionType.PUT] + exp(-r * s.expiry_time) * (forward_price - strike)
-            else:
-                call_price = sides[OptionType.PUT] + _parity_rhs(surface, s, strike)
-
+        call_price = _synthetic_call_price(surface, s, strike, sides, forward_price, r)
         calls.append((strike, call_price))
 
     return sorted(calls)
+
+
+def _synthetic_call_price(
+    surface: VolSurface,
+    s: ExpirySlice,
+    strike: float,
+    sides: dict[OptionType, float],
+    forward_price: float | None,
+    r: float,
+) -> float:
+    """Synthetic call price at one strike, from calls and/or put-call parity.
+
+    When a call exists, its price is used.  If a put also exists, the
+    call is averaged with the parity-implied call from the put.  When no
+    call exists, the put is converted via put-call parity.
+    """
+    if OptionType.CALL in sides:  # if a call exists for some K, use it
+        call_price = sides[OptionType.CALL]
+        if OptionType.PUT in sides:  # also have a put then average with parity-implied call
+            parity_call = _parity_implied_call(surface, s, strike, sides[OptionType.PUT], forward_price, r)
+            call_price = (call_price + parity_call) / 2.0
+        return call_price
+
+    # No call at this strike — convert the put via put-call parity.
+    return _parity_implied_call(surface, s, strike, sides[OptionType.PUT], forward_price, r)
+
+
+def _parity_implied_call(
+    surface: VolSurface,
+    s: ExpirySlice,
+    strike: float,
+    put_price: float,
+    forward_price: float | None,
+    r: float,
+) -> float:
+    """Implied call price from put-call parity: P + e^{-rT}(F - K).
+
+    Uses the explicit forward when given, otherwise falls back to the
+    surface-level ``r``/``q`` via ``_parity_rhs``.
+    """
+    if forward_price is not None:
+        return put_price + exp(-r * s.expiry_time) * (forward_price - strike)
+    return put_price + _parity_rhs(surface, s, strike)
 
 
 def _check_monotonicity(
