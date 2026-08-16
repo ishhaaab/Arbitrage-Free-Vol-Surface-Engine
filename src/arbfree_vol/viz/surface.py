@@ -140,6 +140,40 @@ def plot_heatmap_2d(
     return fig
 
 
+def _build_iv_grid(
+    fs: FittedSurface,
+    maturities: np.ndarray,
+    strikes: np.ndarray,
+    fallback_slices: list[float] | None,
+) -> np.ndarray:
+    """Evaluate the implied-vol grid for a heatmap.
+
+    Each cell queries ``iv_at``; cells where it raises ``ValueError``
+    (out-of-range strike/expiry) stay *nan*.  When ``fallback_slices`` is
+    given, entire maturity rows in the set are masked to *nan*.
+    """
+    from arbfree_vol.plotting.masking import make_fallback_mask
+
+    n_maturities = len(maturities)
+    n_strikes = len(strikes)
+
+    iv_grid = np.full((n_maturities, n_strikes), np.nan)
+    for i_T, T in enumerate(maturities):
+        for i_K, K in enumerate(strikes):
+            try:
+                iv_grid[i_T, i_K] = iv_at(fs, K, T)
+            except ValueError:
+                pass  # leave as nan
+
+    # Apply fallback mask: mark entire maturity rows as bad
+    if fallback_slices:
+        fb_mask_1d = make_fallback_mask(maturities, fallback_slices)
+        fb_mask_2d = fb_mask_1d[:, None] & np.ones(n_strikes, dtype=bool)
+        iv_grid = np.where(fb_mask_2d, np.nan, iv_grid)
+
+    return iv_grid
+
+
 def plot_iv_heatmap(
     fs: FittedSurface,
     n_strikes: int = 50,
@@ -183,20 +217,7 @@ def plot_iv_heatmap(
 
     strikes = np.linspace(fs.spot * 0.8, fs.spot * 1.2, n_strikes)
 
-    # Build iv grid
-    iv_grid = np.full((n_maturities, n_strikes), np.nan)
-    for i_T, T in enumerate(maturities):
-        for i_K, K in enumerate(strikes):
-            try:
-                iv_grid[i_T, i_K] = iv_at(fs, K, T)
-            except ValueError:
-                pass  # leave as nan
-
-    # Apply fallback mask: mark entire maturity rows as bad
-    if fallback_slices:
-        fb_mask_1d = make_fallback_mask(maturities, fallback_slices)
-        fb_mask_2d = fb_mask_1d[:, None] & np.ones(n_strikes, dtype=bool)
-        iv_grid = np.where(fb_mask_2d, np.nan, iv_grid)
+    iv_grid = _build_iv_grid(fs, maturities, strikes, fallback_slices)
 
     iv_grid = np.ma.masked_invalid(iv_grid)
 
