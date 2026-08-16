@@ -208,6 +208,38 @@ def compute_slice_analytics(T: float, points: list[tuple[float, float]]) -> dict
 # ── Hard-constrained fit attempts ────────────────────────────────────
 
 
+def _build_violation_info(params: SSVIParams, prev: SSVIParams | None) -> dict:
+    """Build the constraint-violation info dict for a fitted slice.
+
+    Encodes butterfly-feasibility (bf_min_residual) and, when a
+    previous slice exists, calendar-feasibility (theta_delta,
+    chi_delta, ratio, ratio_ok).  Shared by the hard-constrained and
+    warm-start diagnostics so the two paths cannot drift.
+    """
+    chi = params.theta * params.psi
+    bf_resid = _butterfly_constraints(params.theta, params.rho, params.psi)
+
+    violation_info = {
+        "bf_min_residual": float(bf_resid.min()),
+        "theta": params.theta,
+        "rho": params.rho,
+        "psi": params.psi,
+        "chi": chi,
+    }
+
+    # Calendar constraint violations (if prev exists)
+    if prev is not None:
+        prev_chi = prev.theta * prev.psi
+        violation_info["theta_delta"] = params.theta - prev.theta
+        violation_info["chi_delta"] = chi - prev_chi
+        denom = max(chi - prev_chi, 1e-6)
+        ratio = (params.rho * chi - prev.rho * prev_chi) / denom
+        violation_info["ratio"] = ratio
+        violation_info["ratio_ok"] = abs(ratio) <= 1.0 + 1e-8
+
+    return violation_info
+
+
 def try_hard_constrained(
     points: list[tuple[float, float]],
     prev: SSVIParams | None,
@@ -217,26 +249,7 @@ def try_hard_constrained(
     try:
         params = _fit_slice(points, prev=prev)
         # Check constraint violations at the solution
-        chi = params.theta * params.psi
-        bf_resid = _butterfly_constraints(params.theta, params.rho, params.psi)
-
-        violation_info = {
-            "bf_min_residual": float(bf_resid.min()),
-            "theta": params.theta,
-            "rho": params.rho,
-            "psi": params.psi,
-            "chi": chi,
-        }
-
-        # Calendar constraint violations (if prev exists)
-        if prev is not None:
-            prev_chi = prev.theta * prev.psi
-            violation_info["theta_delta"] = params.theta - prev.theta
-            violation_info["chi_delta"] = chi - prev_chi
-            denom = max(chi - prev_chi, 1e-6)
-            ratio = (params.rho * chi - prev.rho * prev_chi) / denom
-            violation_info["ratio"] = ratio
-            violation_info["ratio_ok"] = abs(ratio) <= 1.0 + 1e-8
+        violation_info = _build_violation_info(params, prev)
 
         return {
             "label": label,
@@ -394,25 +407,7 @@ def try_warm_start(
         psi=float(np.exp(v)),
     )
 
-    chi = params.theta * params.psi
-    bf_resid = _butterfly_constraints(params.theta, params.rho, params.psi)
-
-    violation_info = {
-        "bf_min_residual": float(bf_resid.min()),
-        "theta": params.theta,
-        "rho": params.rho,
-        "psi": params.psi,
-        "chi": chi,
-    }
-
-    if prev is not None:
-        prev_chi = prev.theta * prev.psi
-        violation_info["theta_delta"] = params.theta - prev.theta
-        violation_info["chi_delta"] = chi - prev_chi
-        denom = max(chi - prev_chi, 1e-6)
-        ratio = (params.rho * chi - prev.rho * prev_chi) / denom
-        violation_info["ratio"] = ratio
-        violation_info["ratio_ok"] = abs(ratio) <= 1.0 + 1e-8
+    violation_info = _build_violation_info(params, prev)
 
     return {
         "label": label,
