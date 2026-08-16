@@ -460,13 +460,7 @@ def _run_single_audit(
 
     # Tenor bucket breakdown
     tenor_breakdown = compute_tenor_bucket_breakdown(surface, result.fallback_slices)
-    print(f"\n  {'Tenor Bucket Breakdown':}")
-    print(f"  {'Bucket':<12} {'Fallback':>8} {'Total':>8}")
-    print(f"  {'-' * 30}")
-    for _, label in _TENOR_BUCKETS:
-        tb = tenor_breakdown[label]
-        if tb["total"] > 0:
-            print(f"  {label:<12} {tb['fallback']:>8} {tb['total']:>8}")
+    _print_tenor_breakdown(tenor_breakdown)
 
     return {
         "rows": rows,
@@ -480,6 +474,17 @@ def _run_single_audit(
         "theta_max_dip_pct": theta_info["max_dip_pct"],
         "tenor_breakdown": tenor_breakdown,
     }
+
+
+def _print_tenor_breakdown(tenor_breakdown: dict) -> None:
+    """Print the fallback/total tenor-bucket breakdown."""
+    print(f"\n  {'Tenor Bucket Breakdown':}")
+    print(f"  {'Bucket':<12} {'Fallback':>8} {'Total':>8}")
+    print(f"  {'-' * 30}")
+    for _, label in _TENOR_BUCKETS:
+        tb = tenor_breakdown[label]
+        if tb["total"] > 0:
+            print(f"  {label:<12} {tb['fallback']:>8} {tb['total']:>8}")
 
 
 # ── Main audit ──────────────────────────────────────────────────────
