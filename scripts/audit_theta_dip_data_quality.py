@@ -340,6 +340,72 @@ def compute_tenor_bucket_breakdown(
 
 # ── Single audit run ────────────────────────────────────────────────
 
+def _build_expiry_row(
+    sl,
+    T: float,
+    is_fallback: bool,
+    is_failed: bool,
+    ticker,
+    spot: float,
+    label: str,
+) -> dict:
+    """Build one per-expiry quality-metrics row for the audit table.
+
+    Fetches the expiry's option chain (when a ticker is available) and
+    computes ATM-quality + OI-drop metrics.  Unavailable metrics are
+    represented as None / N/A — never as observed zeros (a missing chain
+    is not evidence of zero dips).
+    """
+    from datetime import date, timedelta
+
+    ref = date.today()
+    exp_date = ref + timedelta(days=int(round(T * 365.0)))
+    exp_str = exp_date.isoformat()
+
+    metrics = None
+    oi_info = None
+    metrics_error = None
+    if ticker is not None:
+        try:
+            chain = ticker.option_chain(exp_str)
+            metrics = compute_atm_quality_metrics(chain.calls, chain.puts, spot)
+            oi_info = compute_per_expiry_oi_drops(chain.calls, chain.puts, spot)
+        except Exception as exc:
+            metrics_error = str(exc)
+            _logger.warning(
+                "option_chain fetch failed for source=%r expiry=%s T=%.4f: %s",
+                label, exp_str, T, exc,
+            )
+    else:
+        metrics_error = "no ticker (per-expiry option chains unavailable in fixture mode)"
+    metrics_available = metrics is not None
+    if metrics is None:
+        metrics = {
+            "median_OI": None,
+            "median_volume": None,
+            "median_bid_ask_pct": None,
+            "zero_vol_count": None,
+            "zero_oi_count": None,
+            "zero_quote_count": None,
+            "n_atm_strikes": None,
+        }
+        oi_info = {
+            "total_strikes": None,
+            "oi_dropped": None,
+            "drop_rate": None,
+        }
+
+    tag = "FALLBACK" if is_fallback else ("FAILED" if is_failed else "OK")
+    return {
+        "T": T,
+        "tag": tag,
+        "metrics_available": metrics_available,
+        "error": metrics_error,
+        **metrics,
+        **oi_info,
+    }
+
+
 def _run_single_audit(
     label: str,
     surface,
@@ -375,62 +441,12 @@ def _run_single_audit(
           f"mean={theta_info['mean_dip_pct']:.1f}%")
 
     # Per-expiry data quality metrics
-    from datetime import date, timedelta
-
     rows = []
     for sl in sorted(surface.slices, key=lambda s: s.expiry_time):
         T = sl.expiry_time
         is_fallback = T in fallback_Ts
         is_failed = T in failed_Ts
-
-        ref = date.today()
-        exp_date = ref + timedelta(days=int(round(T * 365.0)))
-        exp_str = exp_date.isoformat()
-
-        metrics = None
-        oi_info = None
-        metrics_error = None
-        if ticker is not None:
-            try:
-                chain = ticker.option_chain(exp_str)
-                metrics = compute_atm_quality_metrics(chain.calls, chain.puts, spot)
-                oi_info = compute_per_expiry_oi_drops(chain.calls, chain.puts, spot)
-            except Exception as exc:
-                metrics_error = str(exc)
-                _logger.warning(
-                    "option_chain fetch failed for source=%r expiry=%s T=%.4f: %s",
-                    label, exp_str, T, exc,
-                )
-        else:
-            metrics_error = "no ticker (per-expiry option chains unavailable in fixture mode)"
-        metrics_available = metrics is not None
-        if metrics is None:
-            # Unavailable metrics are represented as None / N/A — never as
-            # observed zeros (a missing chain is not evidence of zero dips).
-            metrics = {
-                "median_OI": None,
-                "median_volume": None,
-                "median_bid_ask_pct": None,
-                "zero_vol_count": None,
-                "zero_oi_count": None,
-                "zero_quote_count": None,
-                "n_atm_strikes": None,
-            }
-            oi_info = {
-                "total_strikes": None,
-                "oi_dropped": None,
-                "drop_rate": None,
-            }
-
-        tag = "FALLBACK" if is_fallback else ("FAILED" if is_failed else "OK")
-        rows.append({
-            "T": T,
-            "tag": tag,
-            "metrics_available": metrics_available,
-            "error": metrics_error,
-            **metrics,
-            **oi_info,
-        })
+        rows.append(_build_expiry_row(sl, T, is_fallback, is_failed, ticker, spot, label))
 
     # Print per-expiry table
     print(f"\n  {'=' * 110}")
