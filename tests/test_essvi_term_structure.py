@@ -883,21 +883,19 @@ def test_fallback_slice_fitted_slices_prev_keeps_predecessor(monkeypatch) -> Non
     assert result.fitted_slices_prev[1] is not None
 
 
-@pytest.mark.xfail(
-    reason="m66 gap (docs/code_review_findings.md, 2026-08-09): a hard-fit sitting "
-    "within eps of the H&M boundary is silently certified without a margin check"
-)
 def test_hard_fit_within_eps_of_boundary_not_silently_certified(monkeypatch) -> None:
-    """Desired invariant: a hard-fit pinned within eps of the H&M Prop 3.1
-    boundary (the m66 degenerate corner) must be routed to fallback, not
-    silently certified arb-free.
+    """Desired invariant (m66, now a hard regression tripwire): a hard-fit
+    pinned within eps of the H&M Prop 3.1 boundary (the m66 degenerate
+    corner) must be routed to fallback, not silently certified arb-free.
 
     Deterministic: `ts._fit_slice` is scripted to land on the measured m66
     corner for the theta-dipping slice, `ts.fit_ssvi_slice` is scripted to
     the true dip params for the RMSE baseline, and the real
-    `fit_ssvi_surface_sequential` routing logic runs.  Before the m66 fix
-    this test fails (the corner is accepted as hard); with the fix it
-    XPASSes (the corner is routed to fallback), self-confirming the fix.
+    `fit_ssvi_surface_sequential` routing logic runs.  Formerly xfail
+    (``docs/code_review_findings.md`` §6.7): before the post-fit margin
+    check landed (``ssvi/_hm_margin.py``) this test failed — the corner
+    was accepted as hard; after the fix it began XPASSing.  The marker is
+    now removed: a regression of the margin check fails the suite red.
     """
     import arbfree_vol.ssvi.term_structure as ts
 

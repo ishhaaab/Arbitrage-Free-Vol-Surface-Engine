@@ -526,63 +526,14 @@ def test_repair_essvi_handles_infeasible_slice_gracefully(monkeypatch) -> None:
     )
 
 
-# ── Real (non-monkeypatched) honest fallback — xfail until m66 lands ─
-# Same genuinely H&M-incompatible-at-face-value ground truth as the
-# term-structure tests, but priced into a VolSurface so the FULL
-# repair() pipeline runs: cleaning -> forward curve -> sequential eSSVI
-# fit -> arb verification.  Pre-fix, the T=2.0 hard fit honestly fell
-# back (H&M linesearch failure).  The strict Gatheral-Jacquier
-# condition-1 eps shift re-routed SLSQP to a degenerate boundary corner
-# that is silently certified arb-free — the SAME margin-check gap as
-# mutmut_66 (docs/code_review_findings.md §6.7).  The test is xfail
-# until a post-fit margin check lands and must NOT bless that corner.
-
-
-@pytest.mark.xfail(
-    reason="m66 margin-check gap (docs/code_review_findings.md §6.7, 2026-08-09): "
-    "the strict Gatheral-Jacquier condition-1 eps shift changed SLSQP routing so "
-    "this genuinely-unsatisfiable T=2.0 dip converges to a degenerate corner pinned "
-    "at the H&M eps floors (theta_delta=eps_theta, chi_delta=eps_chi, ratio~0.9998, "
-    "RMSE~0.05) and is silently certified arb-free. A post-fit margin check must "
-    "route such fits to fallback_slices or set repair_infeasible; this test then "
-    "flips to XPASS.",
-    strict=False,
-)
-def test_repair_essvi_real_fallback_on_incompatible_data() -> None:
-    """End-to-end: genuinely H&M-incompatible-at-face-value data through
-    repair() honestly falls back (no monkeypatch) and the fallback is
-    flagged — currently xfail-marked.
-
-    The fixture is the same m66 dataset as docs/code_review_findings.md
-    §6.7 (the theta-dip ground truth at T=0.5 and T=2.0).  Under the
-    pre-fix code the T=2.0 hard-constrained fit failed the H&M
-    linesearch and honestly fell back to the unconstrained fit — this
-    test's original purpose: ``2.0 in report.fallback_slices``,
-    ``repair_infeasible=True``, and the remaining calendar violation
-    surfaced in ``n_violations_after``.  Under the strictness fix
-    (``_GJ_CONDITION1_STRICT_EPS``) the optimizer now certifies the
-    T=2.0 dip as a degenerate corner pinned at the H&M eps floors — the
-    SAME underlying margin-check gap as mutmut_66 surfacing through a
-    different mutation, not a genuinely feasible fit.  The test is
-    therefore xfail until the post-fit margin check lands, and must NOT
-    be used to bless the corner as correct.
-    """
-    report = repair(_ssvi_priced_surface(_DIP_TRUTH_ENGINE), use_ssvi=True)
-
-    assert report.metrics.n_slices_fitted == 4, (
-        f"expected 4 fitted slices, got {report.metrics.n_slices_fitted}"
-    )
-    assert len(report.fitted_ssvi_slices) == 4
-    assert 2.0 in report.fallback_slices, (
-        f"expected a real fallback at T=2.0, got {report.fallback_slices}"
-    )
-    assert report.failed_slices == []
-    assert report.repair_infeasible is True, (
-        "repair_infeasible must be True when a fallback slice violates H&M"
-    )
-    assert report.metrics.n_violations_after >= 1, (
-        "the remaining calendar violation must be surfaced, not hidden"
-    )
+# ── Honest fallback on incompatible data (m66 resolved) ─
+# The m66 post-fit margin check has landed (src/arbfree_vol/ssvi/_hm_margin.py):
+# the xfail tripwire that awaited it is retired, and the contract it guarded
+# ("a genuinely H&M-incompatible T=2.0 dip must route to fallback, be flagged
+# repair_infeasible, and surface remaining violations") is now pinned by
+# test_repair_essvi_routes_degenerate_corner_to_fallback below — the same
+# fixture, same repair() call, with a superset of assertions (both T=0.5 and
+# T=2.0 corners must route to fallback).
 
 
 def test_repair_essvi_routes_degenerate_corner_to_fallback() -> None:
