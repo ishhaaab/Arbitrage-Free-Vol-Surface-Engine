@@ -687,8 +687,8 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
     unc_params, unc_rmse = _fit_unconstrained(pts)
 
     # (c) Find predecessor (last hard-constrained fit before this T)
-    prev_params = _find_predecessor(result.fitted_slices, fallback_T)
-    _print_predecessor(prev_params, result.fitted_slices)
+    prev_params, prev_T = _find_predecessor(result.fitted_slices, fallback_T)
+    _print_predecessor(prev_params, prev_T)
 
     # (d) Hard-constrained fit attempts
     default_result, warm_result, n_restart_converged = _run_constrained_attempts(
@@ -730,22 +730,28 @@ def _fit_unconstrained(pts: list[tuple[float, float]]) -> tuple[object, float]:
 
 
 def _find_predecessor(fitted_slices, fallback_T: float):
-    """Return the last hard-constrained fit with T < fallback_T, or None."""
+    """Return (params, T) of the last hard-constrained fit with T < fallback_T.
+
+    Returns ``(None, None)`` when no predecessor exists.  The returned T
+    is the maturity of the selected predecessor, so callers can display
+    the same slice that was used for selection without re-deriving it.
+    """
     prev_params = None
+    prev_T = None
     sorted_fitted = sorted(fitted_slices, key=lambda x: x[0])
     for T_i, p_i in sorted_fitted:
         if T_i < fallback_T:
             prev_params = p_i
+            prev_T = T_i
         else:
             break
-    return prev_params
+    return prev_params, prev_T
 
 
-def _print_predecessor(prev_params, sorted_fitted) -> None:
+def _print_predecessor(prev_params, prev_T) -> None:
     """Print the predecessor-slice params (or a none-found note)."""
     if prev_params:
         print(f"\n  Predecessor slice (last hard-constrained fit):")
-        prev_T = [T for T, p in sorted_fitted if p is prev_params][0]
         print(f"    T     = {prev_T:.4f}")
         print(f"    theta = {prev_params.theta:.6f}")
         print(f"    rho   = {prev_params.rho:.6f}")
