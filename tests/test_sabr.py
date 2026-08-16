@@ -255,3 +255,42 @@ def test_default_k_grid_is_center_weighted() -> None:
     band = grid[(grid >= -1.0) & (grid <= 1.0)]
     assert len(band) == 102  # -1.0 and 1.0 each duplicated by a wing segment
     assert len(np.unique(band)) == 100  # the documented center weighting
+
+
+def test_calibrate_sabr_raises_on_too_few_points() -> None:
+    """Fewer than 5 points is rejected before any optimization."""
+    pts = [(float(k), 0.04) for k in [-1.0, 0.0, 1.0]]  # only 3 points
+    with pytest.raises(ValueError, match="at least 5 points"):
+        calibrate_sabr(pts, forward=_F, expiry_time=_T)
+
+
+def test_calibrate_sabr_raises_on_nonconvergence(monkeypatch) -> None:
+    """A failed scipy least_squares surfaces as a RuntimeError with the
+    optimizer's message, never silent garbage parameters."""
+    from arbfree_vol.sabr import calibration as calib_mod
+
+    class _FailedResult:
+        success = False
+        message = "`gtol` termination condition is satisfied."
+
+    monkeypatch.setattr(calib_mod, "least_squares", lambda *a, **k: _FailedResult())
+    # 5 valid points; the fake optimizer always fails.
+    pts = [(float(k), 0.04 + 0.01 * k) for k in [-1.0, -0.5, 0.0, 0.5, 1.0]]
+    with pytest.raises(RuntimeError, match="SABR calibration failed"):
+        calibrate_sabr(pts, forward=_F, expiry_time=_T)
+
+
+def test_sabr_to_svi_raises_on_nonconvergence(monkeypatch) -> None:
+    """The SABR->SVI mapping fit must surface optimizer failure rather than
+    return unconverged raw-SVI parameters."""
+    import scipy.optimize as sp_opt
+
+    p = SABRParams(alpha=_ALPHA, beta=_BETA, rho=_RHO, nu=_NU)
+
+    class _FailedResult:
+        success = False
+        message = "`xtol` termination condition is satisfied."
+
+    monkeypatch.setattr(sp_opt, "least_squares", lambda *a, **k: _FailedResult())
+    with pytest.raises(RuntimeError, match="SABR-to-SVI mapping failed"):
+        to_raw_svi_params(p, forward=_F, expiry_time=_T)

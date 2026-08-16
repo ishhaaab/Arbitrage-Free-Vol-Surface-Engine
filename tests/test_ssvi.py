@@ -215,3 +215,52 @@ def test_essvi_psi_raises_on_nonpositive_theta() -> None:
     # Sanity: positive theta returns normally
     result = essvi_psi(theta=0.04, eta=0.5, gamma=0.5)
     assert result == approx(0.5 / (0.04 ** 0.5), abs=1e-12)
+
+
+def test_to_raw_svi_raises_on_nonpositive_psi() -> None:
+    """psi <= 0 has no valid SVI mapping (b=0, sigma undefined); the
+    conversion must reject it explicitly."""
+    with pytest.raises(ValueError, match="psi must be positive"):
+        to_raw_svi_params(0.04, -0.4, 0.0)
+    with pytest.raises(ValueError, match="psi must be positive"):
+        to_raw_svi_params(0.04, -0.4, -0.5)
+
+
+def test_fit_essvi_slice_raises_on_too_few_points() -> None:
+    """The 5-point minimum is enforced before any optimization."""
+    pts = [(float(k), 0.04) for k in [-1.0, 0.0, 1.0]]  # only 3 points
+    with pytest.raises(ValueError, match="at least 5 points"):
+        fit_essvi_slice(pts)
+
+
+def test_fit_ssvi_slice_raises_on_nonconvergence(monkeypatch) -> None:
+    """When the scipy least_squares optimizer reports failure, the calibra-
+    tion raises RuntimeError instead of returning garbage parameters."""
+    from arbfree_vol.ssvi import calibration as calib_mod
+
+    class _FailedResult:
+        success = False
+        message = "`xtol` termination condition is satisfied."
+
+    def _fake_ls(*args, **kwargs):
+        return _FailedResult()
+
+    monkeypatch.setattr(calib_mod, "least_squares", _fake_ls)
+    # 5 valid points; the fake optimizer always fails.
+    pts = [(float(k), ssvi_w(float(k), 0.04, -0.4, 0.5)) for k in [-1.0, -0.5, 0.0, 0.5, 1.0]]
+    with pytest.raises(RuntimeError, match="SSVI calibration failed"):
+        fit_ssvi_slice(pts)
+
+
+def test_fit_essvi_slice_raises_on_nonconvergence(monkeypatch) -> None:
+    """Same contract for the eSSVI fitter: non-convergence is a RuntimeError."""
+    from arbfree_vol.ssvi import calibration as calib_mod
+
+    class _FailedResult:
+        success = False
+        message = "`xtol` termination condition is satisfied."
+
+    monkeypatch.setattr(calib_mod, "least_squares", lambda *a, **k: _FailedResult())
+    pts = [(float(k), ssvi_w(float(k), 0.04, -0.4, 0.5)) for k in [-1.0, -0.5, 0.0, 0.5, 1.0]]
+    with pytest.raises(RuntimeError, match="eSSVI calibration failed"):
+        fit_essvi_slice(pts)

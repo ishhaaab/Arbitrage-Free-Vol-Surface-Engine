@@ -291,3 +291,63 @@ def test_joint_fit_clamps_boundary_rho_in_returned_splines(monkeypatch) -> None:
         assert rho_fine[i] > -0.999, (
             f"rho_spline({t:.4f})={rho_fine[i]:.8f} not > -0.999"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test: single-slice + return_splines=True returns constant splines
+# ---------------------------------------------------------------------------
+
+def test_single_slice_splines_are_constant() -> None:
+    """For N=1 with ``return_splines=True``, the returned splines are
+    constant functions (k=0 splines anchored at the single expiry), so
+    evaluating them at any t reproduces the fitted parameter."""
+    T = 0.5
+    p = _SLICE_PARAMS[0]
+    points = [
+        (float(k), sabr_total_variance(
+            float(k), _FORWARD, T,
+            p["alpha"], p["beta"], p["rho"], p["nu"],
+        ))
+        for k in _K_GRID
+    ]
+    slices = [(T, _FORWARD, points)]
+
+    result, splines = fit_sabr_term_structure(slices, return_splines=True)
+
+    assert len(result) == 1
+    fitted = result[0]
+    # A constant spline must reproduce the fitted param at any t.
+    for t in [0.1, 0.5, 2.0]:
+        assert splines["alpha"](t) == approx(fitted.alpha, abs=1e-10)
+        assert splines["nu"](t) == approx(fitted.nu, abs=1e-10)
+        assert splines["rho"](t) == approx(fitted.rho, abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Test: joint-fit fallback + return_splines=True builds splines
+# ---------------------------------------------------------------------------
+
+def test_joint_fit_fallback_returns_splines(monkeypatch) -> None:
+    """When the joint fit fails AND ``return_splines=True``, the fallback
+    must still return splines built from the per-slice fallback params —
+    the return contract (list, dict) is preserved even on the fallback
+    path."""
+    import arbfree_vol.sabr.term_structure as ts
+
+    slices = _make_synthetic_slices()
+
+    class _NonConverged:
+        success = False
+        message = "simulated joint-fit nonconvergence"
+
+    monkeypatch.setattr(ts, "least_squares", lambda *a, **k: _NonConverged())
+
+    result, splines = fit_sabr_term_structure(slices, return_splines=True)
+
+    assert len(result) == 3
+    # The splines evaluate at the knot expiries to the fallback params.
+    for i, (T, F, pts) in enumerate(slices):
+        direct = calibrate_sabr(pts, forward=F, expiry_time=T, beta_hint=0.5)
+        assert splines["alpha"](T) == approx(direct.alpha, abs=1e-6)
+        assert splines["nu"](T) == approx(direct.nu, abs=1e-6)
+        assert splines["rho"](T) == approx(direct.rho, abs=1e-6)

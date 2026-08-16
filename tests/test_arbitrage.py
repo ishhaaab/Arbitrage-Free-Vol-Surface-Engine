@@ -515,3 +515,68 @@ class TestCalendarThreshold:
         assert all("T=1.0000 > T=2.0000" not in v.detail for v in cal), (
             "the clean T=1.0 -> T=2.0 pair must not be flagged"
         )
+
+    def test_disjoint_k_ranges_are_skipped(self) -> None:
+        """When the earlier and later slices share NO log-moneyness range,
+        the calendar check must skip the pair (no interpolation is possible),
+        not raise and not manufacture a violation."""
+        # Two slices whose strikes are completely disjoint: the earlier slice
+        # is deep OTM-calls on the low side, the later slice deep OTM on the
+        # high side, so the common k-range is empty (k_min >= k_max).
+        low_strikes = [80.0, 85.0, 90.0, 95.0]
+        high_strikes = [130.0, 135.0, 140.0, 145.0]
+        surface = VolSurface(
+            spot=SPOT,
+            risk_free=RISK_FREE,
+            div_yield=DIV_YIELD,
+            slices=[
+                ExpirySlice(expiry_time=0.5, quotes=[
+                    _call_quote(K, 0.40, 0.5) for K in low_strikes
+                ]),
+                ExpirySlice(expiry_time=1.0, quotes=[
+                    _call_quote(K, 0.20, 1.0) for K in high_strikes
+                ]),
+            ],
+        )
+
+        report = detect(surface)
+
+        # The disjoint ranges cannot create a CALENDAR violation; other
+        # checks may still flag intra-slice issues, so only assert on the
+        # calendar kind.
+        assert all(v.kind != ViolationType.CALENDAR for v in report.violations)
+
+
+class TestQuoteWideSpreadGuards:
+    """Edge-case guards in _check_wide_spread that the main class omits."""
+
+    def test_inverted_bid_ask_skipped(self) -> None:
+        """bid > ask is malformed market data; the check must skip it, not
+        compute a negative mid and flag it."""
+        sl = ExpirySlice(expiry_time=T, quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0,
+                  bid=15.0, ask=5.0),
+        ])
+        violations: list[ArbitrageViolation] = []
+        _check_wide_spread(sl, violations)
+        assert violations == []
+
+    def test_nonpositive_bid_skipped(self) -> None:
+        """bid <= 0 is malformed; must be skipped without flagging."""
+        sl = ExpirySlice(expiry_time=T, quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0,
+                  bid=0.0, ask=5.0),
+        ])
+        violations: list[ArbitrageViolation] = []
+        _check_wide_spread(sl, violations)
+        assert violations == []
+
+    def test_nonpositive_ask_skipped(self) -> None:
+        """ask <= 0 is malformed; must be skipped without flagging."""
+        sl = ExpirySlice(expiry_time=T, quotes=[
+            Quote(strike=100.0, option_type=OptionType.CALL, price=10.0,
+                  bid=5.0, ask=0.0),
+        ])
+        violations: list[ArbitrageViolation] = []
+        _check_wide_spread(sl, violations)
+        assert violations == []

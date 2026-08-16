@@ -9,6 +9,7 @@ expected title / legend labels.  Agg backend is pinned for determinism.
 from datetime import date
 
 import numpy as np
+import pytest
 
 import matplotlib
 matplotlib.use("Agg")
@@ -378,3 +379,114 @@ def test_masked_heatmaps_use_configured_bad_color() -> None:
         f"dupire heatmap bad color must be the configured gray "
         f"{expected_bad}, got {bad}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Edge-case guards in viz/surface.py
+# ---------------------------------------------------------------------------
+
+def test_plot_surface_raises_with_less_than_two_slices() -> None:
+    from arbfree_vol.viz.surface import plot_surface
+    from arbfree_vol.models.fitted import FittedSlice
+    from arbfree_vol.svi.model import SVIParams
+
+    single = FittedSlice(
+        expiry_time=1.0,
+        params=SVIParams(a=0.04, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+        rmse=0.0,
+        forward_price=100.0,
+        n_quotes_total=5,
+        n_quotes_used=5,
+    )
+
+    with pytest.raises(ValueError, match="at least two fitted slices"):
+        plot_surface([single])
+
+    with pytest.raises(ValueError, match="at least two fitted slices"):
+        plot_surface([])
+
+
+def test_plot_heatmap_2d_raises_with_less_than_two_slices() -> None:
+    from arbfree_vol.viz.surface import plot_heatmap_2d
+    from arbfree_vol.models.fitted import FittedSlice
+    from arbfree_vol.svi.model import SVIParams
+
+    single = FittedSlice(
+        expiry_time=1.0,
+        params=SVIParams(a=0.04, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+        rmse=0.0,
+        forward_price=100.0,
+        n_quotes_total=5,
+        n_quotes_used=5,
+    )
+
+    with pytest.raises(ValueError, match="at least two fitted slices"):
+        plot_heatmap_2d([single])
+
+
+def test_plot_heatmap_2d_raises_with_too_few_points() -> None:
+    """Fewer than 5 data points across all slices -> ValueError."""
+    from arbfree_vol.viz.surface import plot_heatmap_2d
+    from arbfree_vol.models.fitted import FittedSlice
+    from arbfree_vol.svi.model import SVIParams
+
+    sl1 = FittedSlice(
+        expiry_time=0.5,
+        params=SVIParams(a=0.02, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+        rmse=0.0,
+        forward_price=100.0,
+        n_quotes_total=5,
+        n_quotes_used=5,
+        data_points=((0.0, 0.02), (0.1, 0.025)),
+    )
+    sl2 = FittedSlice(
+        expiry_time=1.0,
+        params=SVIParams(a=0.04, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+        rmse=0.0,
+        forward_price=100.0,
+        n_quotes_total=5,
+        n_quotes_used=5,
+        data_points=((0.0, 0.04), (0.1, 0.045)),
+    )
+
+    with pytest.raises(ValueError, match="Not enough data points"):
+        plot_heatmap_2d([sl1, sl2])
+
+
+def test_plot_iv_heatmap_raises_with_no_slices() -> None:
+    from arbfree_vol.viz.surface import plot_iv_heatmap
+    from arbfree_vol.models.fitted import FittedSurface
+
+    fs = FittedSurface(
+        spot=100.0,
+        risk_free=0.05,
+        div_yield=0.0,
+        forward_curve=(),
+        fitted_slices=(),
+    )
+
+    with pytest.raises(ValueError, match="no slices"):
+        plot_iv_heatmap(fs)
+
+
+def test_plot_iv_heatmap_masks_out_of_range_cells() -> None:
+    """iv_at raising ValueError for out-of-range strikes/expiries is
+    absorbed: those grid cells stay NaN (masked) instead of aborting."""
+    from arbfree_vol.viz.surface import plot_iv_heatmap
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
+    from arbfree_vol.models.option import OptionType
+
+    # A surface whose slices have no fitted slices beyond their own range:
+    # iv_at over a wider grid will raise ValueError on out-of-range cells.
+    _, r = _two_expiry_surface()
+    fs = build_fitted_surface(r)
+
+    # Query a grid wider than the surface's own strike range by passing
+    # a spot-relative strike grid that extends outside the fitted surface.
+    fig = plot_iv_heatmap(fs)
+    mesh = fig.axes[0].collections[0]
+    arr = mesh.get_array()
+    assert arr.shape == (50, 50)
+    # Some cells may be masked if any iv_at call raised.
+    assert np.ma.getmaskarray(arr).shape == (50, 50)

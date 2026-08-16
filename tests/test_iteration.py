@@ -205,3 +205,49 @@ def test_iterative_repair_stops_after_two_zero_rejections(monkeypatch) -> None:
     )
     assert all(r.metrics.n_rejected == 0 for r in reports)
     assert all(not r.remaining_violations.is_arbitrage_free for r in reports)
+
+
+def test_iterative_repair_stops_when_cleaned_surface_is_none(monkeypatch) -> None:
+    """The ``cleaned_surface is None`` stop branch is exercised: when a
+    repair report still has remaining violations but produced NO cleaned
+    surface (nothing left to repair), the loop must break after that
+    report instead of continuing with ``None``."""
+    import arbfree_vol.repair.iteration as it_mod
+    from arbfree_vol.arbitrage.report import (
+        ArbitrageReport,
+        ArbitrageViolation,
+        ViolationType,
+    )
+    from arbfree_vol.repair.report import RepairReport, RepairMetrics
+
+    surface = _clean_surface(n_strikes=7)
+
+    def _fake_report() -> RepairReport:
+        return RepairReport(
+            rejected=(),
+            fitted_slices=(),
+            remaining_violations=ArbitrageReport(violations=[
+                ArbitrageViolation(
+                    kind=ViolationType.CALENDAR,
+                    detail="fake remaining violation",
+                    magnitude=0.1,
+                ),
+            ]),
+            metrics=RepairMetrics(
+                n_rejected=0, n_total_quotes=0,
+                n_slices_input=0, n_slices_fitted=0,
+                n_violations_before=0, n_violations_after=1,
+            ),
+            cleaned_surface=None,  # nothing survived the repair
+        )
+
+    monkeypatch.setattr(it_mod, "repair", lambda _surface: _fake_report())
+
+    reports = iterative_repair(surface, max_iters=5)
+
+    assert len(reports) == 1, (
+        f"expected the loop to stop after the None-cleaned report, "
+        f"got {len(reports)} reports"
+    )
+    assert reports[0].cleaned_surface is None
+    assert not reports[0].remaining_violations.is_arbitrage_free

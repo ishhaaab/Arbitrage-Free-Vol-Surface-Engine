@@ -424,6 +424,46 @@ class TestInterpolationEdges:
         assert w == approx(sl1.params.a, abs=1e-12)
         assert w != approx(sl2.params.a, abs=1e-12)
 
+    def test_queries_outside_all_expiries_use_interior_fallback(self) -> None:
+        """A query T strictly between two well-separated expiries (but not
+        within tol of either) is resolved by the interior linear
+        interpolation — the documented 2-D fallback when no exact slice
+        matches."""
+        T_low = 0.5
+        T_high = 2.0
+        fwd_low = _forward(T_low)
+        fwd_high = _forward(T_high)
+
+        sl_low = FittedSlice(
+            expiry_time=T_low,
+            params=SVIParams(a=0.02, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=fwd_low,
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        sl_high = FittedSlice(
+            expiry_time=T_high,
+            params=SVIParams(a=0.08, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=fwd_high,
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        fs = FittedSurface(
+            spot=100.0,
+            risk_free=0.05,
+            div_yield=0.0,
+            forward_curve=((T_low, fwd_low), (T_high, fwd_high)),
+            fitted_slices=(sl_low, sl_high),
+        )
+
+        # T=1.0 is strictly between 0.5 and 2.0 and not within tol of either.
+        w = total_variance_at(fs, K=100.0, T=1.0)
+        # theta = (1.0 - 0.5) / (2.0 - 0.5) = 1/3
+        w_expected = 0.02 + (1.0 / 3.0) * (0.08 - 0.02)
+        assert w == approx(w_expected, abs=1e-12)
+
     def test_invalid_inputs(self) -> None:
         """T=0, a negative-variance fit, and a non-positive strike each
         produce the documented behaviour: ValueError."""
