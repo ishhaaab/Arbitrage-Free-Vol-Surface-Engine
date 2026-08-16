@@ -713,6 +713,78 @@ def run_audit(args=None):
 
 # ── Write findings ──────────────────────────────────────────────────
 
+def _build_dip_comparison_lines(results: dict) -> list[str]:
+    """Build the raw-dip comparison conclusion lines for Issue #15.
+
+    A source that was not measured on this run (fetch failure, fixture mode
+    without a filtered comparison) is N/A — it must NOT contribute a zero
+    that can be compared as if it were observed.  A comparative conclusion
+    is only drawn when BOTH operands were actually measured.
+    """
+    lines: list[str] = []
+
+    def _raw_dips(key: str):
+        entry = results.get(key)
+        if entry is None:
+            return None
+        raw = entry.get("raw")
+        if raw is None:
+            return None
+        return raw.get("theta_dips")
+
+    spy_raw_dips = _raw_dips("yfinance_SPY")
+    spx_raw_dips = _raw_dips("yfinance_SPX")
+    obb_raw_dips = _raw_dips("openbb_SPY")
+
+    if spy_raw_dips is None or spx_raw_dips is None:
+        lines.append(
+            "SPX vs SPY raw-dip comparison: N/A — one or both sources were "
+            "unavailable on this run, so no winner/ties conclusion is drawn."
+        )
+    elif spx_raw_dips < spy_raw_dips:
+        lines.append(
+            f"SPX has fewer theta dips ({spx_raw_dips}) than SPY ({spy_raw_dips}) "
+            "on raw data, suggesting the non-monotonicity is partially "
+            "a SPY-specific data artifact (likely dividend-related noise)."
+        )
+    elif spx_raw_dips == spy_raw_dips:
+        lines.append(
+            f"Both SPX ({spx_raw_dips}) and SPY ({spy_raw_dips}) show the same "
+            "number of theta dips on raw data. The non-monotonicity is a "
+            "genuine market feature, not an underlying-specific artifact."
+        )
+    else:
+        lines.append(
+            f"SPX shows more theta dips ({spx_raw_dips}) than SPY ({spy_raw_dips}) "
+            "on raw data — unexpected, investigate further."
+        )
+
+    if results.get("openbb_SPY") is None:
+        lines.append(
+            "OpenBB was not available for comparison. Install with "
+            "`pip install openbb` to include it in future audits."
+        )
+    elif spy_raw_dips is None or obb_raw_dips is None:
+        lines.append(
+            "OpenBB vs yfinance raw-dip comparison: N/A — one or both sources "
+            "were unavailable on this run, so no winner/ties conclusion is drawn."
+        )
+    elif obb_raw_dips < spy_raw_dips:
+        lines.append(
+            f"OpenBB has fewer theta dips ({obb_raw_dips}) than yfinance "
+            f"({spy_raw_dips}), suggesting the OpenBB ingestion path "
+            "(normalisation) may help."
+        )
+    elif obb_raw_dips == spy_raw_dips:
+        lines.append(
+            f"OpenBB ({obb_raw_dips}) and yfinance ({spy_raw_dips}) show the "
+            "same number of theta dips — the ingestion path does not matter "
+            "(provider independence is not tested: OpenBB uses provider='yfinance')."
+        )
+
+    return lines
+
+
 def write_findings_to_issues(results):
     """Update docs/issues.md Issue #15 with the underlying/path comparison."""
     issues_path = Path(__file__).resolve().parent.parent / "docs" / "issues.md"
@@ -781,69 +853,7 @@ def write_findings_to_issues(results):
         "",
     ])
 
-    # Determine answer from results.  A source that was not measured on
-    # this run (fetch failure, fixture mode without a filtered comparison)
-    # is N/A — it must NOT contribute a zero that can be compared as if it
-    # were observed.  A comparative conclusion is only drawn when BOTH
-    # operands were actually measured.
-    def _raw_dips(key: str):
-        entry = results.get(key)
-        if entry is None:
-            return None
-        raw = entry.get("raw")
-        if raw is None:
-            return None
-        return raw.get("theta_dips")
-
-    spy_raw_dips = _raw_dips("yfinance_SPY")
-    spx_raw_dips = _raw_dips("yfinance_SPX")
-    obb_raw_dips = _raw_dips("openbb_SPY")
-
-    if spy_raw_dips is None or spx_raw_dips is None:
-        lines.append(
-            "SPX vs SPY raw-dip comparison: N/A — one or both sources were "
-            "unavailable on this run, so no winner/ties conclusion is drawn."
-        )
-    elif spx_raw_dips < spy_raw_dips:
-        lines.append(
-            f"SPX has fewer theta dips ({spx_raw_dips}) than SPY ({spy_raw_dips}) "
-            "on raw data, suggesting the non-monotonicity is partially "
-            "a SPY-specific data artifact (likely dividend-related noise)."
-        )
-    elif spx_raw_dips == spy_raw_dips:
-        lines.append(
-            f"Both SPX ({spx_raw_dips}) and SPY ({spy_raw_dips}) show the same "
-            "number of theta dips on raw data. The non-monotonicity is a "
-            "genuine market feature, not an underlying-specific artifact."
-        )
-    else:
-        lines.append(
-            f"SPX shows more theta dips ({spx_raw_dips}) than SPY ({spy_raw_dips}) "
-            "on raw data — unexpected, investigate further."
-        )
-
-    if results.get("openbb_SPY") is None:
-        lines.append(
-            "OpenBB was not available for comparison. Install with "
-            "`pip install openbb` to include it in future audits."
-        )
-    elif spy_raw_dips is None or obb_raw_dips is None:
-        lines.append(
-            "OpenBB vs yfinance raw-dip comparison: N/A — one or both sources "
-            "were unavailable on this run, so no winner/ties conclusion is drawn."
-        )
-    elif obb_raw_dips < spy_raw_dips:
-        lines.append(
-            f"OpenBB has fewer theta dips ({obb_raw_dips}) than yfinance "
-            f"({spy_raw_dips}), suggesting the OpenBB ingestion path "
-            "(normalisation) may help."
-        )
-    elif obb_raw_dips == spy_raw_dips:
-        lines.append(
-            f"OpenBB ({obb_raw_dips}) and yfinance ({spy_raw_dips}) show the "
-            "same number of theta dips — the ingestion path does not matter "
-            "(provider independence is not tested: OpenBB uses provider='yfinance')."
-        )
+    lines.extend(_build_dip_comparison_lines(results))
 
     lines.append("")
 
