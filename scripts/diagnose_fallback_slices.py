@@ -663,6 +663,33 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
     print(f"    k range    = [{analytics['k_range'][0]:.3f}, {analytics['k_range'][1]:.3f}]")
 
     # (b) Unconstrained fit
+    unc_params, unc_rmse = _fit_unconstrained(pts)
+
+    # (c) Find predecessor (last hard-constrained fit before this T)
+    prev_params = _find_predecessor(result.fitted_slices, fallback_T)
+    _print_predecessor(prev_params, result.fitted_slices)
+
+    # (d) Hard-constrained fit attempts
+    default_result, warm_result, n_restart_converged = _run_constrained_attempts(
+        pts, prev_params, unc_params
+    )
+
+    # (e) Check if unconstrained params satisfy H&M with neighbors
+    hm_check = _check_hm_neighbors(unc_params, result.fitted_slices, fallback_T)
+
+    # Summary row
+    return {
+        "T": fallback_T,
+        "unc_rmse": unc_rmse,
+        "default_converged": default_result["converged"],
+        "warm_start_converged": warm_result["converged"],
+        "restart_converged": n_restart_converged,
+        "unc_satisfies_hm": hm_check["satisfies_both"],
+    }
+
+
+def _fit_unconstrained(pts: list[tuple[float, float]]) -> tuple[object, float]:
+    """Fit the slice unconstrained; return (params, RMSE), (None, nan) on failure."""
     print(f"\n  Unconstrained fit (fit_ssvi_slice):")
     try:
         unc_params = fit_ssvi_slice(pts)
@@ -675,20 +702,26 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
         print(f"    psi   = {unc_params.psi:.6f}")
         print(f"    chi   = {unc_params.theta * unc_params.psi:.6f}")
         print(f"    RMSE  = {unc_rmse:.8f}")
+        return unc_params, unc_rmse
     except RuntimeError as e:
         print(f"    FAILED: {e}")
-        unc_params = None
-        unc_rmse = float("nan")
+        return None, float("nan")
 
-    # (c) Find predecessor (last hard-constrained fit before this T)
+
+def _find_predecessor(fitted_slices, fallback_T: float):
+    """Return the last hard-constrained fit with T < fallback_T, or None."""
     prev_params = None
-    sorted_fitted = sorted(result.fitted_slices, key=lambda x: x[0])
+    sorted_fitted = sorted(fitted_slices, key=lambda x: x[0])
     for T_i, p_i in sorted_fitted:
         if T_i < fallback_T:
             prev_params = p_i
         else:
             break
+    return prev_params
 
+
+def _print_predecessor(prev_params, sorted_fitted) -> None:
+    """Print the predecessor-slice params (or a none-found note)."""
     if prev_params:
         print(f"\n  Predecessor slice (last hard-constrained fit):")
         prev_T = [T for T, p in sorted_fitted if p is prev_params][0]
@@ -700,7 +733,12 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
     else:
         print(f"\n  No predecessor (this is the first slice or all predecessors are fallback)")
 
-    # (d) Hard-constrained fit attempts
+
+def _run_constrained_attempts(pts, prev_params, unc_params):
+    """Run the default-seed, warm-start, and random-restart fit attempts.
+
+    Returns (default_result, warm_result, n_restart_converged).
+    """
     print(f"\n  Hard-constrained fit attempts:")
 
     # Default seed
@@ -761,11 +799,15 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
                   f"[status={r['optimizer_status']} "
                   f"{r['optimizer_message']}]")
 
-    # (e) Check if unconstrained params satisfy H&M with neighbors
+    return default_result, warm_result, n_restart_converged
+
+
+def _check_hm_neighbors(unc_params, fitted_slices, fallback_T: float) -> dict:
+    """Check whether the unconstrained fit satisfies H&M with neighbours."""
     print(f"\n  Does the unconstrained fit satisfy H&M with neighbors?")
     if unc_params is not None:
         hm_check = check_unconstrained_satisfies_hm(
-            result.fitted_slices, fallback_T, unc_params
+            fitted_slices, fallback_T, unc_params
         )
         print(f"    satisfies_with_prev  = {hm_check['satisfies_with_prev']}")
         print(f"    satisfies_with_next  = {hm_check['satisfies_with_next']}")
@@ -778,15 +820,7 @@ def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -
     else:
         hm_check = {"satisfies_both": False}
 
-    # Summary row
-    return {
-        "T": fallback_T,
-        "unc_rmse": unc_rmse,
-        "default_converged": default_result["converged"],
-        "warm_start_converged": warm_result["converged"],
-        "restart_converged": n_restart_converged,
-        "unc_satisfies_hm": hm_check["satisfies_both"],
-    }
+    return hm_check
 
 
 def _print_summary_and_interpretation(summary_rows: list[dict]) -> None:
