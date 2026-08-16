@@ -92,82 +92,96 @@ def _build_keep_mask(
     for idx, row in df.iterrows():
         strike = float(row.get("strike", 0) or 0)
 
-        missing: list[str] = []
-
-        # No zero default on the market-data fields: an ABSENT column
-        # (``row.get(key)`` returns None) is a missing value, exactly
-        # like None/NaN/pd.NA in a present column — never an observed
-        # zero (the old ``row.get(key, 0)`` conflated the two).
-        raw_oi = row.get("openInterest")
-        if _is_missing(raw_oi):
-            missing.append("open_interest")
-            oi = 0
-        else:
-            oi = int(raw_oi)
-
-        raw_vol = row.get("volume")
-        if _is_missing(raw_vol):
-            missing.append("volume")
-            vol = 0
-        else:
-            vol = int(raw_vol)
-
-        raw_bid = row.get("bid")
-        if _is_missing(raw_bid):
-            missing.append("bid")
-            bid = 0.0
-        else:
-            bid = float(raw_bid)
-
-        raw_ask = row.get("ask")
-        if _is_missing(raw_ask):
-            missing.append("ask")
-            ask = 0.0
-        else:
-            ask = float(raw_ask)
-
-        # Compute bid-ask spread as % of mid
-        mid = (bid + ask) / 2.0
-        if mid > 0:
-            bid_ask_pct = (ask - bid) / mid * 100.0
-        else:
-            bid_ask_pct = 0.0  # no quote — will be caught by zero_bid_ask
-
-        # Check thresholds
-        reason_parts: list[str] = []
-        missing_sides = [side for side in ("bid", "ask") if side in missing]
-
-        if oi < config.min_open_interest:
-            if "open_interest" in missing:
-                reason_parts.append(f"OI=missing<{config.min_open_interest}")
-            else:
-                reason_parts.append(f"OI={oi}<{config.min_open_interest}")
-
-        if mid > 0 and len(missing_sides) == 1:
-            # One-sided quote: exactly one of bid/ask is missing.  The
-            # mid would be fabricated from the available side (missing
-            # bid → +200%, missing ask → −200%), so the true spread is
-            # unknowable.  Flag the row instead of passing it with a
-            # made-up mid — same missing-vs-observed-zero class as
-            # open interest.
-            reason_parts.append(f"spread=missing (missing: {missing_sides[0]})")
-        elif mid > 0 and bid_ask_pct > config.max_bid_ask_pct:
-            reason_parts.append(
-                f"spread={bid_ask_pct:.1f}%>{config.max_bid_ask_pct}%"
-            )
-
-        if reason_parts:
+        keep, drop = _evaluate_row(config, row, strike, expiry)
+        if not keep:
             keep_mask.at[idx] = False
-            drops.append(DropRecord(
-                strike=strike,
-                expiry=expiry,
-                reason="; ".join(reason_parts),
-                open_interest=oi,
-                volume=vol,
-                bid_ask_pct=bid_ask_pct,
-                missing_fields=tuple(missing),
-            ))
+            drops.append(drop)
     return keep_mask, drops
+
+
+def _evaluate_row(
+    config: DataQualityConfig,
+    row,
+    strike: float,
+    expiry: str,
+) -> tuple[bool, DropRecord | None]:
+    """Evaluate one chain row against the data-quality thresholds.
+
+    Returns ``(keep, drop)`` — ``keep`` is True when the row survives,
+    otherwise ``drop`` is the audit record describing why.
+    """
+    missing: list[str] = []
+    oi = _extract_int_field(row, "openInterest", "open_interest", missing)
+    vol = _extract_int_field(row, "volume", "volume", missing)
+    bid = _extract_float_field(row, "bid", "bid", missing)
+    ask = _extract_float_field(row, "ask", "ask", missing)
+
+    # Compute bid-ask spread as % of mid
+    mid = (bid + ask) / 2.0
+    if mid > 0:
+        bid_ask_pct = (ask - bid) / mid * 100.0
+    else:
+        bid_ask_pct = 0.0  # no quote — will be caught by zero_bid_ask
+
+    # Check thresholds
+    reason_parts: list[str] = []
+    missing_sides = [side for side in ("bid", "ask") if side in missing]
+
+    if oi < config.min_open_interest:
+        if "open_interest" in missing:
+            reason_parts.append(f"OI=missing<{config.min_open_interest}")
+        else:
+            reason_parts.append(f"OI={oi}<{config.min_open_interest}")
+
+    if mid > 0 and len(missing_sides) == 1:
+        # One-sided quote: exactly one of bid/ask is missing.  The
+        # mid would be fabricated from the available side (missing
+        # bid → +200%, missing ask → −200%), so the true spread is
+        # unknowable.  Flag the row instead of passing it with a
+        # made-up mid — same missing-vs-observed-zero class as
+        # open interest.
+        reason_parts.append(f"spread=missing (missing: {missing_sides[0]})")
+    elif mid > 0 and bid_ask_pct > config.max_bid_ask_pct:
+        reason_parts.append(
+            f"spread={bid_ask_pct:.1f}%>{config.max_bid_ask_pct}%"
+        )
+
+    if reason_parts:
+        return False, DropRecord(
+            strike=strike,
+            expiry=expiry,
+            reason="; ".join(reason_parts),
+            open_interest=oi,
+            volume=vol,
+            bid_ask_pct=bid_ask_pct,
+            missing_fields=tuple(missing),
+        )
+    return True, None
+
+
+def _extract_int_field(row, key: str, label: str, missing: list[str]) -> int:
+    """Extract an integer market-data field, tracking missing values.
+
+    ``label`` is the display name recorded in ``missing`` (e.g. column
+    ``openInterest`` → label ``open_interest``).  No zero default: an
+    ABSENT column (``row.get(key)`` returns None) is a missing value,
+    exactly like None/NaN/pd.NA in a present column — never an observed
+    zero (the old ``row.get(key, 0)`` conflated the two).
+    """
+    raw = row.get(key)
+    if _is_missing(raw):
+        missing.append(label)
+        return 0
+    return int(raw)
+
+
+def _extract_float_field(row, key: str, label: str, missing: list[str]) -> float:
+    """Extract a float market-data field, tracking missing values."""
+    raw = row.get(key)
+    if _is_missing(raw):
+        missing.append(label)
+        return 0.0
+    return float(raw)
 
 
 def filter_option_chain(
