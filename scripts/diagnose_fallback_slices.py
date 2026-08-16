@@ -122,28 +122,49 @@ def _build_synthetic_data() -> tuple[VolSurface, list]:
     slices = []
     for T, atm_vol, rho, _ in expiry_configs:
         F = spot * np.exp((r - q) * T)
-        theta = atm_vol ** 2 * T
         psi = 0.5 + 0.1 * (T ** 0.5)  # mild psi term structure
 
-        # Build quotes properly
-        from arbfree_vol.models.surface import Quote
-        quotes = []
-        for K in strikes_base:
-            k = log(K / F)
-            w = ssvi_w(k, theta, rho, psi)
-            sigma = sqrt(w / T) if T > 0 else atm_vol
-            from arbfree_vol.pricing.black_scholes import price_floats
-            for otype in (OptionType.CALL, OptionType.PUT):
-                price = price_floats(spot, K, T, r, q, sigma,
-                                     is_call=(otype == OptionType.CALL))
-                if price > 0.01:
-                    quotes.append(Quote(strike=K, option_type=otype, price=price))
-
+        quotes = _build_quotes_for_expiry(spot, F, T, r, q, atm_vol, rho, psi, strikes_base)
         sl = ExpirySlice(expiry_time=T, quotes=quotes)
         slices.append(sl)
 
     surface = VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices)
     return surface, []
+
+
+def _build_quotes_for_expiry(
+    spot: float,
+    F: float,
+    T: float,
+    r: float,
+    q: float,
+    atm_vol: float,
+    rho: float,
+    psi: float,
+    strikes_base: list[float],
+) -> list:
+    """Build CALL/PUT quotes for every base strike at one expiry.
+
+    Each quote's price comes from the SSVI smile (``ssvi_w``) converted to
+    Black-Scholes price via ``price_floats``; strikes whose price is not
+    economically positive (> $0.01) are dropped.
+    """
+    from arbfree_vol.models.surface import Quote
+    from arbfree_vol.pricing.black_scholes import price_floats
+
+    theta = atm_vol ** 2 * T
+
+    quotes = []
+    for K in strikes_base:
+        k = log(K / F)
+        w = ssvi_w(k, theta, rho, psi)
+        sigma = sqrt(w / T) if T > 0 else atm_vol
+        for otype in (OptionType.CALL, OptionType.PUT):
+            price = price_floats(spot, K, T, r, q, sigma,
+                                 is_call=(otype == OptionType.CALL))
+            if price > 0.01:
+                quotes.append(Quote(strike=K, option_type=otype, price=price))
+    return quotes
 
 
 # ── Slice data extraction ────────────────────────────────────────────
