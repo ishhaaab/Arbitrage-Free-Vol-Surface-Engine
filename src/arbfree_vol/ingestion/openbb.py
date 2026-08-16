@@ -114,6 +114,109 @@ def _expiry_to_date_str(x: Any) -> str:
 
 # ── Main entry point ─────────────────────────────────────────────────
 
+def _fetch_spot(obb, symbol: str, provider: str, raw_df) -> float | None:
+    """Determine the spot price from the chain or an OpenBB equity quote.
+
+    Prefers the chain's ``underlying_price`` column; falls back to an
+    OpenBB equity price quote when the chain lacks it.
+    """
+    if "underlying_price" in raw_df.columns:
+        spot = _safe_float(raw_df.get("underlying_price").iloc[0], None)
+        if spot is not None:
+            return spot
+    # Try to get spot from OpenBB equity price
+    try:
+        quote = obb.equity.price.quote(symbol, provider=provider)
+        quote_df = quote.to_df()
+        if not quote_df.empty:
+            return _safe_float(quote_df.iloc[0].get("last_price"), None)
+    except Exception:
+        _logger.warning(
+            "OpenBB equity price quote failed for %s; spot left "
+            "undetermined",
+            symbol, exc_info=True,
+        )
+    return None
+
+
+def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
+    """Fetch the risk-free rate (^IRX) and dividend yield for ``symbol``.
+
+    Returns ``(r, q)`` with defaults ``r=0.05, q=0.0`` on failure.  For
+    index symbols (``^SPX``, ``^VIX``, ...) ``q`` starts at the 0.0
+    placeholder — it is replaced by per-expiry put-call parity estimation
+    after the slice loop, never logged as an observed zero.
+    """
+    import yfinance as yf
+    r = None
+    q = None
+    try:
+        irx = yf.Ticker("^IRX")
+        info = irx.info or {}
+        rate = info.get("regularMarketPrice") or info.get("previousClose")
+        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
+            r = rate / 100.0
+    except Exception:
+        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
+
+    # Index symbols (^SPX, ^VIX, etc.): estimate q per-expiry via put-call
+    # parity rather than hardcoding q=0.  Indices have a genuine implied
+    # dividend yield from their constituents (e.g., SPX ~1.2-1.5%/yr).
+    # Per-slice estimation is done after the slice-building loop below.
+    if is_index:
+        q = 0.0  # will be updated after slice loop
+        # The q=0.0 here is a PLACEHOLDER, not an observation — index
+        # symbols estimate q per-expiry via put-call parity after the
+        # slice loop.  It must never be logged as an observed zero (the
+        # pre-fix code hit the `q == 0.0` observed-zero branch for every
+        # index symbol because the placeholder triggered it).
+        _logger.warning(
+            "Dividend yield for %s starts at the index default q=0.0 "
+            "(placeholder); per-expiry put-call parity estimation runs "
+            "after the slice loop",
+            symbol,
+        )
+    else:
+        try:
+            yf_ticker = yf.Ticker(symbol)
+            info = yf_ticker.info or {}
+            div = info.get("dividendYield")
+            if div is not None and isinstance(div, (int, float)):
+                q = float(div)
+                if math.isnan(q):
+                    q = None
+                elif q > 0.50:
+                    q /= 100.0
+        except Exception:
+            _logger.warning("Failed to fetch dividend yield", exc_info=True)
+        if q is None:
+            _logger.warning(
+                "Dividend yield unavailable for %s (dividendYield missing "
+                "from ticker info); substituting q=0.0",
+                symbol,
+            )
+            q = 0.0
+        elif q == 0.0:
+            # An observed zero is a real observation, not a substitution:
+            # the value is used as-is, but the provenance is logged so a
+            # zero-yield surface is never silent about where q came from.
+            _logger.warning(
+                "Dividend yield for %s observed as zero (dividendYield "
+                "present as 0.0 in ticker info); using q=0.0 as observed",
+                symbol,
+            )
+
+    if r is None:
+        _logger.warning(
+            "Risk-free rate unavailable for %s (^IRX fetch failed or "
+            "empty); substituting r=0.05",
+            symbol,
+        )
+        r = 0.05
+
+    return r, q
+
+
 def fetch_chain(
     symbol: str,
     max_expiries: int = 8,
@@ -201,92 +304,14 @@ def fetch_chain(
         raise ValueError(f"No option chain data returned for {symbol!r}")
 
     # ── Spot price ───────────────────────────────────────────────────
-    spot = _safe_float(raw_df.get("underlying_price").iloc[0] if "underlying_price" in raw_df.columns else None, None)
-    if spot is None:
-        # Try to get spot from OpenBB equity price
-        try:
-            quote = obb.equity.price.quote(symbol, provider=provider)
-            quote_df = quote.to_df()
-            if not quote_df.empty:
-                spot = _safe_float(quote_df.iloc[0].get("last_price"), None)
-        except Exception:
-            _logger.warning(
-                "OpenBB equity price quote failed for %s; spot left "
-                "undetermined",
-                symbol, exc_info=True,
-            )
+    spot = _fetch_spot(obb, symbol, provider, raw_df)
     if spot is None or spot <= 0:
         raise ValueError(f"Could not determine spot price for {symbol!r}")
     spot = float(spot)
 
     # ── Risk-free rate and dividend yield ────────────────────────────
-    import yfinance as yf
-    r = None
-    q = None
-    try:
-        irx = yf.Ticker("^IRX")
-        info = irx.info or {}
-        rate = info.get("regularMarketPrice") or info.get("previousClose")
-        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
-            r = rate / 100.0
-    except Exception:
-        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
-
-    # Index symbols (^SPX, ^VIX, etc.): estimate q per-expiry via put-call
-    # parity rather than hardcoding q=0.  Indices have a genuine implied
-    # dividend yield from their constituents (e.g., SPX ~1.2-1.5%/yr).
-    # Per-slice estimation is done after the slice-building loop below.
     _is_index = symbol.startswith("^")
-    if _is_index:
-        q = 0.0  # will be updated after slice loop
-        # The q=0.0 here is a PLACEHOLDER, not an observation — index
-        # symbols estimate q per-expiry via put-call parity after the
-        # slice loop.  It must never be logged as an observed zero (the
-        # pre-fix code hit the `q == 0.0` observed-zero branch for every
-        # index symbol because the placeholder triggered it).
-        _logger.warning(
-            "Dividend yield for %s starts at the index default q=0.0 "
-            "(placeholder); per-expiry put-call parity estimation runs "
-            "after the slice loop",
-            symbol,
-        )
-    else:
-        try:
-            yf_ticker = yf.Ticker(symbol)
-            info = yf_ticker.info or {}
-            div = info.get("dividendYield")
-            if div is not None and isinstance(div, (int, float)):
-                q = float(div)
-                if math.isnan(q):
-                    q = None
-                elif q > 0.50:
-                    q /= 100.0
-        except Exception:
-            _logger.warning("Failed to fetch dividend yield", exc_info=True)
-        if q is None:
-            _logger.warning(
-                "Dividend yield unavailable for %s (dividendYield missing "
-                "from ticker info); substituting q=0.0",
-                symbol,
-            )
-            q = 0.0
-        elif q == 0.0:
-            # An observed zero is a real observation, not a substitution:
-            # the value is used as-is, but the provenance is logged so a
-            # zero-yield surface is never silent about where q came from.
-            _logger.warning(
-                "Dividend yield for %s observed as zero (dividendYield "
-                "present as 0.0 in ticker info); using q=0.0 as observed",
-                symbol,
-            )
-
-    if r is None:
-        _logger.warning(
-            "Risk-free rate unavailable for %s (^IRX fetch failed or "
-            "empty); substituting r=0.05",
-            symbol,
-        )
-        r = 0.05
+    r, q = _fetch_rates(symbol, _is_index)
 
     # ── Normalise columns ────────────────────────────────────────────
     df = _normalise_columns(raw_df)
