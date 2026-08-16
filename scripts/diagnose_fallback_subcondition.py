@@ -101,6 +101,62 @@ def extract_slice_data(surface):
 
 # ── Per-source diagnostic ────────────────────────────────────────────
 
+def _build_slice_row(fb_T: float, entry: dict) -> dict:
+    """Build one fallback-slice result row and print its diagnostic line.
+
+    The ratio is only defined when chi genuinely increases.  When chi is
+    flat or decreasing the ratio is N/A (undefined) — a chi dip is the
+    PRIMARY failure, and any ratio number would be a derived, misleading
+    diagnostic.
+    """
+    prev_T = entry["prev_T"]
+    theta_self = entry["theta_self"]
+    theta_prev = entry["theta_prev"]
+    chi_self = entry["chi_self"]
+    chi_prev = entry["chi_prev"]
+    ratio_val = entry["ratio_value"]
+    failing = entry["failing_conditions"]
+
+    # Compute percentage drops for display
+    theta_drop = (theta_prev - theta_self) / theta_prev * 100 if theta_prev > 0 else 0
+    chi_drop = (chi_prev - chi_self) / chi_prev * 100 if chi_prev > 0 else 0
+
+    ratio_defined = ratio_val is not None
+    ratio_str = f"{ratio_val:>8.4f}" if ratio_defined else "     N/A"
+
+    # Format fail description — primary failures (theta/chi) first,
+    # then the derived ratio diagnostic (only present when chi
+    # increases and the slope condition genuinely fails).
+    fail_parts = []
+    for cond in failing:
+        if cond == "theta":
+            fail_parts.append(f"theta (drops {theta_drop:.0f}%)")
+        elif cond == "chi":
+            fail_parts.append(f"chi (drops {chi_drop:.0f}%)")
+        elif cond == "ratio":
+            fail_parts.append(f"ratio ({ratio_val:.4f} > 1)")
+    if not ratio_defined and not entry["chi_ok"]:
+        fail_parts.append("ratio N/A (chi non-monotonic)")
+    fail_str = ", ".join(fail_parts) if fail_parts else "(none — should not be fallback?)"
+
+    print(f"  {fb_T:>8.4f}  {prev_T:>8.4f}  {theta_self:>10.6f}  "
+          f"{chi_self:>10.6f}  {ratio_str}  FAILS: {fail_str}")
+
+    return {
+        "T": fb_T,
+        "prev_T": prev_T,
+        "theta_self": theta_self,
+        "theta_prev": theta_prev,
+        "theta_ok": entry["theta_ok"],
+        "chi_self": chi_self,
+        "chi_prev": chi_prev,
+        "chi_ok": entry["chi_ok"],
+        "ratio_value": ratio_val,
+        "ratio_ok": entry["ratio_ok"],
+        "failing_conditions": failing,
+    }
+
+
 def diagnose_source(label: str, surface) -> dict | None:
     """Run eSSVI fit and H&M sub-condition breakdown for one data source.
 
@@ -164,62 +220,14 @@ def diagnose_source(label: str, surface) -> dict | None:
                   f"{'N/A':>8}  (no breakdown entry)")
             continue
 
-        prev_T = entry["prev_T"]
-        theta_self = entry["theta_self"]
-        theta_prev = entry["theta_prev"]
-        chi_self = entry["chi_self"]
-        chi_prev = entry["chi_prev"]
-        ratio_val = entry["ratio_value"]
-        failing = entry["failing_conditions"]
-
-        # Compute percentage drops for display
-        theta_drop = (theta_prev - theta_self) / theta_prev * 100 if theta_prev > 0 else 0
-        chi_drop = (chi_prev - chi_self) / chi_prev * 100 if chi_prev > 0 else 0
-
-        # The ratio is only defined when chi genuinely increases.  When chi
-        # is flat or decreasing the ratio is N/A (undefined) — a chi dip is
-        # the PRIMARY failure, and any ratio number would be a derived,
-        # misleading diagnostic.
-        ratio_defined = ratio_val is not None
-        ratio_str = f"{ratio_val:>8.4f}" if ratio_defined else "     N/A"
-
-        # Format fail description — primary failures (theta/chi) first,
-        # then the derived ratio diagnostic (only present when chi
-        # increases and the slope condition genuinely fails).
-        fail_parts = []
-        for cond in failing:
-            if cond == "theta":
-                fail_parts.append(f"theta (drops {theta_drop:.0f}%)")
-            elif cond == "chi":
-                fail_parts.append(f"chi (drops {chi_drop:.0f}%)")
-            elif cond == "ratio":
-                fail_parts.append(f"ratio ({ratio_val:.4f} > 1)")
-        if not ratio_defined and not entry["chi_ok"]:
-            fail_parts.append("ratio N/A (chi non-monotonic)")
-        fail_str = ", ".join(fail_parts) if fail_parts else "(none — should not be fallback?)"
-
-        print(f"  {fb_T:>8.4f}  {prev_T:>8.4f}  {theta_self:>10.6f}  "
-              f"{chi_self:>10.6f}  {ratio_str}  FAILS: {fail_str}")
+        row = _build_slice_row(fb_T, entry)
+        per_slice_results.append(row)
 
         # Count each failing condition
-        for cond in failing:
+        for cond in entry["failing_conditions"]:
             counter[cond] += 1
-        if len(failing) > 1:
+        if len(entry["failing_conditions"]) > 1:
             multi_count += 1
-
-        per_slice_results.append({
-            "T": fb_T,
-            "prev_T": prev_T,
-            "theta_self": theta_self,
-            "theta_prev": theta_prev,
-            "theta_ok": entry["theta_ok"],
-            "chi_self": chi_self,
-            "chi_prev": chi_prev,
-            "chi_ok": entry["chi_ok"],
-            "ratio_value": ratio_val,
-            "ratio_ok": entry["ratio_ok"],
-            "failing_conditions": failing,
-        })
 
     # Aggregate breakdown
     aggregate = {
