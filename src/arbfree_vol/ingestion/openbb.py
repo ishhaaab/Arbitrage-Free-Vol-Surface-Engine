@@ -147,64 +147,8 @@ def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
     placeholder — it is replaced by per-expiry put-call parity estimation
     after the slice loop, never logged as an observed zero.
     """
-    import yfinance as yf
-    r = None
-    q = None
-    try:
-        irx = yf.Ticker("^IRX")
-        info = irx.info or {}
-        rate = info.get("regularMarketPrice") or info.get("previousClose")
-        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
-            r = rate / 100.0
-    except Exception:
-        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
-
-    # Index symbols (^SPX, ^VIX, etc.): estimate q per-expiry via put-call
-    # parity rather than hardcoding q=0.  Indices have a genuine implied
-    # dividend yield from their constituents (e.g., SPX ~1.2-1.5%/yr).
-    # Per-slice estimation is done after the slice-building loop below.
-    if is_index:
-        q = 0.0  # will be updated after slice loop
-        # The q=0.0 here is a PLACEHOLDER, not an observation — index
-        # symbols estimate q per-expiry via put-call parity after the
-        # slice loop.  It must never be logged as an observed zero (the
-        # pre-fix code hit the `q == 0.0` observed-zero branch for every
-        # index symbol because the placeholder triggered it).
-        _logger.warning(
-            "Dividend yield for %s starts at the index default q=0.0 "
-            "(placeholder); per-expiry put-call parity estimation runs "
-            "after the slice loop",
-            symbol,
-        )
-    else:
-        try:
-            yf_ticker = yf.Ticker(symbol)
-            info = yf_ticker.info or {}
-            div = info.get("dividendYield")
-            if div is not None and isinstance(div, (int, float)):
-                q = float(div)
-                if math.isnan(q):
-                    q = None
-                elif q > 0.50:
-                    q /= 100.0
-        except Exception:
-            _logger.warning("Failed to fetch dividend yield", exc_info=True)
-        if q is None:
-            _logger.warning(
-                "Dividend yield unavailable for %s (dividendYield missing "
-                "from ticker info); substituting q=0.0",
-                symbol,
-            )
-            q = 0.0
-        elif q == 0.0:
-            # An observed zero is a real observation, not a substitution:
-            # the value is used as-is, but the provenance is logged so a
-            # zero-yield surface is never silent about where q came from.
-            _logger.warning(
-                "Dividend yield for %s observed as zero (dividendYield "
-                "present as 0.0 in ticker info); using q=0.0 as observed",
-                symbol,
-            )
+    r = _fetch_risk_free_rate()
+    q = _index_placeholder_q(symbol) if is_index else _fetch_equity_q(symbol)
 
     if r is None:
         _logger.warning(
@@ -215,6 +159,78 @@ def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
         r = 0.05
 
     return r, q
+
+
+def _fetch_risk_free_rate() -> float | None:
+    """Fetch the 13-week T-bill rate from ^IRX, as a decimal (None on failure)."""
+    import yfinance as yf
+    try:
+        irx = yf.Ticker("^IRX")
+        info = irx.info or {}
+        rate = info.get("regularMarketPrice") or info.get("previousClose")
+        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
+            return rate / 100.0
+    except Exception:
+        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
+    return None
+
+
+def _index_placeholder_q(symbol: str) -> float:
+    """Return the index dividend-yield placeholder (0.0).
+
+    Index symbols estimate q per-expiry via put-call parity after the
+    slice loop rather than hardcoding q=0.  The q=0.0 here is a
+    PLACEHOLDER, not an observation — it must never be logged as an
+    observed zero (the pre-fix code hit the ``q == 0.0`` observed-zero
+    branch for every index symbol because the placeholder triggered it).
+    """
+    _logger.warning(
+        "Dividend yield for %s starts at the index default q=0.0 "
+        "(placeholder); per-expiry put-call parity estimation runs "
+        "after the slice loop",
+        symbol,
+    )
+    return 0.0
+
+
+def _fetch_equity_q(symbol: str) -> float:
+    """Fetch the dividend yield for an equity symbol from ticker info.
+
+    Returns ``q`` as a decimal (``> 0.50`` values are treated as percent
+    and divided by 100).  Falls back to ``q=0.0`` with a logged warning
+    when unavailable; a genuinely observed zero is logged as observed.
+    """
+    import yfinance as yf
+    q = None
+    try:
+        yf_ticker = yf.Ticker(symbol)
+        info = yf_ticker.info or {}
+        div = info.get("dividendYield")
+        if div is not None and isinstance(div, (int, float)):
+            q = float(div)
+            if math.isnan(q):
+                q = None
+            elif q > 0.50:
+                q /= 100.0
+    except Exception:
+        _logger.warning("Failed to fetch dividend yield", exc_info=True)
+    if q is None:
+        _logger.warning(
+            "Dividend yield unavailable for %s (dividendYield missing "
+            "from ticker info); substituting q=0.0",
+            symbol,
+        )
+        return 0.0
+    if q == 0.0:
+        # An observed zero is a real observation, not a substitution:
+        # the value is used as-is, but the provenance is logged so a
+        # zero-yield surface is never silent about where q came from.
+        _logger.warning(
+            "Dividend yield for %s observed as zero (dividendYield "
+            "present as 0.0 in ticker info); using q=0.0 as observed",
+            symbol,
+        )
+    return q
 
 
 def fetch_chain(
