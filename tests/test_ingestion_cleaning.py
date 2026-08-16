@@ -155,30 +155,44 @@ def test_zero_bid_or_ask_exactly_rejected() -> None:
     assert _check_zero_bid_or_ask(q_zero_ask) is not None
 
 
-def test_zero_bid_or_ask_missing_side_is_ok() -> None:
-    """Documented contract: a missing bid or ask short-circuits the rule
-    BEFORE the zero check, so a missing side is never a zero-bid/ask
-    violation regardless of the present side's value (see also the mixed
-    zero/missing case below)."""
+def test_zero_bid_or_ask_missing_side_rejected() -> None:
+    """A quote with either side missing has no two-sided market data
+    (its only price can come from a lastPrice fallback) — rejected
+    under ZERO_BID_OR_ASK naming the missing side.  Regression:
+    pre-fix, a missing side short-circuited the rule entirely (the N1
+    no-quote path — NaN/NaN rows surviving cleaning)."""
     q_missing_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, ask=10.0)
     q_missing_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0)
-    assert _check_zero_bid_or_ask(q_missing_bid) is None
-    assert _check_zero_bid_or_ask(q_missing_ask) is None
+    for q, side in ((q_missing_bid, "bid"), (q_missing_ask, "ask")):
+        rec = _check_zero_bid_or_ask(q)
+        assert rec is not None
+        assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
+        assert f"missing: {side}" in rec.detail
 
 
-def test_zero_bid_or_ask_mixed_zero_and_missing_side_is_ok() -> None:
-    """Mixed zero/missing sides pass per the ACTUAL code: the
-    ``q.bid is None or q.ask is None`` early return fires before the
-    zero check, so bid=0/ask=None and bid=None/ask=0 are both kept —
-    a zero-bid/ask violation requires BOTH sides present."""
+def test_zero_bid_or_ask_mixed_zero_and_missing_side_rejected() -> None:
+    """Mixed zero/missing sides are rejected: an absent side is a
+    no-market-data signal regardless of the present side's value —
+    bid=0/ask=None and bid=None/ask=0 both carry an absent side."""
     q_zero_bid_missing_ask = Quote(
         strike=100.0, option_type=OptionType.CALL, price=5.0, bid=0.0
     )
     q_missing_bid_zero_ask = Quote(
         strike=100.0, option_type=OptionType.CALL, price=5.0, ask=0.0
     )
-    assert _check_zero_bid_or_ask(q_zero_bid_missing_ask) is None
-    assert _check_zero_bid_or_ask(q_missing_bid_zero_ask) is None
+    assert _check_zero_bid_or_ask(q_zero_bid_missing_ask) is not None
+    assert _check_zero_bid_or_ask(q_missing_bid_zero_ask) is not None
+
+
+def test_zero_bid_or_ask_both_sides_missing_rejected() -> None:
+    """Both bid and ask absent — the N1 no-quote path — is rejected:
+    the quote carries no market data at all (price can only be a
+    stale lastPrice fallback)."""
+    q = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=None, ask=None)
+    rec = _check_zero_bid_or_ask(q)
+    assert rec is not None
+    assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
+    assert "missing: bid, ask" in rec.detail
 
 
 def test_zero_bid_or_ask_small_positive_values_pass() -> None:

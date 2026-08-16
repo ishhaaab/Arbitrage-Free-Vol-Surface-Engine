@@ -53,11 +53,21 @@ def _check_negative_price(q: Quote) -> RejectionRecord | None:
 
 
 def _check_zero_bid_or_ask(q: Quote) -> RejectionRecord | None:
-    """Reject if bid or ask is exactly zero."""
+    """Reject if either quote side is missing or exactly zero.
+
+    A quote with an absent side (``bid`` OR ``ask`` is None) has no
+    two-sided market data — its only price can come from a lastPrice
+    fallback — so it is rejected under this rule (the N1 no-quote
+    path).  A present side of exactly 0 is an observed no-quote signal
+    and is rejected the same way.
+    """
     if q.bid is None or q.ask is None:
-        return None  # missing data is OK if we only check price
-    
-    if q.bid==0 or q.ask== 0:
+        missing = [s for s, v in (("bid", q.bid), ("ask", q.ask)) if v is None]
+        return RejectionRecord(
+            q, RejectionRule.ZERO_BID_OR_ASK, f"missing: {', '.join(missing)}"
+        )
+
+    if q.bid == 0 or q.ask == 0:
         return RejectionRecord(q, RejectionRule.ZERO_BID_OR_ASK, f"bid={q.bid}, ask={q.ask}")
     return None
 

@@ -241,8 +241,11 @@ class TestFilterOptionChain:
         # mid=bid/2 and a negative spread; now flagged instead
         assert "missing: ask" in by_strike[110.0].reason
         assert by_strike[110.0].missing_fields == ("ask",)
-        # both sides missing → no spread check, no drop (mid = 0)
-        assert 120.0 not in by_strike
+        # both sides missing → dropped, naming both sides (mid = 0 must
+        # not skip the spread branch — a no-quote strike is the filter's
+        # documented target)
+        assert "missing: bid, ask" in by_strike[120.0].reason
+        assert by_strike[120.0].missing_fields == ("bid", "ask")
 
     def test_missing_volume_recorded_not_reason(self):
         """Missing volume is recorded in missing_fields but is not a

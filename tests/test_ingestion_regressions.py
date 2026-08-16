@@ -201,9 +201,12 @@ class TestFixA_MissingVsZeroQuotes:
         assert len(filtered) == 1
         assert len(drops) == 0
 
-    def test_both_sides_missing_no_spread_reason(self):
-        """Both bid and ask missing → mid=0 → no spread check fires (OI
-        is the only criterion here, and it passes)."""
+    def test_both_sides_missing_dropped(self):
+        """Both bid and ask missing → the quote has NO market data at
+        all and is dropped naming both sides.  Regression: pre-fix,
+        mid=0 skipped the spread branch so the row passed the filter
+        with only OI as a criterion, and the quote later entered the
+        pipeline priced at lastPrice (the N1 no-quote path)."""
         df = _make_chain_df(
             strikes=[100.0],
             oi=[100],
@@ -212,8 +215,10 @@ class TestFixA_MissingVsZeroQuotes:
             ask=[float("nan")],
         )
         filtered, drops = filter_option_chain(df, "2026-08-15")
-        assert len(filtered) == 1
-        assert len(drops) == 0
+        assert len(filtered) == 0
+        assert len(drops) == 1
+        assert "spread=missing (missing: bid, ask)" in drops[0].reason
+        assert drops[0].missing_fields == ("bid", "ask")
 
     def test_missing_volume_recorded_not_reason(self):
         """Missing volume is recorded in missing_fields but never becomes

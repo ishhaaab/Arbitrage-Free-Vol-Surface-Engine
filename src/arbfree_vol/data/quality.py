@@ -121,7 +121,7 @@ def _evaluate_row(
     if mid > 0:
         bid_ask_pct = (ask - bid) / mid * 100.0
     else:
-        bid_ask_pct = 0.0  # no quote — will be caught by zero_bid_ask
+        bid_ask_pct = 0.0  # only meaningful when both sides are present
 
     # Check thresholds
     reason_parts: list[str] = []
@@ -133,15 +133,19 @@ def _evaluate_row(
         else:
             reason_parts.append(f"OI={oi}<{config.min_open_interest}")
 
-    if mid > 0 and len(missing_sides) == 1:
-        # One-sided quote: exactly one of bid/ask is missing.  The
-        # mid would be fabricated from the available side (missing
-        # bid → +200%, missing ask → −200%), so the true spread is
-        # unknowable.  Flag the row instead of passing it with a
-        # made-up mid — same missing-vs-observed-zero class as
-        # open interest.
-        reason_parts.append(f"spread=missing (missing: {missing_sides[0]})")
-    elif mid > 0 and bid_ask_pct > config.max_bid_ask_pct:
+    if len(missing_sides) >= 1:
+        # One- or two-sided missing quote: the mid would be fabricated
+        # from an available side (missing bid → +200%, missing ask →
+        # −200%) or is unknowable (both missing → 0), so the true
+        # spread cannot be computed.  Flag the row instead of passing
+        # it with a made-up mid — same missing-vs-observed-zero class
+        # as open interest.  (The both-missing case previously fell
+        # through: mid=0 skipped this branch and the no-quote strike
+        # passed the filter — the N1 no-quote path.)
+        reason_parts.append(
+            f"spread=missing (missing: {', '.join(missing_sides)})"
+        )
+    elif bid_ask_pct > config.max_bid_ask_pct:
         reason_parts.append(
             f"spread={bid_ask_pct:.1f}%>{config.max_bid_ask_pct}%"
         )
@@ -216,11 +220,13 @@ def filter_option_chain(
     ``openInterest`` is absent (``None``/NaN/pd.NA) is dropped with
     reason ``OI=missing<...`` and ``missing_fields=("open_interest",)``
     so it stays distinguishable from a genuinely observed ``OI=0``.
-    The same applies to a one-sided quote (exactly one of ``bid``/``ask``
-    missing): it is dropped with reason ``spread=missing (missing:
-    <side>)`` instead of passing with a mid fabricated from the
-    available side.  Missing ``volume`` is recorded in
-    ``missing_fields`` only — volume is never a criterion.
+    The same applies to any quote with one or both sides missing
+    (``bid`` and/or ``ask`` absent): it is dropped with reason
+    ``spread=missing (missing: <side[, side]>)`` instead of passing
+    with a mid fabricated from the available side — a no-quote strike
+    (both sides missing) is the filter's documented target.  Missing
+    ``volume`` is recorded in ``missing_fields`` only — volume is
+    never a criterion.
 
     An absent COLUMN (the provider omitted the field entirely) is
     treated the same as a missing value: the market-data fields are read
