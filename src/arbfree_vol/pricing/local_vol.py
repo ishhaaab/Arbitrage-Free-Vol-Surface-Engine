@@ -416,20 +416,27 @@ def dupire(fs: FittedSurface,
             grid.append(tuple(nan for _ in strikes))
             continue
 
-        row: list[float] = []
-        for K in strikes:
-            try:
-                val = dupire_at(fs, K, T, dT)
-            except ValueError as e:
-                msg = str(e)
-                if "not found" in msg or "no slices" in msg or "below" in msg or "above" in msg:
-                    raise
-                val = nan  # calendar-arb cell; mark undefined, don't abort
-            row.append(val)
-        grid.append(tuple(row))
+        grid.append(tuple(_eval_cell(fs, K, T, dT) for K in strikes))
 
     return LocalVolSurface(
         strikes=tuple(strikes),
         maturities=tuple(maturities),
         grid=tuple(grid),
     )
+
+
+def _eval_cell(fs: FittedSurface, K: float, T: float, dT: float) -> float:
+    """Evaluate Dupire local vol at one grid cell.
+
+    A calendar-arbitrage ``ValueError`` (from ``dupire_at``) is mapped to
+    *nan* — the cell is marked undefined, not fatal.  Genuine out-of-range
+    errors (missing slice, no slices, strike below/above the surface) are
+    re-raised.
+    """
+    try:
+        return dupire_at(fs, K, T, dT)
+    except ValueError as e:
+        msg = str(e)
+        if "not found" in msg or "no slices" in msg or "below" in msg or "above" in msg:
+            raise
+        return nan  # calendar-arb cell; mark undefined, don't abort
