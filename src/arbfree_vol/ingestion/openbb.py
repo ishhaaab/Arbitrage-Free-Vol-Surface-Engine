@@ -341,14 +341,8 @@ def fetch_chain(
         if T <= min_T_years:
             continue
 
-        exp_df = df[df["_expiry_str"] == exp_str].copy()
-
-        # Split calls and puts
-        calls_raw = exp_df[exp_df["option_type"].str.lower().isin(["call", "c"])].copy()
-        puts_raw = exp_df[exp_df["option_type"].str.lower().isin(["put", "p"])].copy()
-
-        sl, rejected, drops = build_slice(
-            calls_raw, puts_raw, exp_str, T, spot,
+        sl, rejected, drops = _build_expiry_slice(
+            df, exp_str, T, spot,
             quality_config, disable_quality_filter,
         )
         all_quality_drops.extend(drops)
@@ -370,4 +364,29 @@ def fetch_chain(
         VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices),
         all_rejected,
         all_quality_drops,
+    )
+
+
+def _build_expiry_slice(
+    df,
+    exp_str: str,
+    T: float,
+    spot: float,
+    quality_config: DataQualityConfig | None,
+    disable_quality_filter: bool,
+) -> tuple[ExpirySlice | None, list[RejectionRecord], list[DropRecord]]:
+    """Build one expiry's slice from the normalised chain DataFrame.
+
+    Splits the expiry's rows into calls and puts, then delegates to the
+    shared ``build_slice``.  Returns ``(slice_or_None, rejected, drops)``.
+    """
+    exp_df = df[df["_expiry_str"] == exp_str].copy()
+
+    # Split calls and puts
+    calls_raw = exp_df[exp_df["option_type"].str.lower().isin(["call", "c"])].copy()
+    puts_raw = exp_df[exp_df["option_type"].str.lower().isin(["put", "p"])].copy()
+
+    return build_slice(
+        calls_raw, puts_raw, exp_str, T, spot,
+        quality_config, disable_quality_filter,
     )
