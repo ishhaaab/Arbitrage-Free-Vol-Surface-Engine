@@ -21,10 +21,9 @@ from arbfree_vol.data.snapshot_guard import check_snapshot_time
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    _get_risk_free_rate,
     estimate_index_dividend_yields,
+    fetch_rates,
 )
-from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, VolSurface
 
 _logger = logging.getLogger(__name__)
@@ -39,13 +38,6 @@ _logger = logging.getLogger(__name__)
 #   implied_volatility   impliedVolatility
 #   option_type          (type)  values: 'call'/'put'
 #   expiration           (expiry date)
-
-_OPTION_TYPE_MAP = {
-    "call": OptionType.CALL,
-    "put": OptionType.PUT,
-    "C": OptionType.CALL,
-    "P": OptionType.PUT,
-}
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -127,86 +119,6 @@ def _fetch_spot(obb, symbol: str, provider: str, raw_df) -> float | None:
             symbol, exc_info=True,
         )
     return None
-
-
-def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
-    """Fetch the risk-free rate (^IRX) and dividend yield for ``symbol``.
-
-    Returns ``(r, q)`` with defaults ``r=0.05, q=0.0`` on failure.  For
-    index symbols (``^SPX``, ``^VIX``, ...) ``q`` starts at the 0.0
-    placeholder — it is replaced by per-expiry put-call parity estimation
-    after the slice loop, never logged as an observed zero.
-    """
-    r = _get_risk_free_rate()
-    q = _index_placeholder_q(symbol) if is_index else _fetch_equity_q(symbol)
-
-    if r is None:
-        _logger.warning(
-            "Risk-free rate unavailable for %s (^IRX fetch failed or "
-            "empty); substituting r=0.05",
-            symbol,
-        )
-        r = 0.05
-
-    return r, q
-
-
-def _index_placeholder_q(symbol: str) -> float:
-    """Return the index dividend-yield placeholder (0.0).
-
-    Index symbols estimate q per-expiry via put-call parity after the
-    slice loop rather than hardcoding q=0.  The q=0.0 here is a
-    PLACEHOLDER, not an observation — it must never be logged as an
-    observed zero (the pre-fix code hit the ``q == 0.0`` observed-zero
-    branch for every index symbol because the placeholder triggered it).
-    """
-    _logger.warning(
-        "Dividend yield for %s starts at the index default q=0.0 "
-        "(placeholder); per-expiry put-call parity estimation runs "
-        "after the slice loop",
-        symbol,
-    )
-    return 0.0
-
-
-def _fetch_equity_q(symbol: str) -> float:
-    """Fetch the dividend yield for an equity symbol from ticker info.
-
-    Returns ``q`` as a decimal (``> 0.50`` values are treated as percent
-    and divided by 100).  Falls back to ``q=0.0`` with a logged warning
-    when unavailable; a genuinely observed zero is logged as observed.
-    """
-    import yfinance as yf
-    q = None
-    try:
-        yf_ticker = yf.Ticker(symbol)
-        info = yf_ticker.info or {}
-        div = info.get("dividendYield")
-        if div is not None and isinstance(div, (int, float)):
-            q = float(div)
-            if math.isnan(q):
-                q = None
-            elif q > 0.50:
-                q /= 100.0
-    except Exception:
-        _logger.warning("Failed to fetch dividend yield", exc_info=True)
-    if q is None:
-        _logger.warning(
-            "Dividend yield unavailable for %s (dividendYield missing "
-            "from ticker info); substituting q=0.0",
-            symbol,
-        )
-        return 0.0
-    if q == 0.0:
-        # An observed zero is a real observation, not a substitution:
-        # the value is used as-is, but the provenance is logged so a
-        # zero-yield surface is never silent about where q came from.
-        _logger.warning(
-            "Dividend yield for %s observed as zero (dividendYield "
-            "present as 0.0 in ticker info); using q=0.0 as observed",
-            symbol,
-        )
-    return q
 
 
 def fetch_chain(
@@ -303,7 +215,7 @@ def fetch_chain(
 
     # ── Risk-free rate and dividend yield ────────────────────────────
     _is_index = symbol.startswith("^")
-    r, q = _fetch_rates(symbol, _is_index)
+    r, q = fetch_rates(symbol, _is_index)
 
     # ── Normalise columns ────────────────────────────────────────────
     df = _normalise_columns(raw_df)

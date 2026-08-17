@@ -8,7 +8,6 @@ from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.ingestion.cleaning import RejectionRecord
 
 
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
@@ -184,7 +183,6 @@ def test_fetch_chain_no_fallback_warning_when_rates_available(
 def _mock_index_chain(mock_ticker_class, symbol="^SPX"):
     """Shared mock chain for index-symbol fetch_chain tests."""
     import pandas as pd
-    from datetime import date as real_date
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker

@@ -14,7 +14,6 @@ estimation fails.  Per-slice q choices are logged.
 """
 
 import logging
-import math
 import warnings
 from datetime import date
 
@@ -24,41 +23,13 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    _get_risk_free_rate,
     estimate_index_dividend_yields,
+    fetch_rates,
 )
 from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 
 _logger = logging.getLogger(__name__)
-
-
-def _get_dividend_yield(ticker: yf.Ticker) -> float | None:
-    """Fetch the dividend yield from a yfinance ticker info.
-
-    yfinance returns it as a fraction (e.g. 0.013 for 1.3%).
-    Returns None only when the field is genuinely MISSING (absent,
-    ``None`` or NaN).  An observed zero (``dividendYield == 0.0``
-    present in the info dict) is a real observation and is returned as
-    ``0.0`` — the caller must NOT treat it as a missing value and
-    substitute the fallback.
-    """
-    try:
-        info = ticker.info or {}
-        q = info.get("dividendYield")
-        if q is not None and isinstance(q, (int, float)):
-            q = float(q)
-            if math.isnan(q):
-                return None
-            # yfinance sometimes returns percent (1.01 for 1.01%) and
-            # sometimes fraction (0.0101).  A yield above 50% is
-            # definitely in percent then divide by 100.
-            if q > 0.50:
-                q /= 100.0
-            return q
-    except Exception:
-        _logger.warning("Failed to fetch dividend yield", exc_info=True)
-    return None
 
 
 def fetch_chain(
@@ -115,44 +86,10 @@ def fetch_chain(
     if not expiries:
         raise ValueError(f"No expiries available for symbol {symbol!r}")
 
-    # source rates
-    r = _get_risk_free_rate()
-    if r is None:
-        _logger.warning(
-            "Risk-free rate unavailable for %s (^IRX fetch failed or "
-            "empty); substituting r=0.05",
-            symbol,
-        )
-        r = 0.05
+    # source rates (shared orchestration: ^IRX r, per-symbol q, and the
+    # documented fallbacks; reuses the already-created ticker for q)
     _is_index = symbol.startswith("^")
-    if _is_index:
-        # For index symbols (^SPX, etc.), estimate q per-expiry via put-call
-        # parity.  This is more accurate than hardcoding q=0 because indices
-        # have a genuine implied dividend yield from their constituents
-        # (e.g., SPX ~1.2-1.5%/yr from S&P 500 dividends).  If parity
-        # estimation fails for all slices, fall back to the representative
-        # ETF's trailing yield (approximation).  See _estimate_index_dividend_yield.
-        # NOTE: q is set per-slice inside the loop below; here we set the
-        # surface-level q as a fallback.
-        q = 0.0  # will be updated after slice loop
-    else:
-        q = _get_dividend_yield(ticker)
-        if q is None:
-            _logger.warning(
-                "Dividend yield unavailable for %s (dividendYield missing "
-                "from ticker info); substituting q=0.0",
-                symbol,
-            )
-            q = 0.0
-        elif q == 0.0:
-            # An observed zero is a real observation, not a substitution:
-            # the value is used as-is, but the provenance is logged so a
-            # zero-yield surface is never silent about where q came from.
-            _logger.warning(
-                "Dividend yield for %s observed as zero (dividendYield "
-                "present as 0.0 in ticker info); using q=0.0 as observed",
-                symbol,
-            )
+    r, q = fetch_rates(symbol, _is_index, ticker)
 
     # get the underlying spot price
     spot = None

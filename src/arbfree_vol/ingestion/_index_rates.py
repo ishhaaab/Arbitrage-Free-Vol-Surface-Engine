@@ -1,16 +1,19 @@
-"""Shared index-rate helpers for the ingestion layer.
+"""Shared rate/dividend helpers for the ingestion layer.
 
 Single source of truth for the index representative-ETF mapping, the
-per-expiry put-call-parity dividend yield estimators, and the ^IRX
-risk-free rate fetch.  Both ``ingestion.yahoo`` and ``ingestion.openbb``
+per-expiry put-call-parity dividend yield estimators, the ^IRX
+risk-free rate fetch, the per-equity trailing dividend-yield fetch, and
+the ``(r, q)`` orchestration that both ``ingestion.yahoo`` and
+``ingestion.openbb`` use to source rates.  Both ingestion modules
 re-import these names so their call sites keep working unchanged, and so
 a fix to the estimation logic lands in exactly one place.
 
 This module does not hard-require ``yfinance`` at import time: it is
-imported lazily inside ``_get_representative_dividend_yield`` so that
-importing this module (or the ``openbb`` ingestion module that
-re-imports its names) does not require ``yfinance`` at import time —
-only that fallback path needs it at call time.
+imported lazily inside the rate helpers so that importing this module
+(or the ``openbb`` ingestion module that re-imports its names) does not
+require ``yfinance`` at import time — only those helper paths need it at
+call time, and a missing installation degrades to the documented
+fallbacks (``None`` / ``r=0.05, q=0.0``) instead of raising.
 """
 
 import logging
@@ -257,3 +260,117 @@ def _get_risk_free_rate() -> float | None:
     except Exception:
         _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
     return None
+
+
+def _get_dividend_yield(ticker) -> float | None:
+    """Fetch the dividend yield from a yfinance ticker info.
+
+    yfinance returns it as a fraction (e.g. 0.013 for 1.3%).
+    Returns None only when the field is genuinely MISSING (absent,
+    ``None`` or NaN).  An observed zero (``dividendYield == 0.0``
+    present in the info dict) is a real observation and is returned as
+    ``0.0`` — the caller must NOT treat it as a missing value and
+    substitute the fallback.
+    """
+    try:
+        info = ticker.info or {}
+        q = info.get("dividendYield")
+        if q is not None and isinstance(q, (int, float)):
+            q = float(q)
+            if math.isnan(q):
+                return None
+            # yfinance sometimes returns percent (1.01 for 1.01%) and
+            # sometimes fraction (0.0101).  A yield above 50% is
+            # definitely in percent then divide by 100.
+            if q > 0.50:
+                q /= 100.0
+            return q
+    except Exception:
+        _logger.warning("Failed to fetch dividend yield", exc_info=True)
+    return None
+
+
+def _index_placeholder_q(symbol: str) -> float:
+    """Return the index dividend-yield placeholder (0.0).
+
+    Index symbols estimate q per-expiry via put-call parity after the
+    slice loop rather than hardcoding q=0.  The q=0.0 here is a
+    PLACEHOLDER, not an observation — it must never be logged as an
+    observed zero (the pre-fix code hit the ``q == 0.0`` observed-zero
+    branch for every index symbol because the placeholder triggered it).
+    """
+    _logger.warning(
+        "Dividend yield for %s starts at the index default q=0.0 "
+        "(placeholder); per-expiry put-call parity estimation runs "
+        "after the slice loop",
+        symbol,
+    )
+    return 0.0
+
+
+def _fetch_equity_q(symbol: str, ticker=None) -> float:
+    """Fetch the dividend yield for an EQUITY symbol from ticker info.
+
+    Returns ``q`` as a decimal (``> 0.50`` values are treated as percent
+    and divided by 100).  Falls back to ``q=0.0`` with a logged warning
+    when unavailable; a genuinely observed zero is logged as observed.
+    When the caller already holds a yfinance ``Ticker`` for ``symbol``
+    (e.g. ``ingestion.yahoo``'s fetch_chain), pass it as ``ticker`` to
+    avoid a second provider fetch; otherwise one is created lazily.
+    """
+    if ticker is None:
+        try:
+            import yfinance as yf
+
+            ticker = yf.Ticker(symbol)
+        except Exception:
+            _logger.warning("Failed to fetch dividend yield", exc_info=True)
+    q = None
+    if ticker is not None:
+        q = _get_dividend_yield(ticker)
+    if q is None:
+        _logger.warning(
+            "Dividend yield unavailable for %s (dividendYield missing "
+            "from ticker info); substituting q=0.0",
+            symbol,
+        )
+        return 0.0
+    if q == 0.0:
+        # An observed zero is a real observation, not a substitution:
+        # the value is used as-is, but the provenance is logged so a
+        # zero-yield surface is never silent about where q came from.
+        _logger.warning(
+            "Dividend yield for %s observed as zero (dividendYield "
+            "present as 0.0 in ticker info); using q=0.0 as observed",
+            symbol,
+        )
+    return q
+
+
+def fetch_rates(symbol: str, is_index: bool, ticker=None) -> tuple[float, float]:
+    """Fetch the risk-free rate (^IRX) and dividend yield for ``symbol``.
+
+    Returns ``(r, q)`` with defaults ``r=0.05, q=0.0`` on failure.  For
+    index symbols (``^SPX``, ``^VIX``, ...) ``q`` starts at the 0.0
+    placeholder (logged as such, never as an observed zero) — it is
+    replaced by per-expiry put-call parity estimation after the slice
+    loop.  For equity symbols ``q`` is the ticker's trailing dividend
+    yield, with observed-zeros preserved.  ``ticker`` is the caller's
+    already-created yfinance ``Ticker`` for ``symbol`` when available
+    (avoids a second provider fetch); otherwise one is created lazily.
+    """
+    r = _get_risk_free_rate()
+    if is_index:
+        q = _index_placeholder_q(symbol)
+    else:
+        q = _fetch_equity_q(symbol, ticker)
+
+    if r is None:
+        _logger.warning(
+            "Risk-free rate unavailable for %s (^IRX fetch failed or "
+            "empty); substituting r=0.05",
+            symbol,
+        )
+        r = 0.05
+
+    return r, q

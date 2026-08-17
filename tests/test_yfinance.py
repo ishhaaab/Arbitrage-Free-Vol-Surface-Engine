@@ -21,7 +21,7 @@ def test_get_dividend_yield_observed_zero_is_preserved() -> None:
     (only ``q > 0`` counted as present), so an observed zero was
     silently substituted with the fallback.  A present-zero is a real
     observation and must flow through unchanged."""
-    from arbfree_vol.ingestion.yahoo import _get_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_dividend_yield
 
     ticker = MagicMock()
     ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.0}
@@ -34,7 +34,7 @@ def test_get_dividend_yield_missing_returns_none() -> None:
     """A MISSING dividendYield (field absent, None, or NaN) returns
     None — the caller's fallback path is the only one that may
     substitute q=0.0."""
-    from arbfree_vol.ingestion.yahoo import _get_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_dividend_yield
 
     # Field absent entirely
     ticker_absent = MagicMock()
@@ -345,6 +345,25 @@ def test_get_risk_free_rate_returns_none_when_yfinance_unavailable(monkeypatch) 
 
     r = _get_risk_free_rate()
     assert r is None
+
+
+def test_fetch_equity_q_returns_zero_when_yfinance_unavailable(monkeypatch) -> None:
+    """A missing ``yfinance`` installation must make the equity dividend
+    yield fetch fall back to ``q=0.0`` — NOT raise
+    ``ModuleNotFoundError``.
+
+    Same degradation contract as the other rate helpers: the lazy
+    ``import yfinance`` sits inside the guarded failure boundary, so a
+    missing provider degrades exactly like any other fetch failure.
+    """
+    import sys
+
+    from arbfree_vol.ingestion._index_rates import _fetch_equity_q
+
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+
+    q = _fetch_equity_q("SPY")
+    assert q == 0.0
 
 
 def test_representative_no_mapping_does_not_attempt_yfinance_import(monkeypatch) -> None:
