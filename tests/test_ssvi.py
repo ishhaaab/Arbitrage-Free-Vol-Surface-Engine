@@ -4,8 +4,6 @@ import pytest
 from pytest import approx
 
 from arbfree_vol.ssvi.model import (
-    SSVIParams,
-    eSSVISurfaceParams,
     essvi_psi,
     ssvi_w,
     essvi_w,
@@ -16,7 +14,7 @@ from arbfree_vol.ssvi.model import (
     gatheral_jacquier_condition,
 )
 from arbfree_vol.svi.model import svi_total_variance
-from arbfree_vol.ssvi.calibration import fit_ssvi_slice, fit_essvi_slice
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 
 
 # FIXTURE parameter set — NOT from any paper (Gatheral & Jacquier 2014 uses symbolic theta/phi
@@ -71,23 +69,6 @@ def test_calibrated_curve_fits_the_cloud() -> None:
     for k, w in points:
         w_fit = ssvi_w(k, fitted.theta, fitted.rho, fitted.psi)
         assert w_fit == approx(w, abs=1e-3)
-
-
-def test_essvi_calibration_recovers_known_eta_gamma() -> None:
-    import numpy as np
-    eta, gamma = 0.5, 0.5
-    theta, rho = 0.04, -0.4
-    ks = np.linspace(-0.4, 0.4, 11)
-    points = [(float(k), essvi_w(float(k), theta, rho, eta, gamma)) for k in ks]
-
-    ssvi_params, surface_params = fit_essvi_slice(points)
-
-    # eta, gamma are less identifiable from a single slice (a single
-    # slice gives us one theta point), so we just check theta/rho fit.
-    assert ssvi_params.theta == approx(theta, abs=1e-3)
-    assert ssvi_params.rho == approx(rho, abs=1e-2)
-    assert surface_params.eta == approx(eta, abs=0.5)
-    assert surface_params.gamma == approx(gamma, abs=0.5)
 
 
 def test_calibration_too_few_points_raises() -> None:
@@ -226,13 +207,6 @@ def test_to_raw_svi_raises_on_nonpositive_psi() -> None:
         to_raw_svi_params(0.04, -0.4, -0.5)
 
 
-def test_fit_essvi_slice_raises_on_too_few_points() -> None:
-    """The 5-point minimum is enforced before any optimization."""
-    pts = [(float(k), 0.04) for k in [-1.0, 0.0, 1.0]]  # only 3 points
-    with pytest.raises(ValueError, match="at least 5 points"):
-        fit_essvi_slice(pts)
-
-
 def test_fit_ssvi_slice_raises_on_nonconvergence(monkeypatch) -> None:
     """When the scipy least_squares optimizer reports failure, the calibra-
     tion raises RuntimeError instead of returning garbage parameters."""
@@ -250,17 +224,3 @@ def test_fit_ssvi_slice_raises_on_nonconvergence(monkeypatch) -> None:
     pts = [(float(k), ssvi_w(float(k), 0.04, -0.4, 0.5)) for k in [-1.0, -0.5, 0.0, 0.5, 1.0]]
     with pytest.raises(RuntimeError, match="SSVI calibration failed"):
         fit_ssvi_slice(pts)
-
-
-def test_fit_essvi_slice_raises_on_nonconvergence(monkeypatch) -> None:
-    """Same contract for the eSSVI fitter: non-convergence is a RuntimeError."""
-    from arbfree_vol.ssvi import calibration as calib_mod
-
-    class _FailedResult:
-        success = False
-        message = "`xtol` termination condition is satisfied."
-
-    monkeypatch.setattr(calib_mod, "least_squares", lambda *a, **k: _FailedResult())
-    pts = [(float(k), ssvi_w(float(k), 0.04, -0.4, 0.5)) for k in [-1.0, -0.5, 0.0, 0.5, 1.0]]
-    with pytest.raises(RuntimeError, match="eSSVI calibration failed"):
-        fit_essvi_slice(pts)

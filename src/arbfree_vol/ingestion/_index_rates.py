@@ -1,10 +1,10 @@
-"""Shared index dividend-yield helpers for the ingestion layer.
+"""Shared index-rate helpers for the ingestion layer.
 
-Single source of truth for the index representative-ETF mapping and the
-per-expiry put-call-parity dividend yield estimators.  Both
-``ingestion.yahoo`` and ``ingestion.openbb`` re-import these names so
-their call sites keep working unchanged, and so a fix to the estimation
-logic lands in exactly one place.
+Single source of truth for the index representative-ETF mapping, the
+per-expiry put-call-parity dividend yield estimators, and the ^IRX
+risk-free rate fetch.  Both ``ingestion.yahoo`` and ``ingestion.openbb``
+re-import these names so their call sites keep working unchanged, and so
+a fix to the estimation logic lands in exactly one place.
 
 This module does not hard-require ``yfinance`` at import time: it is
 imported lazily inside ``_get_representative_dividend_yield`` so that
@@ -236,3 +236,24 @@ def estimate_index_dividend_yields(
             )
 
     return q
+
+
+def _get_risk_free_rate() -> float | None:
+    """Fetch the 13-week Treasury yield (^IRX) as a decimal.
+
+    Returns None if the ticker is unavailable, the value is zero / None,
+    or the ``yfinance`` provider is missing.  ``yfinance`` is imported
+    lazily (same policy as the dividend-yield helpers above) so importing
+    this module never requires the provider.
+    """
+    try:
+        import yfinance as yf
+
+        irx = yf.Ticker("^IRX")
+        info = irx.info or {}
+        rate = info.get("regularMarketPrice") or info.get("previousClose")
+        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
+            return rate / 100.0  # percent -> decimal
+    except Exception:
+        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
+    return None

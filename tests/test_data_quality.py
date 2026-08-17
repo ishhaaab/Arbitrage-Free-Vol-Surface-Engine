@@ -1,11 +1,9 @@
 """Tests for the data quality filter."""
 
 import pandas as pd
-import pytest
 
 from arbfree_vol.data.quality import (
     DataQualityConfig,
-    DropRecord,
     filter_option_chain,
 )
 

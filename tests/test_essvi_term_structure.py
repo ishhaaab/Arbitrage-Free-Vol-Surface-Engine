@@ -9,7 +9,6 @@ Surface", J. Comput. Finance 22(5), 25-39, Prop 3.1.
 
 import numpy as np
 import pytest
-from math import sqrt
 
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, to_raw_svi_params
 from arbfree_vol.ssvi.term_structure import (
@@ -19,7 +18,6 @@ from arbfree_vol.ssvi.term_structure import (
     verify_hm_condition,
     verify_hm_condition_breakdown,
     verify_ssvi_calendar_free,
-    SequentialFitResult,
 )
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 
@@ -747,7 +745,6 @@ def test_infeasible_slice_falls_back_regardless_of_high_seed(monkeypatch) -> Non
     then recovers the true theta of each slice.
     """
     from scipy.optimize import OptimizeResult
-    import arbfree_vol.ssvi.term_structure as ts
 
     ts, fake_minimize = _scripted_minimize([
         _opt_result(4, "The maximum number of function evaluations is exceeded."),

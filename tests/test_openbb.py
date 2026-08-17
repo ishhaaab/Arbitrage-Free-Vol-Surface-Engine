@@ -10,6 +10,11 @@ import pandas as pd
 import pytest
 
 from arbfree_vol.ingestion import openbb as openbb_mod
+from arbfree_vol.ingestion._common import row_to_quote
+from arbfree_vol.ingestion._index_rates import (
+    _estimate_index_dividend_yield,
+    _get_representative_dividend_yield,
+)
 from arbfree_vol.models.surface import VolSurface
 
 
@@ -70,7 +75,7 @@ class TestOpenBBRowToQuote:
         """Mid price is computed from bid/ask."""
         row = {"strike": 100, "bid": 1.0, "ask": 2.0}
         from arbfree_vol.models.option import OptionType
-        q = openbb_mod._row_to_quote(row, OptionType.CALL)
+        q = row_to_quote(row, OptionType.CALL)
         assert q is not None
         assert q.price == pytest.approx(1.5)
         assert q.strike == 100.0
@@ -79,7 +84,7 @@ class TestOpenBBRowToQuote:
         """Falls back to the normalized lastPrice when bid/ask missing."""
         row = {"strike": 100, "bid": None, "ask": None, "lastPrice": 3.0}
         from arbfree_vol.models.option import OptionType
-        q = openbb_mod._row_to_quote(row, OptionType.PUT)
+        q = row_to_quote(row, OptionType.PUT)
         assert q is not None
         assert q.price == pytest.approx(3.0)
 
@@ -94,7 +99,6 @@ class TestOpenBBRowToQuote:
         row with missing bid/ask fell through the mid-price branch and
         returned None.  Drives the same normalise-then-convert path the
         fetch pipeline uses for row conversion."""
-        import math
         import pandas as pd
         from arbfree_vol.models.option import OptionType
 
@@ -105,7 +109,7 @@ class TestOpenBBRowToQuote:
             "last_trade_price": [3.0],
         })
         normalized = openbb_mod._normalise_columns(raw)
-        q = openbb_mod._row_to_quote(normalized.iloc[0], OptionType.PUT)
+        q = row_to_quote(normalized.iloc[0], OptionType.PUT)
         assert q is not None
         assert q.price == pytest.approx(3.0)
 
@@ -113,7 +117,7 @@ class TestOpenBBRowToQuote:
         """Returns None when no valid price source exists."""
         row = {"strike": 100, "bid": None, "ask": None, "lastPrice": None}
         from arbfree_vol.models.option import OptionType
-        q = openbb_mod._row_to_quote(row, OptionType.CALL)
+        q = row_to_quote(row, OptionType.CALL)
         assert q is None
 
 
@@ -143,17 +147,7 @@ class TestOpenBBExpirationParsing:
 
 
 class TestSafeConversions:
-    """Test the _safe_int and _safe_float helpers."""
-
-    def test_safe_int_with_none(self):
-        assert openbb_mod._safe_int(None) == 0
-        assert openbb_mod._safe_int(None, default=5) == 5
-
-    def test_safe_int_with_nan(self):
-        assert openbb_mod._safe_int(float("nan")) == 0
-
-    def test_safe_int_with_valid(self):
-        assert openbb_mod._safe_int(42) == 42
+    """Test the _safe_float helper."""
 
     def test_safe_float_with_none(self):
         assert openbb_mod._safe_float(None) == 0.0
@@ -205,7 +199,7 @@ class TestOpenBBIndexDividendYield:
             ],
         )
 
-        q_est = openbb_mod._estimate_index_dividend_yield(slice_, S, r)
+        q_est = _estimate_index_dividend_yield(slice_, S, r)
         assert q_est is not None
         assert abs(q_est - q_true) < 0.002
 
@@ -222,7 +216,7 @@ class TestOpenBBIndexDividendYield:
             ],
         )
 
-        q_est = openbb_mod._estimate_index_dividend_yield(slice_, 100.0, 0.05)
+        q_est = _estimate_index_dividend_yield(slice_, 100.0, 0.05)
         assert q_est is None
 
     @patch("yfinance.Ticker")
@@ -232,14 +226,14 @@ class TestOpenBBIndexDividendYield:
         mock_ticker.info = {"dividendYield": 0.013}
         mock_ticker_class.return_value = mock_ticker
 
-        q = openbb_mod._get_representative_dividend_yield("^SPX")
+        q = _get_representative_dividend_yield("^SPX")
         assert q is not None
         assert abs(q - 0.013) < 1e-6
         mock_ticker_class.assert_called_once_with("SPY")
 
     def test_representative_vix(self) -> None:
         """^VIX → None (no representative ETF)."""
-        q = openbb_mod._get_representative_dividend_yield("^VIX")
+        q = _get_representative_dividend_yield("^VIX")
         assert q is None
 
 

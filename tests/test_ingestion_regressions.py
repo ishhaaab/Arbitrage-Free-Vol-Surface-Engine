@@ -30,7 +30,6 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from arbfree_vol.data.quality import filter_option_chain
 from arbfree_vol.ingestion import openbb as openbb_mod
@@ -414,7 +413,6 @@ class TestFixB_YfinanceFallbackWarnings:
     @staticmethod
     def _mock_fetch_chain(mock_ticker_class, irx_info, symbol_info) -> MagicMock:
         """Standard mock yfinance env; ^IRX info and symbol info canned."""
-        from datetime import date as real_date
 
         mock_ticker = MagicMock()
         mock_ticker_class.return_value = mock_ticker

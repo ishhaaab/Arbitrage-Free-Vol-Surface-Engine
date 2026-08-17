@@ -7,8 +7,6 @@ helpers using synthetic data and mocked yfinance calls.
 from datetime import date
 from unittest.mock import patch, MagicMock
 
-import pytest
-
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote
 
@@ -60,7 +58,7 @@ def test_get_dividend_yield_missing_returns_none() -> None:
 
 def test_estimate_index_dividend_yield_via_parity() -> None:
     """Verify q estimation matches the put-call parity rearrangement."""
-    from arbfree_vol.ingestion.yahoo import _estimate_index_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
     from arbfree_vol.models.option import OptionContract, BlackScholesInput
     from arbfree_vol.pricing.black_scholes import price
 
@@ -103,7 +101,7 @@ def test_estimate_index_dividend_yield_via_parity() -> None:
 
 def test_estimate_index_dividend_yield_no_atm_pair() -> None:
     """Slice with only calls → returns None."""
-    from arbfree_vol.ingestion.yahoo import _estimate_index_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
 
     slice_ = ExpirySlice(
         expiry_time=1.0,
@@ -120,7 +118,7 @@ def test_estimate_index_dividend_yield_no_atm_pair() -> None:
 def test_estimate_index_dividend_yield_empty_slice() -> None:
     """Empty quotes list → returns None (but ExpirySlice requires min_length=1,
     so we test with a single quote that has no pair)."""
-    from arbfree_vol.ingestion.yahoo import _estimate_index_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
 
     slice_ = ExpirySlice(
         expiry_time=1.0,
@@ -143,7 +141,7 @@ def test_estimate_index_dividend_yield_near_zero_expiry_returns_float() -> None:
     positive near-zero expiry with a consistent call/put pair is
     estimable — put-call parity recovers q from the tiny C-P gap.
     """
-    from arbfree_vol.ingestion.yahoo import _estimate_index_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
     from arbfree_vol.models.option import OptionContract, BlackScholesInput
     from arbfree_vol.pricing.black_scholes import price
 
@@ -191,7 +189,7 @@ def test_estimate_index_dividend_yield_near_zero_expiry_returns_float() -> None:
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_representative_dividend_yield_spx(mock_ticker_class) -> None:
     """^SPX → SPY mapping returns SPY's dividend yield."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     mock_ticker = MagicMock()
     mock_ticker.info = {"dividendYield": 0.013}
@@ -206,7 +204,7 @@ def test_representative_dividend_yield_spx(mock_ticker_class) -> None:
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_representative_dividend_yield_vix(mock_ticker_class) -> None:
     """^VIX → None (no representative ETF)."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     q = _get_representative_dividend_yield("^VIX")
     assert q is None
@@ -216,7 +214,7 @@ def test_representative_dividend_yield_vix(mock_ticker_class) -> None:
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_representative_dividend_yield_unknown_symbol(mock_ticker_class) -> None:
     """Unknown index symbol → None."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     q = _get_representative_dividend_yield("^UNKNOWN")
     assert q is None
@@ -226,7 +224,7 @@ def test_representative_dividend_yield_unknown_symbol(mock_ticker_class) -> None
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_representative_dividend_yield_handles_percent(mock_ticker_class) -> None:
     """When yfinance returns percent (>0.50), it's converted to fraction."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     mock_ticker = MagicMock()
     mock_ticker.info = {"dividendYield": 1.3}  # 1.3% as percent
@@ -240,7 +238,7 @@ def test_representative_dividend_yield_handles_percent(mock_ticker_class) -> Non
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
 def test_representative_dividend_yield_handles_exception(mock_ticker_class) -> None:
     """When yfinance raises, returns None gracefully."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     mock_ticker_class.side_effect = Exception("network error")
 
@@ -263,7 +261,7 @@ def test_representative_dividend_yield_observed_zero_is_preserved(
     commit 5bf429a: present-zero is an observation, absent/None/NaN is
     missing."""
     import logging
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     mock_ticker = MagicMock()
     mock_ticker.info = {"dividendYield": 0.0}  # observed zero, present
@@ -287,7 +285,7 @@ def test_representative_dividend_yield_missing_returns_none(mock_ticker_class) -
     """A MISSING representative-ETF yield (field absent, ``None``, or
     NaN) returns None — the caller's last-resort substitution is the
     only path that may set q=0.0."""
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     # Field absent entirely
     mock_ticker_absent = MagicMock()
@@ -323,12 +321,30 @@ def test_representative_returns_none_when_yfinance_unavailable(monkeypatch) -> N
     # Load the parent module first so its top-level yfinance import has
     # already happened; then simulate yfinance being absent for the
     # function's own lazy import.
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     monkeypatch.setitem(sys.modules, "yfinance", None)
 
     q = _get_representative_dividend_yield("^SPX")
     assert q is None
+
+
+def test_get_risk_free_rate_returns_none_when_yfinance_unavailable(monkeypatch) -> None:
+    """A missing ``yfinance`` installation must make the ^IRX fetch return
+    ``None`` — NOT raise ``ModuleNotFoundError``.
+
+    Same degradation contract as the dividend-yield helpers: the lazy
+    ``import yfinance`` sits inside the guarded failure boundary, so an
+    import failure returns None exactly like any other fetch failure.
+    """
+    import sys
+
+    from arbfree_vol.ingestion._index_rates import _get_risk_free_rate
+
+    monkeypatch.setitem(sys.modules, "yfinance", None)
+
+    r = _get_risk_free_rate()
+    assert r is None
 
 
 def test_representative_no_mapping_does_not_attempt_yfinance_import(monkeypatch) -> None:
@@ -348,7 +364,7 @@ def test_representative_no_mapping_does_not_attempt_yfinance_import(monkeypatch)
 
     monkeypatch.setattr(builtins, "__import__", _recording_import)
 
-    from arbfree_vol.ingestion.yahoo import _get_representative_dividend_yield
+    from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     q = _get_representative_dividend_yield("^VIX")
     assert q is None

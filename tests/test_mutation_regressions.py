@@ -115,11 +115,10 @@ def test_check_parity_partial_bid_ask_uses_fallback_threshold() -> None:
     """
     call = _bs_price(OptionType.CALL, 100.0)
     put = _bs_price(OptionType.PUT, 100.0)
-    rhs = SPOT * _exp(-DIV_YIELD * T) - 100.0 * _exp(-RISK_FREE * T)
 
-    # Put price lowered by 0.06 so |C - P - rhs| = 0.06: strictly
-    # between the fallback threshold (0.05) and the call's half-spread
-    # threshold (0.5).
+    # Put price lowered by 0.06 so the parity residual is exactly 0.06:
+    # strictly between the fallback threshold (0.05) and the call's
+    # half-spread threshold (0.5).
     residual = 0.06
     surface = _surface([
         Quote(strike=100.0, option_type=OptionType.CALL,
@@ -202,8 +201,8 @@ def test_sabr_implied_vol_known_values_t_ne_one() -> None:
         (0.5, 0.25, 0.061827977133),
         (0.5, -0.25, 0.084024923727),
     ]
-    for T, k, expected in cases:
-        iv = sabr_implied_vol(k, 100.0, T, 0.25, 0.5, -0.4, 0.8)
+    for t_val, k, expected in cases:
+        iv = sabr_implied_vol(k, 100.0, t_val, 0.25, 0.5, -0.4, 0.8)
         assert iv == approx(expected, abs=1e-10)
 
 
@@ -292,7 +291,7 @@ def test_greeks_known_values_put_t_ne_one() -> None:
     d1 = (log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * sqrt(T))
     d2 = d1 - sigma * sqrt(T)
     df_q, df_r = exp(-q * T), exp(-r * T)
-    n1, n2 = npdf(d1), ncdf(-d1)
+    n1 = npdf(d1)
     exp_delta = df_q * (ncdf(d1) - 1.0)
     exp_gamma = df_q * n1 / (S * sigma * sqrt(T))
     exp_vega = S * df_q * n1 * sqrt(T)

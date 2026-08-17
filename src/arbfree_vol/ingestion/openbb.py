@@ -19,10 +19,9 @@ from typing import Any
 from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 from arbfree_vol.ingestion.cleaning import RejectionRecord
-from arbfree_vol.ingestion._common import build_slice, row_to_quote as _row_to_quote
+from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    _estimate_index_dividend_yield,
-    _get_representative_dividend_yield,
+    _get_risk_free_rate,
     estimate_index_dividend_yields,
 )
 from arbfree_vol.models.option import OptionType
@@ -47,15 +46,6 @@ _OPTION_TYPE_MAP = {
     "C": OptionType.CALL,
     "P": OptionType.PUT,
 }
-
-
-def _safe_int(val: Any, default: int = 0) -> int:
-    """Convert a value to int, handling None/NaN."""
-    if val is None:
-        return default
-    if isinstance(val, float) and math.isnan(val):
-        return default
-    return int(val)
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -147,7 +137,7 @@ def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
     placeholder — it is replaced by per-expiry put-call parity estimation
     after the slice loop, never logged as an observed zero.
     """
-    r = _fetch_risk_free_rate()
+    r = _get_risk_free_rate()
     q = _index_placeholder_q(symbol) if is_index else _fetch_equity_q(symbol)
 
     if r is None:
@@ -159,20 +149,6 @@ def _fetch_rates(symbol: str, is_index: bool) -> tuple[float, float]:
         r = 0.05
 
     return r, q
-
-
-def _fetch_risk_free_rate() -> float | None:
-    """Fetch the 13-week T-bill rate from ^IRX, as a decimal (None on failure)."""
-    import yfinance as yf
-    try:
-        irx = yf.Ticker("^IRX")
-        info = irx.info or {}
-        rate = info.get("regularMarketPrice") or info.get("previousClose")
-        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
-            return rate / 100.0
-    except Exception:
-        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
-    return None
 
 
 def _index_placeholder_q(symbol: str) -> float:

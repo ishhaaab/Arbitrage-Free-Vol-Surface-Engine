@@ -24,30 +24,13 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    _estimate_index_dividend_yield,
-    _get_representative_dividend_yield,
+    _get_risk_free_rate,
     estimate_index_dividend_yields,
 )
 from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 
 _logger = logging.getLogger(__name__)
-
-
-def _get_risk_free_rate() -> float | None:
-    """Fetch the 13-week Treasury yield (^IRX) as a decimal.
-
-    Returns None if the ticker is unavailable or the value is zero / None.
-    """
-    try:
-        irx = yf.Ticker("^IRX")
-        info = irx.info or {}
-        rate = info.get("regularMarketPrice") or info.get("previousClose")
-        if rate is not None and isinstance(rate, (int, float)) and rate > 0:
-            return rate / 100.0  # convert percent to decimal
-    except Exception:
-        _logger.warning("Failed to fetch risk-free rate from ^IRX", exc_info=True)
-    return None
 
 
 def _get_dividend_yield(ticker: yf.Ticker) -> float | None:
