@@ -207,17 +207,17 @@ def test_calendar_check_handles_empty_total_variance_slice(monkeypatch) -> None:
     ``ValueError: not enough values to unpack`` and killing the whole
     detect() call.
     """
-    import arbfree_vol.arbitrage.quote_detect as qd
+    import arbfree_vol.arbitrage.calendar as cal
 
     surface = _two_expiry_surface(t1=0.5, sig1=0.20, t2=1.0, sig2=0.20)
-    real_stv = qd.slice_total_variance
+    real_stv = cal.slice_total_variance
 
     def _empty_for_later(surface_, sl):
         if sl.expiry_time == 1.0:
             return {}
         return real_stv(surface_, sl)
 
-    monkeypatch.setattr(qd, "slice_total_variance", _empty_for_later)
+    monkeypatch.setattr(cal, "slice_total_variance", _empty_for_later)
 
     # Must return a report, not raise ValueError
     report = detect(surface)

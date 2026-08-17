@@ -474,8 +474,6 @@ def test_plot_iv_heatmap_masks_out_of_range_cells() -> None:
     absorbed: those grid cells stay NaN (masked) instead of aborting."""
     from arbfree_vol.viz.surface import plot_iv_heatmap
     from arbfree_vol.surface.interpolate import build_fitted_surface
-    from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-    from arbfree_vol.models.option import OptionType
 
     # A surface whose slices have no fitted slices beyond their own range:
     # iv_at over a wider grid will raise ValueError on out-of-range cells.
