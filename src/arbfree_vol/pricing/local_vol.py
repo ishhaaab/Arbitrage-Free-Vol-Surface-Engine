@@ -19,45 +19,21 @@ local variance from total variance :math:`w(K,T) = \\sigma_\\text{imp}^2 T`:
            + \\frac12 \\partial_{kk} w }
 
 where :math:`k = \\ln(K / F(T))` and all partial derivatives are
-approximated with finite differences.
+approximated with finite differences.  See ``_dupire_denominator`` for
+the denominator terms, ``_dw_dT`` for the time derivative (fixed-``k``
+re-striking), and ``_d2w_dk2`` for the non-uniform-grid second
+derivative — those docstrings carry the numerical caveats.
 
-.. note::
-   The strike-space stencil steps in *absolute strike* (``K ± dK``); since
-   :math:`k = \\ln(K/F)` is nonlinear in :math:`K`, the resulting *k*-grid
-   is NON-UNIFORM (equal K-steps give unequal k-steps).  The first
-   derivative uses the standard central difference
-   ``(w⁺ − w⁻) / (k⁺ − k⁻)``, and the second derivative uses the
-   non-uniform central stencil ``2/(h⁺+h⁻) · [(w⁺−w⁰)/h⁺ − (w⁰−w⁻)/h⁻]``
-   (with ``h⁺ = k⁺ − k⁰``, ``h⁻ = k⁰ − k⁻``), which reduces to the
-   symmetric formula on a uniform grid.  Using the symmetric formula on
-   this asymmetric grid would inject a spurious ``−w′(k)`` term into
-   d²w/dk².
-
-.. note::
-   The time derivative ``_dw_dT`` is taken at FIXED log-moneyness
-   ``k = ln(K/F(T))``, not at a fixed absolute strike: each stencil point
-   is re-struck along the forward curve (``K' = K · F(T±dT)/F(T)``) so
-   that ``k`` does not drift across the stencil.  A fixed-*K* stencil
-   would inject a spurious ``(r-q)·∂w/∂k`` term into the numerator,
-   which is first-order in the smile slope and can be several percent of
-   the local vol for non-zero carry with a skewed smile.
-
-.. note::
-   Finite-difference step sizes are module-level constants
-   (``_FD_T_DEFAULT``, ``_FD_K_DEFAULT``).  Because
-   ``total_variance_at`` is piecewise-linear in *T* with kinks at
-   slice expiries, the central FD in *T* can straddle a kink when the
-   query maturity sits within ``dT`` of a slice expiry — producing
-   minor FD jitter at slice boundaries.  Callers requiring
-   boundary-clean local vols should query interior maturities or adapt
-   ``dT`` to avoid straddling the nearest slice expiry.
+Fallback-slice contamination handling (``_stencil_touches_fallback``,
+``_FB_TOL``) lives in ``_fallback``; finite-difference step sizes are
+module-level constants below.
 """
 
-import bisect
 from dataclasses import dataclass
 from math import log, nan, sqrt, isnan
 
 from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at, _forward_at
+from arbfree_vol.pricing._fallback import _FB_TOL, _stencil_touches_fallback
 
 
 # Module-level tolerances  
@@ -69,65 +45,6 @@ _DENOM_MIN: float = 1e-10         # denominator values ≤ this => local-vol
                                   # undefined (return nan)
 _CAL_ARB_TOL: float = 0.0         # dw/dT ≤ tol => calendar arbitrage => raise
 _T_MIN: float = 1e-4              # absolute tiny threshold for T near zero
-_FB_TOL: float = 0.01             # tolerance for matching fallback T values
-
-
-def _stencil_touches_fallback(
-    T: float,
-    fitted_times: tuple[float, ...],
-    fallback_set: set[float],
-    dT: float,
-) -> bool:
-    """Check if T's Dupire FD stencil crosses or touches a fallback slice.
-
-    The finite-difference stencil for dw/dT evaluates total variance at
-    T-dT and T+dT.  If either of those points falls in an interpolation
-    interval whose endpoint is a fallback slice, the computed derivative
-    is contaminated.
-
-    Parameters
-    ----------
-    T:
-        Grid maturity to check.
-    fitted_times:
-        Sorted tuple of all fitted slice expiry times.
-    fallback_set:
-        Set of fallback T values, scanned linearly for proximity to the
-        grid maturity and the stencil endpoints.
-    dT:
-        Finite-difference step used by ``_dw_dT``.
-
-    Returns
-    -------
-    bool
-        ``True`` if the stencil is contaminated by a fallback slice.
-    """
-    # T itself is a fallback slice
-    for fb in fallback_set:
-        if abs(T - fb) < _FB_TOL:
-            return True
-
-    # No interior interval exists to contaminate: with fewer than two
-    # fitted slices there is no fitted_times[i+1] to bracket a stencil
-    # point, so a fallback slice cannot leak through this path.  (The
-    # fallback-maturity NaN row logic above is unchanged.)
-    if len(fitted_times) < 2:
-        return False
-
-    # Check each FD stencil point: T - dT and T + dT
-    n = len(fitted_times)
-    for T_eval in (T - dT, T + dT):
-        # Binary search: find index i such that
-        # fitted_times[i] <= T_eval <= fitted_times[i+1]
-        idx = bisect.bisect_right(fitted_times, T_eval) - 1
-        idx = max(0, min(idx, n - 2))
-        lo = fitted_times[idx]
-        hi = fitted_times[idx + 1]
-        for fb in fallback_set:
-            if abs(lo - fb) < _FB_TOL or abs(hi - fb) < _FB_TOL:
-                return True
-
-    return False
 
 
 # LocalVolSurface to compute boundary type  
@@ -261,6 +178,25 @@ def _d2w_dk2(fs: FittedSurface, K: float, T: float, F_T: float,
     )
 
 
+def _dupire_denominator(
+    w: float,
+    k: float,
+    dwdk: float,
+    d2wdk2: float,
+) -> float:
+    """Gatheral (2004) eq. 1.10 denominator from total-variance derivatives.
+
+    ``denominator = 1 - (k/w)·w' + ¼·(-¼ - 1/w + k²/w²)·(w')² + ½·w''``
+    where ``w`` is total variance, ``k`` is log-moneyness, and the
+    derivatives are w.r.t. ``k``.  A non-positive denominator means local
+    volatility is undefined at this point — the caller maps that to *nan*.
+    """
+    term2 = -(k / w) * dwdk
+    term3 = 0.25 * (-0.25 - 1.0 / w + (k * k) / (w * w)) * (dwdk * dwdk)
+    term4 = 0.5 * d2wdk2
+    return 1.0 + term2 + term3 + term4
+
+
 # Dupire local volatility (single point)
 def dupire_at(fs: FittedSurface, K: float, T: float,
               dT: float = _FD_T_DEFAULT) -> float:
@@ -316,10 +252,7 @@ def dupire_at(fs: FittedSurface, K: float, T: float,
     d2wdk2 = _d2w_dk2(fs, K, T, F_T, dK)
 
     # Dupire denominator
-    term2 = -(k / w) * dwdk
-    term3 = 0.25 * (-0.25 - 1.0 / w + (k * k) / (w * w)) * (dwdk * dwdk)
-    term4 = 0.5 * d2wdk2
-    denominator = 1.0 + term2 + term3 + term4
+    denominator = _dupire_denominator(w, k, dwdk, d2wdk2)
 
     if denominator <= _DENOM_MIN:
         return nan
@@ -384,11 +317,7 @@ def dupire(fs: FittedSurface,
         )
 
     # Pre-compute fallback contamination lookup
-    fallback_set: set[float] = set()
-    fitted_times: tuple[float, ...] = ()
-    if fallback_slices:
-        fallback_set = set(fallback_slices)
-        fitted_times = tuple(sorted(s.expiry_time for s in fs.fitted_slices))
+    fallback_set, fitted_times = _fallback_precompute(fs, fallback_slices)
 
     # A sub-2-slice surface cannot produce a Dupire time derivative: the
     # interpolation path (total_variance_at / _dw_dT) needs an interior
@@ -422,6 +351,25 @@ def dupire(fs: FittedSurface,
         strikes=tuple(strikes),
         maturities=tuple(maturities),
         grid=tuple(grid),
+    )
+
+
+def _fallback_precompute(
+    fs: FittedSurface,
+    fallback_slices: list[float] | None,
+) -> tuple[set[float], tuple[float, ...]]:
+    """Build the fallback-contamination lookup context for ``dupire``.
+
+    Returns ``(fallback_set, fitted_times)`` where ``fallback_set`` is the
+    fallback T values (empty when ``fallback_slices`` is falsy) and
+    ``fitted_times`` is the sorted tuple of fitted-slice expiries used to
+    bracket the FD stencil.
+    """
+    if not fallback_slices:
+        return set(), ()
+    return (
+        set(fallback_slices),
+        tuple(sorted(s.expiry_time for s in fs.fitted_slices)),
     )
 
 

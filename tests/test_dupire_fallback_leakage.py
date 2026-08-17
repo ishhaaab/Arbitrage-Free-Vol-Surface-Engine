@@ -11,7 +11,7 @@ import pytest
 
 from arbfree_vol.svi.model import SVIParams
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
-from arbfree_vol.pricing.local_vol import dupire, LocalVolSurface
+from arbfree_vol.pricing.local_vol import dupire
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ class TestDupireFallbackLeakage:
         """_stencil_touches_fallback with fewer than two fitted times must
         return False (no interior interval exists to contaminate) instead
         of IndexErroring on ``fitted_times[1]``."""
-        from arbfree_vol.pricing.local_vol import _stencil_touches_fallback
+        from arbfree_vol.pricing._fallback import _stencil_touches_fallback
 
         # T=0.4 is not itself a fallback maturity, so the pre-fix code
         # reached the stencil-bracket loop with n=1 and crashed on

@@ -8,14 +8,9 @@ import math
 import pytest
 from pytest import approx
 
-from arbfree_vol.svi.model import SVIParams, svi_total_variance
+from arbfree_vol.svi.model import SVIParams
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
-from arbfree_vol.surface.interpolate import (
-    total_variance_at,
-    iv_at,
-)
 from arbfree_vol.pricing.local_vol import (
-    LocalVolSurface,
     dupire_at,
     dupire,
     _d2w_dk2,
