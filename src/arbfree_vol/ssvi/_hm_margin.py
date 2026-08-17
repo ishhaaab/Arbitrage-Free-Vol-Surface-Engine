@@ -19,8 +19,27 @@ _EPS_CHI: float = 1e-6
 # successful certified arb-free fit.  Measured m66 corner (mutmut_66 /
 # the dip fixture): theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
 # ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
-# These thresholds are provisional and pending review — see
-# docs/code_review_findings.md §6.7 "Proposed fix direction".
+#
+# Values re-derived 2026-08-17 against the real dip-truth pipeline
+# (docs/review_campaign.md "m66 over-flagging investigation" +
+# fresh measurement of _DIP_TRUTH_ENGINE through
+# fit_ssvi_surface_sequential):
+#
+#   | T    | theta_delta | chi_delta | ratio | hard_rmse | unc_rmse  | routing |
+#   | 0.5  | 1.000e-09   | 1.000e-06 | 1.0   | 5.05e-02  | 6.27e-09  | fallback (flagged) |
+#   | 1.0  | 3.981e-02   | 1.678e-02 | 1.0   | 1.66e-04  | 1.18e-10  | hard, NOT flagged |
+#   | 2.0  | 1.000e-09   | 1.000e-06 | 1.0   | 5.00e-02  | ~1.6e-11  | fallback (flagged) |
+#
+# Conclusion: values are well-separated, no tuning needed.
+#   - ratio is NOT a discriminator (both rows have ratio=1.0); the
+#     theta/chi boundary window is what separates them — the honest fit
+#     sits ~4e4x OUTSIDE the window (3.98e-2 vs margin 1e-8), the corner
+#     sits ON it (1e-9 vs margin 1e-8 = 10x clearance).
+#   - both RMSE ratios (8e6 corner, 1.4e6 honest) exceed _HM_RMSE_RATIO_MAX;
+#     the RMSE check only matters INSIDE the window, where the corner's
+#     absolute hard_rmse (2e-2..5e-2) is ~5 orders above the 1e-9 floor.
+#   - the 10x-eps window margins give 10x clearance above the measured
+#     corner and 4e6x separation below the measured honest fit.
 _HM_BOUNDARY_MARGIN_THETA: float = 1e-8   # 10x eps_theta
 _HM_BOUNDARY_MARGIN_CHI: float = 1e-5     # 10x eps_chi
 _HM_BOUNDARY_MARGIN_RATIO: float = 1e-3

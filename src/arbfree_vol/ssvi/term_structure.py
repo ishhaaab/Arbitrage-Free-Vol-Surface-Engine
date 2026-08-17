@@ -53,18 +53,18 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import minimize, NonlinearConstraint, Bounds
+from scipy.optimize import minimize, Bounds
 
-from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, _GJ_STRICT_EPS
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-
-_logger = logging.getLogger(__name__)
+from arbfree_vol.ssvi._constraints import _hard_constraints, _constrained_minimize
 
 # Re-exports preserving the pre-split import surface: the pure leaf
 # helpers now live in the private sibling modules below, and importing
 # them from ``term_structure`` keeps every existing ``from
 # arbfree_vol.ssvi.term_structure import ...`` call site working
-# unchanged.
+# unchanged.  Declared in ``__all__`` so linters treat them as the
+# module's public namespace rather than unused imports.
 from arbfree_vol.ssvi._butterfly import _GJ_CONDITION1_STRICT_EPS, _butterfly_constraints
 from arbfree_vol.ssvi._hm_margin import (
     _EPS_THETA,
@@ -84,6 +84,32 @@ from arbfree_vol.ssvi._hm_verify import (
     verify_hm_condition_breakdown,
     _hm_breakdown_entry,
 )
+
+# Public namespace: the sequential fit API plus the re-exported leaf
+# helpers above (``from arbfree_vol.ssvi.term_structure import *``
+# yields exactly these names).
+__all__ = [
+    "SequentialFitResult",
+    "fit_ssvi_surface_sequential",
+    "_GJ_CONDITION1_STRICT_EPS",
+    "_butterfly_constraints",
+    "_EPS_THETA",
+    "_EPS_CHI",
+    "_HM_BOUNDARY_MARGIN_THETA",
+    "_HM_BOUNDARY_MARGIN_CHI",
+    "_HM_BOUNDARY_MARGIN_RATIO",
+    "_HM_RMSE_RATIO_MAX",
+    "_HM_RMSE_FLOOR",
+    "_slice_rmse",
+    "_hm_boundary_deltas",
+    "_within_boundary_window",
+    "verify_hm_condition",
+    "verify_ssvi_calendar_free",
+    "verify_hm_condition_breakdown",
+    "_hm_breakdown_entry",
+]
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -219,101 +245,10 @@ def _fit_slice(
         ))
 
     # ── Hard constraints ───────────────────────────────────────────
-    constraints: list = []
-
-    # Butterfly constraints: four >= 0 residuals per slice
-    def _bf_con(x: NDArray[np.float64]) -> NDArray[np.float64]:
-        theta, u, v = x
-        rho = float(np.tanh(u))
-        p = float(np.exp(v))
-        return _butterfly_constraints(theta, rho, p)
-
-    constraints.append(NonlinearConstraint(_bf_con, 0.0, np.inf))
-
-    # Calendar constraints when a predecessor exists
-    if prev is not None:
-        prev_chi = prev.theta * prev.psi
-
-        # (a) theta non-decreasing
-        def _theta_nd(x: NDArray[np.float64]) -> float:
-            return x[0] - prev.theta
-
-        constraints.append(NonlinearConstraint(_theta_nd, eps_theta, np.inf))
-
-        # (b) chi non-decreasing
-        def _chi_nd(x: NDArray[np.float64]) -> float:
-            theta, u, v = x
-            return theta * float(np.exp(v)) - prev_chi
-
-        constraints.append(NonlinearConstraint(_chi_nd, eps_chi, np.inf))
-
-        # (c) | rho_{i+1}*chi_{i+1} - rho_i*chi_i | / (chi_{i+1}-chi_i) <= 1
-        #     written as two linear-fractional inequalities
-        rho_prev_chi_prev = prev.rho * prev_chi
-
-        def _ratio_upper(x: NDArray[np.float64]) -> float:
-            theta, u, v = x
-            rho = float(np.tanh(u))
-            chi = theta * float(np.exp(v))
-            denom = max(chi - prev_chi, eps_chi)
-            return (rho * chi - rho_prev_chi_prev) / denom
-
-        def _ratio_lower(x: NDArray[np.float64]) -> float:
-            theta, u, v = x
-            rho = float(np.tanh(u))
-            chi = theta * float(np.exp(v))
-            denom = max(chi - prev_chi, eps_chi)
-            return -(rho * chi - rho_prev_chi_prev) / denom
-
-        constraints.append(NonlinearConstraint(_ratio_upper, -1.0, 1.0))
-        constraints.append(NonlinearConstraint(_ratio_lower, -1.0, 1.0))
+    constraints = _hard_constraints(prev, eps_theta, eps_chi)
 
     # ── Optimise ───────────────────────────────────────────────────
-    def _run(method: str, x_init, tol: float, maxiter: int):
-        opts: dict = {"maxiter": maxiter}
-        if method == "trust-constr":
-            opts["gtol"] = tol
-        else:  # SLSQP
-            opts["ftol"] = tol
-        return minimize(
-            _objective,
-            x_init,
-            method=method,
-            bounds=bounds,
-            constraints=constraints,
-            options=opts,
-        )
-
-    # Primary attempt: trust-constr
-    result = _run("trust-constr", x0, tol=1e-10, maxiter=500)
-    # trust-constr: result.success is True exactly for statuses 1/2
-    # (gtol/xtol satisfied).  Status 0 (max f-evals) and status 4
-    # ("minimize successful but constraints not satisfied") are
-    # failures, and status 3 (callback termination) needs a callback
-    # this code never passes.  Only result.success is trustable.
-    success = result.success
-
-    # Retry with SLSQP if the primary run did not converge
-    if not success:
-        _logger.debug(
-            "trust-constr did not converge (status=%s, msg=%s); "
-            "retrying with SLSQP",
-            getattr(result, "status", "?"), result.message,
-        )
-        result = _run("SLSQP", result.x, tol=1e-12, maxiter=1000)
-        # SLSQP: result.success is True ONLY for exit mode 0
-        # ("Optimization terminated successfully").  Modes 1 (stalled
-        # line search), 2 (degenerate problem) and 3 (LSQ-subproblem
-        # iteration cap) are NOT convergence — accepting them would
-        # certify a non-converged fit as hard-constrained arb-free and
-        # skip the fallback bookkeeping.  Anything else must raise so
-        # the caller routes the slice into fallback_slices.
-        success = result.success
-
-    if not success:
-        raise RuntimeError(
-            f"eSSVI slice fit failed after retry: {result.message}"
-        )
+    result = _constrained_minimize(_objective, x0, bounds, constraints, minimize)
 
     theta, u, v = result.x
     return SSVIParams(
