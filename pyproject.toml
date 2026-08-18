@@ -21,6 +21,9 @@ dev = [
   "pytest-cov",
 ]
 
+[project.scripts]
+arbfree = "arbfree_vol.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

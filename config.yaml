@@ -1,0 +1,20 @@
+# arbfree-vol-surface default configuration
+# CLI flags override these values; missing keys fall back to built-ins.
+
+# Time conventions (QuantLib parity)
+day_count: "ACT/365F"   # ACT/365F (default, days/365.0) | ACT/360 | 30/360
+calendar: null          # USNYSE to roll expiries to next business day, or null
+
+# Rates
+risk_free: 0.05         # flat fallback when FRED is not used
+div_yield: 0.0
+use_fred_curve: false   # true -> FRED SOFR + DGS Treasury zero curve (offline falls back to flat)
+
+# Output
+output: null
+
+# Cleaning thresholds (mirrors ingestion/cleaning.py defaults)
+cleaning:
+  min_T: 0.019178        # 7/365
+  max_spread_ratio: 0.5
+  max_log_moneyness: 1.5

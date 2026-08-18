@@ -23,11 +23,28 @@ Three smile models: raw SVI (Gatheral 2004), eSSVI (Gatheral–Jacquier 2014), a
 ## Quick start
 
 ```bash
+pip install -e .                                              # installs `arbfree` CLI
+arbfree --help                                                # repair | detect | price | fetch
 pytest tests/ -q                                              # full test suite
 python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
 python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; --symbol TICKER for others)
 python demo/ticker_compare/ticker_compare.py                  # live cross-ticker comparison, 3 plots (SPY/QQQ/IWM by default)
 ```
+
+### CLI
+
+```bash
+# CSV -> arb-free surface (DayCount + FRED curve are opt-in)
+arbfree repair chain.csv --spot 450 --as-of 2026-05-18 --day-count ACT/365F --calendar USNYSE --use-fred-curve -o report.json
+arbfree repair chain.csv --spot 450 --use-ssvi --offline       # FRED offline falls back to flat r=0.05
+arbfree detect chain.csv --spot 450 --no-forward               # quote-level violations without forward pre-pass
+arbfree price --spot 100 --strike 100 --expiry 0.25 --vol 0.2  # price; add --put for puts
+arbfree price --spot 100 --strike 100 --expiry 0.25 --price 4.61  # invert -> IV
+arbfree price --spot 100 --strike 100 --expiry-date 2026-12-18 --as-of 2026-05-18 --day-count ACT/360 --vol 0.2
+arbfree fetch --symbol SPY --max-expiries 5 --use-fred-curve --repair --use-ssvi  # live yfinance
+```
+
+`config.yaml` in the repo root supplies defaults (`day_count`, `calendar`, `risk_free`, `div_yield`, `use_fred_curve`); every CLI flag overrides the file. Requires `pyyaml` only when a config file is present.
 
 ## Live showcase (SPY options)
 
@@ -65,13 +82,16 @@ python demo/ticker_compare/ticker_compare.py                  # live cross-ticke
 
 - `models/` typed boundary objects: `OptionContract`, `Quote`, `ExpirySlice`, `VolSurface`.
 - `pricing/` Black-Scholes pricing, analytic Greeks, the implied-vol solver (Newton with a Brent fallback), and Dupire local vol.
-- `ingestion/` Yahoo Finance fetcher (real risk-free rates), a CSV loader, and the eight-rule cleaning layer.
+- `time/` `DayCount` (`ACT/365F` default = `days/365.0`, `ACT/360`, `30/360`) and `Calendar` (`USNYSE` with NYSE holidays, `adjust(following|preceding|modified_following)`).
+- `rates/` `YieldTermStructure` (pillars `T,r` linear on `r`, flat extrap., `discount`/`forward_rate`, `from_callable` for QuantLib) and `fred.py` FRED `SOFR`+`DGS` Treasury curve with disk cache.
+- `ingestion/` Yahoo Finance fetcher (real risk-free rates / optional FRED `r(T)`), a CSV loader, and the eight-rule cleaning layer. All `fetch_chain`/`load_chain_csv` accept `day_count`, `calendar`, `curve`/`use_fred_curve`.
 - `arbitrage/` the static-arbitrage detectors, at the quote level and on the fitted SVI curves.
 - `svi/`, `ssvi/`, `sabr/` the three smile models and their calibrators.
 - `repair/` the orchestrator that cleans, detects, fits, and re-validates.
 - `surface/` the query layer: `iv_at` and portfolio Greeks.
 - `dynamics.py` SVD-based PCA over a surface time series (no sklearn).
 - `viz/` the matplotlib plots.
+- `cli.py` + `config.yaml` — `arbfree` CLI (`repair`/`detect`/`price`/`fetch`) with YAML defaults; flags override file.
 
 ## Design notes
 
@@ -85,13 +105,13 @@ A few things baked into the code that are worth knowing:
 
 ## Status
 
-The core engine is built and tested: ingestion, cleaning, the five arbitrage checks, three smile models, repair, the query layer, Dupire, and PCA. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery, and it grows with the codebase.
+The core engine is built and tested: ingestion, cleaning, the five arbitrage checks, three smile models, repair, the query layer, Dupire, PCA, `DayCount`/`Calendar`, and `YieldTermStructure` with FRED `SOFR`+`DGS` Treasury curve. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery, and it grows with the codebase.
 
-It's not a production service. No CLI, no REST API, no database, no dashboard. Plots are static PNGs. The raw-SVI path is not arbitrage-free by construction; eSSVI is, but only in the sense that slices fitting within the H&M hard constraints and passing the grid-based calendar check get certified, while fallback slices get surfaced through `RepairReport.fallback_slices` / `repair_infeasible`. SABR is fit as a comparison model, not an arb-free construction, so its residuals are reported rather than eliminated. Demonstrated on a handful of US equities and ETFs (SPY default; QQQ, AAPL, MSFT, NVDA via `--symbol`). See `demo/ticker_compare/`. European options only.
+It's not a production service. No REST API, no database, no dashboard — but it does have a real CLI (`arbfree repair|detect|price|fetch`, see above) with `config.yaml` defaults, term-structure `r(T)` per slice, and selectable day-count/calendar. Plots are static PNGs. The raw-SVI path is not arbitrage-free by construction; eSSVI is, but only in the sense that slices fitting within the H&M hard constraints and passing the grid-based calendar check get certified, while fallback slices get surfaced through `RepairReport.fallback_slices` / `repair_infeasible`. SABR is fit as a comparison model, not an arb-free construction, so its residuals are reported rather than eliminated. Demonstrated on a handful of US equities and ETFs (SPY default; QQQ, AAPL, MSFT, NVDA via `--symbol`). See `demo/ticker_compare/`. European options only.
 
 ## Roadmap
 
-`docs/roadmap.md` has the details. PCA dynamics, SABR, and Dupire local vol are done. A CLI, FastAPI + DuckDB storage, and a Streamlit dashboard are next.
+`docs/roadmap.md` has the details. PCA dynamics, SABR, Dupire local vol are done. The CLI (incl. DayCount/Calendar + FRED term-structure wire-through) is done. FastAPI + DuckDB storage and a Streamlit dashboard are next.
 
 ## Tech stack
 

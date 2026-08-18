@@ -6,9 +6,9 @@ This document tracks planned improvements for the project. Each milestone repres
 
 ## Milestone 1 — CLI Entry Point + Configuration
 
-**Status:** Not started
+**Status:** Completed — `arbfree repair|detect|price|fetch` wired to the real pipeline with DayCount/Calendar + YieldTermStructure/FRED wire-through.
 
-Make the system feel like a real quantitative finance tool.
+CLI now covers the full M1 spec plus the DayCount/Calendar (ACT/365F, ACT/360, 30/360) and term-structure (FRED SOFR + DGS) additions from `c940c97`.
 
 ### Goals
 
@@ -21,12 +21,17 @@ Make the system feel like a real quantitative finance tool.
   - cleaning parameters
 - CLI reads the configuration automatically, with command-line flags overriding defaults.
 
+### Also shipped in this milestone
+
+- `--day-count ACT/365F|ACT/360|30/360` on `repair`/`detect`/`price`/`fetch` (via `time.DayCount`; default `ACT/365F` = `days/365.0`, fixtures byte-identical).
+- `--calendar USNYSE` on `repair`/`detect`/`fetch` (via `time.Calendar`, rolls expiries `following` to next business day).
+- `--use-fred-curve` / `--fred-curve` + `--offline` on `repair`/`fetch` and `price --expiry-date` day-count support; FRED SOFR + DGS Treasury pillars from `fred.stlouisfed.org/graph/fredgraph.csv` with `.cache/rates/<as_of>.json` 24h TTL, offline degrades to `flat r=0.05` (same fallback as old `^IRX` path). Per-slice `r(T)` threaded via `ExpirySlice.risk_free` / `get_r`.
+
 ### Files
 
-- `examples/arbfree`
 - `arbfree_vol/cli.py`
-- `config.yaml`
 - `arbfree_vol/config.py`
+- `config.yaml`
 
 ---
 
@@ -285,7 +290,7 @@ Extend the single-cohort backtest to a true rolling daily-refit design.
 
 | Milestone | Status |
 |-----------|--------|
-| CLI + Configuration | Not started |
+| CLI + Configuration | Completed (DayCount + FRED wire-through; `arbfree repair|detect|price|fetch`) |
 | Notebook | Not started |
 | Surface Dynamics (PCA) | Completed |
 | Interactive Dashboard | Not started |
