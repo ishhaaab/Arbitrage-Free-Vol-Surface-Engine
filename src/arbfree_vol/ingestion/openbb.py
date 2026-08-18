@@ -121,6 +121,66 @@ def _fetch_spot(obb, symbol: str, provider: str, raw_df) -> float | None:
     return None
 
 
+def _fetch_raw_chain(obb, symbol: str, provider: str):
+    """Fetch and validate the raw OpenBB option-chain DataFrame."""
+    try:
+        result = obb.derivatives.options.chains(symbol, provider=provider)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to fetch option chains for {symbol!r} via OpenBB "
+            f"(provider={provider!r}): {exc}"
+        ) from exc
+
+    raw_df = result.to_df()
+    if raw_df.empty:
+        raise ValueError(f"No option chain data returned for {symbol!r}")
+    return raw_df
+
+
+def _resolve_spot_and_rates(obb, symbol: str, provider: str, raw_df):
+    """Resolve spot, risk-free rate, and dividend yield for a chain."""
+    spot = _fetch_spot(obb, symbol, provider, raw_df)
+    if spot is None or spot <= 0:
+        raise ValueError(f"Could not determine spot price for {symbol!r}")
+    is_index = symbol.startswith("^")
+    r, q = fetch_rates(symbol, is_index)
+    return float(spot), r, q, is_index
+
+
+def _build_slices_from_df(
+    df,
+    spot: float,
+    max_expiries: int,
+    min_T_years: float,
+    quality_config: DataQualityConfig | None,
+    disable_quality_filter: bool,
+) -> tuple[list[ExpirySlice], list[RejectionRecord], list[DropRecord]]:
+    """Build cleaned expiry slices and audit records from normalized data."""
+    if "expiration" not in df.columns:
+        raise ValueError("OpenBB chain DataFrame missing 'expiration' column")
+    df = df.copy()
+    df["_expiry_str"] = df["expiration"].apply(_expiry_to_date_str)
+
+    all_rejected: list[RejectionRecord] = []
+    all_quality_drops: list[DropRecord] = []
+    slices: list[ExpirySlice] = []
+    ref_date = date.today()
+    for exp_str in sorted(df["_expiry_str"].unique()):
+        if len(slices) >= max_expiries:
+            break
+        T = (date.fromisoformat(exp_str) - ref_date).days / 365.0
+        if T <= min_T_years:
+            continue
+        sl, rejected, drops = _build_expiry_slice(
+            df, exp_str, T, spot, quality_config, disable_quality_filter
+        )
+        all_quality_drops.extend(drops)
+        all_rejected.extend(rejected)
+        if sl is not None:
+            slices.append(sl)
+    return slices, all_rejected, all_quality_drops
+
+
 def fetch_chain(
     symbol: str,
     max_expiries: int = 8,
@@ -195,64 +255,17 @@ def fetch_chain(
 
     # ── Fetch the full chain ─────────────────────────────────────────
     _logger.info("Fetching %s options via OpenBB (provider=%s)", symbol, provider)
-    try:
-        result = obb.derivatives.options.chains(symbol, provider=provider)
-    except Exception as exc:
-        raise ValueError(
-            f"Failed to fetch option chains for {symbol!r} via OpenBB "
-            f"(provider={provider!r}): {exc}"
-        ) from exc
-
-    raw_df = result.to_df()
-    if raw_df.empty:
-        raise ValueError(f"No option chain data returned for {symbol!r}")
+    raw_df = _fetch_raw_chain(obb, symbol, provider)
 
     # ── Spot price ───────────────────────────────────────────────────
-    spot = _fetch_spot(obb, symbol, provider, raw_df)
-    if spot is None or spot <= 0:
-        raise ValueError(f"Could not determine spot price for {symbol!r}")
-    spot = float(spot)
-
-    # ── Risk-free rate and dividend yield ────────────────────────────
-    _is_index = symbol.startswith("^")
-    r, q = fetch_rates(symbol, _is_index)
+    spot, r, q, _is_index = _resolve_spot_and_rates(obb, symbol, provider, raw_df)
 
     # ── Normalise columns ────────────────────────────────────────────
     df = _normalise_columns(raw_df)
-
-    # ── Group by expiry and build slices ─────────────────────────────
-    all_rejected: list[RejectionRecord] = []
-    all_quality_drops: list[DropRecord] = []
-    slices: list[ExpirySlice] = []
-    ref_date = date.today()
-
-    # OpenBB 'expiration' column may be date/datetime/Timestamp or a
-    # string (sometimes carrying a time component).  Normalize to a
-    # date-only string so the sort and ``date.fromisoformat`` parse path
-    # cannot be broken by a time component.
-    if "expiration" in df.columns:
-        df["_expiry_str"] = df["expiration"].apply(_expiry_to_date_str)
-    else:
-        raise ValueError("OpenBB chain DataFrame missing 'expiration' column")
-
-    expiries_sorted = sorted(df["_expiry_str"].unique())
-
-    for exp_str in expiries_sorted:
-        if len(slices) >= max_expiries:
-            break
-
-        T = (date.fromisoformat(exp_str) - ref_date).days / 365.0
-        if T <= min_T_years:
-            continue
-
-        sl, rejected, drops = _build_expiry_slice(
-            df, exp_str, T, spot,
-            quality_config, disable_quality_filter,
-        )
-        all_quality_drops.extend(drops)
-        all_rejected.extend(rejected)
-        if sl is not None:
-            slices.append(sl)
+    slices, all_rejected, all_quality_drops = _build_slices_from_df(
+        df, spot, max_expiries, min_T_years,
+        quality_config, disable_quality_filter,
+    )
 
     # For index symbols, estimate q per-expiry via put-call parity.
     # If all slices fail estimation, fall back to representative ETF yield.

@@ -40,7 +40,9 @@ def plot_surface(
         ws = [svi_total_variance(float(k), p.a, p.b, p.rho, p.m, p.sigma)
               for k in k_grid]
         with np.errstate(divide="ignore", invalid="ignore"):
-            vols = [sqrt(w / fs.expiry_time) if w > 0 else 0.0 for w in ws]
+            vols = np.ma.masked_invalid(
+                [sqrt(w / fs.expiry_time) if w > 0 else float("nan") for w in ws]
+            )
 
         T_arr = [fs.expiry_time] * n_k
         t_norm = (fs.expiry_time - T_min) / (T_max - T_min) if T_max > T_min else 0.0
@@ -49,7 +51,9 @@ def plot_surface(
         if fs.data_points:
             ks_data = [float(k) for k, w in fs.data_points]
             ws_data = [float(w) for k, w in fs.data_points]
-            vols_data = [sqrt(w / fs.expiry_time) if w > 0 else 0.0 for w in ws_data]
+            vols_data = np.ma.masked_invalid(
+                [sqrt(w / fs.expiry_time) if w > 0 else float("nan") for w in ws_data]
+            )
             ax.scatter(ks_data, [fs.expiry_time] * len(ks_data), vols_data,
                        color="crimson", edgecolors="black", linewidths=0.3,
                        s=20, alpha=0.9, zorder=5)
@@ -154,16 +158,18 @@ def _build_iv_grid(
     """
     from arbfree_vol.plotting.masking import make_fallback_mask
 
-    n_maturities = len(maturities)
     n_strikes = len(strikes)
 
-    iv_grid = np.full((n_maturities, n_strikes), np.nan)
-    for i_T, T in enumerate(maturities):
-        for i_K, K in enumerate(strikes):
-            try:
-                iv_grid[i_T, i_K] = iv_at(fs, K, T)
-            except ValueError:
-                pass  # leave as nan
+    def _eval_iv_cell(T: float, K: float) -> float:
+        try:
+            return iv_at(fs, K, T)
+        except ValueError:
+            return float("nan")
+
+    iv_grid = np.array(
+        [[_eval_iv_cell(T, K) for K in strikes] for T in maturities],
+        dtype=float,
+    ).reshape(len(maturities), n_strikes)
 
     # Apply fallback mask: mark entire maturity rows as bad
     if fallback_slices:
@@ -180,6 +186,7 @@ def plot_iv_heatmap(
     n_maturities: int = 50,
     symbol: str = "SPY",
     fallback_slices: list[float] | None = None,
+    strike_range: tuple[float, float] | None = None,
 ) -> Figure:
     """2-D heatmap of implied volatility over a dense (strike, maturity) grid.
 
@@ -201,13 +208,14 @@ def plot_iv_heatmap(
         Optional list of T values that used the eSSVI fallback path.
         If provided, those maturity columns are grayed out in the plot
         and an annotation is added.
+    strike_range:
+        Optional ``(low, high)`` pair of spot-price multipliers defining
+        the strike grid.  Defaults to ``(0.8, 1.2)``.
 
     Returns
     -------
     Figure
     """
-    from arbfree_vol.plotting.masking import make_fallback_mask
-
     if not fs.fitted_slices:
         raise ValueError("FittedSurface has no slices; cannot render heatmap")
 
@@ -215,7 +223,10 @@ def plot_iv_heatmap(
     T_max = fs.fitted_slices[-1].expiry_time
     maturities = np.linspace(T_min, T_max, n_maturities)
 
-    strikes = np.linspace(fs.spot * 0.8, fs.spot * 1.2, n_strikes)
+    low, high = strike_range if strike_range is not None else (0.8, 1.2)
+    if low >= high:
+        raise ValueError("strike_range lower bound must be less than upper bound")
+    strikes = np.linspace(fs.spot * low, fs.spot * high, n_strikes)
 
     iv_grid = _build_iv_grid(fs, maturities, strikes, fallback_slices)
 

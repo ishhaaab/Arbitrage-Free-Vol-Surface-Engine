@@ -33,7 +33,7 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
                 symbol="_",  # placeholder symbol; not used in any calc
                 option_type=q.option_type,
                 strike=q.strike,
-                expiry_date=date(2004, 1, 1),  # placeholder date; not used in any calc
+                expiry_date=date.min,  # sentinel; date-based calculations must fail loudly
             ),
             spot=surface.spot,
             expiry_time=s.expiry_time,

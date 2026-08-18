@@ -29,7 +29,9 @@ def _parse_expiry(value: str, as_of: date | None) -> float:
     exp=  datetime.strptime(value, "%Y-%m-%d").date()
     ref=  as_of or date.today()
     days=  (exp - ref).days
-    return max(0.0, days / 365.0)
+    if days < 0:
+        raise ValueError(f"Option is expired: expiry {exp.isoformat()} precedes {ref.isoformat()}")
+    return days / 365.0
 
 
 def _parse_option_type(value: str) -> OptionType:

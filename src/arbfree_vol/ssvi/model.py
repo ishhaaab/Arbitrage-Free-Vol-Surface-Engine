@@ -145,8 +145,8 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float,
     return min(first_residual, second_residual)
 
 
-def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:
-    """Quick check that eSSVI power-law parameters are in the valid range.
+def essvi_params_in_bounds(theta: float, eta: float, gamma: float) -> bool:
+    """Check structural bounds on eSSVI power-law parameters.
 
     Returns ``True`` when ``0 <= gamma <= 1`` and ``eta > 0``.
     This checks the necessary structural bounds on the eSSVI wing
@@ -158,6 +158,11 @@ def essvi_arb_safe(theta: float, eta: float, gamma: float) -> bool:
     complete no-arbitrage check.
     """
     return 0.0 <= gamma <= 1.0 and eta > 0.0
+
+
+# Backwards-compatible name.  This check only validates parameter bounds; it
+# does not establish that a surface is arbitrage-free.
+essvi_arb_safe = essvi_params_in_bounds
 
 
 def to_raw_svi_params(theta: float, rho: float, psi: float) -> tuple[float, float, float, float, float]:
