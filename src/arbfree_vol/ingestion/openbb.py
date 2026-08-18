@@ -25,6 +25,8 @@ from arbfree_vol.ingestion._index_rates import (
     fetch_rates,
 )
 from arbfree_vol.models.surface import ExpirySlice, VolSurface
+from arbfree_vol.rates import YieldTermStructure, build_fred_curve
+from arbfree_vol.time import DayCount, Calendar
 
 _logger = logging.getLogger(__name__)
 
@@ -154,6 +156,8 @@ def _build_slices_from_df(
     min_T_years: float,
     quality_config: DataQualityConfig | None,
     disable_quality_filter: bool,
+    day_count: DayCount | str = "ACT/365F",
+    calendar: Calendar | None = None,
 ) -> tuple[list[ExpirySlice], list[RejectionRecord], list[DropRecord]]:
     """Build cleaned expiry slices and audit records from normalized data."""
     if "expiration" not in df.columns:
@@ -161,6 +165,7 @@ def _build_slices_from_df(
     df = df.copy()
     df["_expiry_str"] = df["expiration"].apply(_expiry_to_date_str)
 
+    _dc = DayCount(day_count) if isinstance(day_count, str) else day_count
     all_rejected: list[RejectionRecord] = []
     all_quality_drops: list[DropRecord] = []
     slices: list[ExpirySlice] = []
@@ -168,7 +173,10 @@ def _build_slices_from_df(
     for exp_str in sorted(df["_expiry_str"].unique()):
         if len(slices) >= max_expiries:
             break
-        T = (date.fromisoformat(exp_str) - ref_date).days / 365.0
+        exp_date = date.fromisoformat(exp_str)
+        if calendar is not None and not calendar.is_business_day(exp_date):
+            exp_date = calendar.adjust(exp_date, "following")
+        T = _dc.year_fraction(ref_date, exp_date)
         if T <= min_T_years:
             continue
         sl, rejected, drops = _build_expiry_slice(
@@ -188,6 +196,10 @@ def fetch_chain(
     quality_config: DataQualityConfig | None = None,
     disable_quality_filter: bool = False,
     provider: str = "yfinance",
+    curve: YieldTermStructure | None = None,
+    day_count: DayCount | str = "ACT/365F",
+    calendar: Calendar | str | None = None,
+    use_fred_curve: bool = False,
 ) -> tuple[VolSurface, list[RejectionRecord], list[DropRecord]]:
     """Fetch an option chain from OpenBB and return a cleaned VolSurface.
 
@@ -257,15 +269,33 @@ def fetch_chain(
     _logger.info("Fetching %s options via OpenBB (provider=%s)", symbol, provider)
     raw_df = _fetch_raw_chain(obb, symbol, provider)
 
-    # ── Spot price ───────────────────────────────────────────────────
+    # Rates: FRED curve / explicit curve -> per-slice r(T); otherwise ^IRX
+    _fred_curve: YieldTermStructure | None = None
+    if curve is not None:
+        _fred_curve = curve
+    elif use_fred_curve:
+        _fred_curve = build_fred_curve()
+
+    # ── Spot price (and r/q baseline) ──────────────────────────────────
     spot, r, q, _is_index = _resolve_spot_and_rates(obb, symbol, provider, raw_df)
+    if _fred_curve is not None:
+        r = _fred_curve.zero_rate(1.0)
 
     # ── Normalise columns ────────────────────────────────────────────
+    _dc = DayCount(day_count) if isinstance(day_count, str) else day_count
+    _cal: Calendar | None = None
+    if calendar is not None:
+        _cal = Calendar(calendar) if isinstance(calendar, str) else calendar  # type: ignore[arg-type]
     df = _normalise_columns(raw_df)
     slices, all_rejected, all_quality_drops = _build_slices_from_df(
         df, spot, max_expiries, min_T_years,
         quality_config, disable_quality_filter,
+        day_count=_dc, calendar=_cal,
     )
+
+    if _fred_curve is not None:
+        for sl in slices:
+            sl.risk_free = _fred_curve.zero_rate(sl.expiry_time)
 
     # For index symbols, estimate q per-expiry via put-call parity.
     # If all slices fail estimation, fall back to representative ETF yield.

@@ -28,6 +28,8 @@ from arbfree_vol.ingestion._index_rates import (
 )
 from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
+from arbfree_vol.rates import YieldTermStructure, build_fred_curve
+from arbfree_vol.time import DayCount, Calendar
 
 _logger = logging.getLogger(__name__)
 
@@ -38,6 +40,10 @@ def fetch_chain(
     min_T_years: float = 7.0 / 365.0,
     quality_config: DataQualityConfig | None = None,
     disable_quality_filter: bool = False,
+    curve: YieldTermStructure | None = None,
+    day_count: DayCount | str = "ACT/365F",
+    calendar: Calendar | str | None = None,
+    use_fred_curve: bool = False,
 ) -> tuple[VolSurface, list[RejectionRecord], list[DropRecord]]:
     """Fetch an option chain from yfinance and return a cleaned VolSurface.
 
@@ -86,10 +92,30 @@ def fetch_chain(
     if not expiries:
         raise ValueError(f"No expiries available for symbol {symbol!r}")
 
-    # source rates (shared orchestration: ^IRX r, per-symbol q, and the
-    # documented fallbacks; reuses the already-created ticker for q)
+    # day-count / calendar
+    _dc = DayCount(day_count) if isinstance(day_count, str) else day_count
+    _cal: Calendar | None = None
+    if calendar is not None:
+        _cal = Calendar(calendar) if isinstance(calendar, str) else calendar  # type: ignore[arg-type]
+
+    # source rates:
+    #  - use_fred_curve=True -> FRED Treasury+SOFR curve (pillars -> r(T))
+    #  - curve=YieldTermStructure supplied directly -> per-slice r(T)
+    #  - otherwise shared ^IRX orchestration (single r, per-slice r via index q)
     _is_index = symbol.startswith("^")
-    r, q = fetch_rates(symbol, _is_index, ticker)
+    _fred_curve: YieldTermStructure | None = None
+    if curve is not None:
+        _fred_curve = curve
+    elif use_fred_curve:
+        _fred_curve = build_fred_curve()
+
+    if _fred_curve is not None:
+        # surface-level r is the curve's rate at ~1y for display; per-slice
+        # r(T) is threaded below. q still comes from the shared orchestration.
+        _, q = fetch_rates(symbol, _is_index, ticker)
+        r = _fred_curve.zero_rate(1.0)
+    else:
+        r, q = fetch_rates(symbol, _is_index, ticker)
 
     # get the underlying spot price
     spot = None
@@ -113,7 +139,10 @@ def fetch_chain(
         if len(slices) >= max_expiries:
             break
 
-        T = (date.fromisoformat(exp_str) - ref_date).days / 365.0
+        exp_date = date.fromisoformat(exp_str)
+        if _cal is not None and not _cal.is_business_day(exp_date):
+            exp_date = _cal.adjust(exp_date, "following")
+        T = _dc.year_fraction(ref_date, exp_date)
         if T <= min_T_years:
             continue
 
@@ -128,9 +157,15 @@ def fetch_chain(
         if sl is not None:
             slices.append(sl)
 
+    # per-slice r(T) from curve when available
+    if _fred_curve is not None:
+        for sl in slices:
+            sl.risk_free = _fred_curve.zero_rate(sl.expiry_time)
+
     # For index symbols, estimate q per-expiry via put-call parity.
     # If all slices fail estimation, fall back to representative ETF yield.
     if _is_index and slices:
+        # use the curve's per-slice r when present for the parity solve
         q = estimate_index_dividend_yields(slices, spot, r, symbol)
 
     return (

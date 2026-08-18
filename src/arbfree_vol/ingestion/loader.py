@@ -17,21 +17,26 @@ import csv
 from datetime import datetime, date
 from pathlib import Path
 
+from arbfree_vol.rates import YieldTermStructure
+from arbfree_vol.time import DayCount
+
 
 
 _REQUIRED_FIELDS=  ("strike", "expiry", "option_type", "price")
 
 
-def _parse_expiry(value: str, as_of: date | None) -> float:
-    """Parse an expiry string (YYYY-MM-DD) and return years to expiry.
-    If as_of is None, uses today.
-    """
-    exp=  datetime.strptime(value, "%Y-%m-%d").date()
-    ref=  as_of or date.today()
-    days=  (exp - ref).days
-    if days < 0:
+def _parse_expiry(
+    value: str,
+    as_of: date | None,
+    day_count: DayCount | str = "ACT/365F",
+) -> float:
+    """Parse an expiry string (YYYY-MM-DD) and return years to expiry."""
+    exp = datetime.strptime(value, "%Y-%m-%d").date()
+    ref = as_of or date.today()
+    if exp < ref:
         raise ValueError(f"Option is expired: expiry {exp.isoformat()} precedes {ref.isoformat()}")
-    return days / 365.0
+    dc = DayCount(day_count) if isinstance(day_count, str) else day_count
+    return dc.year_fraction(ref, exp)
 
 
 def _parse_option_type(value: str) -> OptionType:
@@ -51,16 +56,26 @@ def _safe_float(value: str | None) -> float | None:
     return float(value)
 
 
-def load_chain_csv(path: str | Path,
-                   spot: float,
-                   risk_free: float=  0.05,
-                   div_yield: float=  0.0,
-                   as_of: date | None=  None,
-                   clean: bool=  True) -> tuple[VolSurface, list[RejectionRecord]]:
+def load_chain_csv(
+    path: str | Path,
+    spot: float,
+    risk_free: float | YieldTermStructure = 0.05,
+    div_yield: float = 0.0,
+    as_of: date | None = None,
+    clean: bool = True,
+    day_count: DayCount | str = "ACT/365F",
+    calendar: object | None = None,
+) -> tuple[VolSurface, list[RejectionRecord]]:
     """Load a CSV option chain and return a VolSurface + rejection log.
 
-    Returns a (VolSurface, list[RejectionRecord]) tuple.  When clean=False,
-    every quote is kept and the rejection list is empty.
+    ``risk_free`` may be a flat ``float`` (back-compat) or a
+    :class:`YieldTermStructure` — per-slice ``r(T)`` is then threaded
+    via ``ExpirySlice.risk_free``.
+
+    ``day_count`` selects the year-fraction for ``T`` (default
+    ``ACT/365F`` = ``days/365.0``).  ``calendar`` is accepted for API
+    parity with the live fetchers; CSV expiries are exchange dates, not
+    rolled.
     """
     by_T: dict[float, list[Quote]]=  {}
     all_rejected: list[RejectionRecord]=  []
@@ -73,7 +88,7 @@ def load_chain_csv(path: str | Path,
                 raise ValueError(f"Missing required fields: {missing}")
 
             strike=  float(row["strike"])
-            T=  _parse_expiry(row["expiry"], as_of)
+            T=  _parse_expiry(row["expiry"], as_of, day_count)
             otype=  _parse_option_type(row["option_type"])
             price=  float(row["price"])
             bid=  _safe_float(row.get("bid"))
@@ -96,7 +111,14 @@ def load_chain_csv(path: str | Path,
     if not slices:
         raise ValueError("No slices survived cleaning")
 
+    # Thread per-slice r(T) if a curve was supplied
+    is_curve = isinstance(risk_free, YieldTermStructure)
+    surface_r = 0.05 if is_curve else float(risk_free)
+    for sl in slices:
+        if is_curve:
+            sl.risk_free = risk_free.zero_rate(sl.expiry_time)  # type: ignore[union-attr]
+
     return (
-        VolSurface(spot=spot, risk_free=risk_free, div_yield=div_yield, slices=slices),
+        VolSurface(spot=spot, risk_free=surface_r, div_yield=div_yield, slices=slices),
         all_rejected,
     )
