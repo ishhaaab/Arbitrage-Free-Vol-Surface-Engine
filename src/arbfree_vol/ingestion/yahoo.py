@@ -34,6 +34,112 @@ from arbfree_vol.time import DayCount, Calendar
 _logger = logging.getLogger(__name__)
 
 
+def _resolve_rates(
+    symbol: str,
+    ticker: yf.Ticker,
+    *,
+    curve: YieldTermStructure | None = None,
+    use_fred_curve: bool = False,
+) -> tuple[float, float, YieldTermStructure | None]:
+    """Rate seam: supplied curve > FRED curve > shared ^IRX orchestration.
+
+    Returns ``(r, q, fred_curve)``.  ``fred_curve`` is ``None`` on the
+    ^IRX path; when a curve is present, surface-level ``r`` is its rate
+    at ~1y for display and per-slice ``r(T)`` is threaded later by
+    ``_apply_curve_rates``.  ``q`` comes from the shared orchestration
+    either way.
+    """
+    is_index = symbol.startswith("^")
+    fred_curve: YieldTermStructure | None = None
+    if curve is not None:
+        fred_curve = curve
+    elif use_fred_curve:
+        fred_curve = build_fred_curve()
+
+    if fred_curve is not None:
+        _, q = fetch_rates(symbol, is_index, ticker)
+        r = fred_curve.zero_rate(1.0)
+    else:
+        r, q = fetch_rates(symbol, is_index, ticker)
+    return r, q, fred_curve
+
+
+def _fetch_spot(ticker: yf.Ticker, symbol: str) -> float:
+    """Spot seam: ``info.regularMarketPrice`` or ``previousClose``.
+
+    Raises ``ValueError`` with a clear message when the ticker yields no
+    usable price (so the failure mode is a named, visible one).
+    """
+    spot = None
+    try:
+        info = ticker.info or {}
+        spot = info.get("regularMarketPrice") or info.get("previousClose")
+    except Exception:
+        _logger.warning(f"Failed to fetch spot price for {symbol!r}", exc_info=True)
+    if spot is None or not isinstance(spot, (int, float)):
+        raise ValueError(f"Could not fetch spot price for {symbol!r}")
+    return float(spot)
+
+
+def _build_slices(
+    ticker: yf.Ticker,
+    expiries: list[str],
+    *,
+    max_expiries: int,
+    min_T_years: float,
+    spot: float,
+    ref_date: date,
+    dc: DayCount,
+    cal: Calendar | None,
+    quality_config: DataQualityConfig | None,
+    disable_quality_filter: bool,
+) -> tuple[list[ExpirySlice], list[RejectionRecord], list[DropRecord]]:
+    """Expiry seam: per-expiry day-count/calendar ``T``, then ``build_slice``.
+
+    Walks the nearest expiries up to ``max_expiries``, skipping any
+    whose maturity is at or below ``min_T_years``, and returns the
+    slices plus the rejection / quality-drop audit trails.
+    """
+    all_rejected: list[RejectionRecord] = []
+    all_quality_drops: list[DropRecord] = []
+    slices: list[ExpirySlice] = []
+
+    for exp_str in expiries:
+        if len(slices) >= max_expiries:
+            break
+
+        exp_date = date.fromisoformat(exp_str)
+        if cal is not None and not cal.is_business_day(exp_date):
+            exp_date = cal.adjust(exp_date, "following")
+        T = dc.year_fraction(ref_date, exp_date)
+        if T <= min_T_years:
+            continue
+
+        chain = ticker.option_chain(exp_str)
+
+        sl, rejected, drops = build_slice(
+            chain.calls, chain.puts, exp_str, T, spot,
+            quality_config, disable_quality_filter,
+        )
+        all_quality_drops.extend(drops)
+        all_rejected.extend(rejected)
+        if sl is not None:
+            slices.append(sl)
+
+    return slices, all_rejected, all_quality_drops
+
+
+def _apply_curve_rates(
+    slices: list[ExpirySlice],
+    curve: YieldTermStructure | None,
+) -> None:
+    """Thread per-slice ``risk_free = r(T)`` from the curve; no-op when None."""
+    if curve is None:
+        return
+    for sl in slices:
+        sl.risk_free = curve.zero_rate(sl.expiry_time)
+
+
 def fetch_chain(
     symbol: str,
     max_expiries: int = 5,
@@ -98,72 +204,35 @@ def fetch_chain(
     if calendar is not None:
         _cal = Calendar(calendar) if isinstance(calendar, str) else calendar  # type: ignore[arg-type]
 
-    # source rates:
-    #  - use_fred_curve=True -> FRED Treasury+SOFR curve (pillars -> r(T))
-    #  - curve=YieldTermStructure supplied directly -> per-slice r(T)
-    #  - otherwise shared ^IRX orchestration (single r, per-slice r via index q)
-    _is_index = symbol.startswith("^")
-    _fred_curve: YieldTermStructure | None = None
-    if curve is not None:
-        _fred_curve = curve
-    elif use_fred_curve:
-        _fred_curve = build_fred_curve()
-
-    if _fred_curve is not None:
-        # surface-level r is the curve's rate at ~1y for display; per-slice
-        # r(T) is threaded below. q still comes from the shared orchestration.
-        _, q = fetch_rates(symbol, _is_index, ticker)
-        r = _fred_curve.zero_rate(1.0)
-    else:
-        r, q = fetch_rates(symbol, _is_index, ticker)
+    # source rates: supplied curve > FRED curve > ^IRX orchestration
+    r, q, _fred_curve = _resolve_rates(
+        symbol, ticker, curve=curve, use_fred_curve=use_fred_curve
+    )
 
     # get the underlying spot price
-    spot = None
-    try:
-        info = ticker.info or {}
-        spot = info.get("regularMarketPrice") or info.get("previousClose")
-    except Exception:
-        _logger.warning(f"Failed to fetch spot price for {symbol!r}", exc_info=True)
-    if spot is None or not isinstance(spot, (int, float)):
-        raise ValueError(f"Could not fetch spot price for {symbol!r}")
-
-    spot = float(spot)
+    spot = _fetch_spot(ticker, symbol)
 
     # build slices from available expiries
-    all_rejected: list[RejectionRecord] = []
-    all_quality_drops: list[DropRecord] = []
-    slices: list[ExpirySlice] = []
     ref_date = date.today()
-
-    for exp_str in expiries:
-        if len(slices) >= max_expiries:
-            break
-
-        exp_date = date.fromisoformat(exp_str)
-        if _cal is not None and not _cal.is_business_day(exp_date):
-            exp_date = _cal.adjust(exp_date, "following")
-        T = _dc.year_fraction(ref_date, exp_date)
-        if T <= min_T_years:
-            continue
-
-        chain = ticker.option_chain(exp_str)
-
-        sl, rejected, drops = build_slice(
-            chain.calls, chain.puts, exp_str, T, spot,
-            quality_config, disable_quality_filter,
-        )
-        all_quality_drops.extend(drops)
-        all_rejected.extend(rejected)
-        if sl is not None:
-            slices.append(sl)
+    slices, all_rejected, all_quality_drops = _build_slices(
+        ticker,
+        expiries,
+        max_expiries=max_expiries,
+        min_T_years=min_T_years,
+        spot=spot,
+        ref_date=ref_date,
+        dc=_dc,
+        cal=_cal,
+        quality_config=quality_config,
+        disable_quality_filter=disable_quality_filter,
+    )
 
     # per-slice r(T) from curve when available
-    if _fred_curve is not None:
-        for sl in slices:
-            sl.risk_free = _fred_curve.zero_rate(sl.expiry_time)
+    _apply_curve_rates(slices, _fred_curve)
 
     # For index symbols, estimate q per-expiry via put-call parity.
     # If all slices fail estimation, fall back to representative ETF yield.
+    _is_index = symbol.startswith("^")
     if _is_index and slices:
         # use the curve's per-slice r when present for the parity solve
         q = estimate_index_dividend_yields(slices, spot, r, symbol)
