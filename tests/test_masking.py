@@ -1,7 +1,6 @@
 """Tests for the fallback masking utility."""
 
 import numpy as np
-import pytest
 
 from arbfree_vol.plotting.masking import make_fallback_mask
 

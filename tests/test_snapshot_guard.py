@@ -1,6 +1,6 @@
 """Tests for the snapshot-time guard."""
 
-from datetime import date, datetime, time, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from arbfree_vol.data.snapshot_guard import check_snapshot_time

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Fitted surface interpolation routines.
 
 Provides a frozen dataclass ``FittedSurface`` — the type itself now lives
@@ -8,6 +6,8 @@ parameters for a set of expiries together with the forward curve,
 and routines to interpolate total variance / Black-Scholes implied
 volatility at arbitrary strikes and expiries.
 """
+
+from __future__ import annotations
 
 from math import log, sqrt
 from typing import TYPE_CHECKING

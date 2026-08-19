@@ -11,9 +11,7 @@ from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.repair.strategies._common import (
     _PathFitResult,
     _PrepStatus,
-    _SlicePrep,
     _prepare_slice,
-    RepairStrategy,
 )
 
 _logger = logging.getLogger(__name__)

@@ -192,7 +192,7 @@ class TestBuildFittedSurface:
     def test_build_fitted_surface_raises_on_no_cleaned_surface(self) -> None:
         """A RepairReport with cleaned_surface=None raises ValueError."""
         from arbfree_vol.arbitrage.report import ArbitrageReport
-        from arbfree_vol.repair.report import RepairReport, RepairMetrics, RejectedQuote
+        from arbfree_vol.repair.report import RepairReport, RepairMetrics
 
         report = RepairReport(
             rejected=(),

@@ -62,7 +62,6 @@ convention (``a = sigma^2 * T``, ``b = 0``, ``rho = m = 0``).
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.surface.interpolate import _forward_at

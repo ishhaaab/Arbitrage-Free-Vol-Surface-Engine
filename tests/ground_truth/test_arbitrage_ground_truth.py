@@ -52,7 +52,6 @@ from tests.ground_truth.arbitrage_cases import (
     HM_INSUFFICIENCY_CASE,
     SVI_ARB_FREE_FROM_ESSVI,
     SVI_BUTTERFLY_VIOLATING,
-    SVI_CASES,
     dense_g_min,
     gj_first_bound,
     gj_hand_residual,
@@ -173,7 +172,6 @@ def test_boundary_case_repair_is_honest(case) -> None:
     instance of the guard is ``ESSVI_HM_INSUFFICIENCY`` (separate test), whose
     fitted params pass ``verify_hm_condition`` while the grid check fails.
     """
-    from arbfree_vol.ssvi.term_structure import verify_hm_condition as _hm
 
     surface = build_essvi_quote_surface(
         [(0.25, case.slices[0]), (0.5, case.slices[1]),

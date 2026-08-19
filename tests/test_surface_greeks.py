@@ -2,7 +2,6 @@
 
 from datetime import date
 
-import numpy as np
 import pytest
 from pytest import approx
 
@@ -13,7 +12,6 @@ from arbfree_vol.models.option import (
 )
 from arbfree_vol.pricing.greeks import greeks as _compute_greeks
 from arbfree_vol.surface.greeks import (
-    PortfolioGreeks,
     bucketed_greeks,
     portfolio_greeks,
 )

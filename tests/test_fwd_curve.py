@@ -6,7 +6,7 @@ from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-from arbfree_vol.forward import estimate_forward_curve, _slice_forward, populate_per_slice_r
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 
 SPOT = 100.0

@@ -22,7 +22,7 @@ from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
 from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.sabr.model import sabr_implied_vol
-from arbfree_vol.ssvi.model import essvi_w, essvi_psi
+from arbfree_vol.ssvi.model import essvi_w
 
 SPOT = 100.0
 R = 0.05
@@ -162,7 +162,6 @@ def test_roundtrip_essvi_repair_reprice_clean_data() -> None:
     input_pts: list[tuple[float, float, float]] = []
     for T, theta in zip(expiries, thetas):
         F = SPOT * exp((R - Q) * T)
-        psi = essvi_psi(theta, ESSVI_ETA, ESSVI_GAMMA)
         strike_ivs: list[tuple[float, float]] = []
         for k in ks:
             w = essvi_w(k, theta, ESSVI_RHO, ESSVI_ETA, ESSVI_GAMMA)

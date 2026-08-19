@@ -14,13 +14,12 @@ slot where GJ2014 / HM2019 worked examples can be pasted with citations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import Quote, ExpirySlice, VolSurface
 from arbfree_vol.pricing.black_scholes import price_floats
-from arbfree_vol.sabr.model import SABRParams
 from arbfree_vol.ssvi.model import SSVIParams, eSSVISurfaceParams, ssvi_w
 from arbfree_vol.svi.model import SVIParams
 

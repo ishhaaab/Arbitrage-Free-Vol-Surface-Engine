@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import math
 
-import pytest
 from pytest import approx
 
 from arbfree_vol.svi.calibration import calibrate

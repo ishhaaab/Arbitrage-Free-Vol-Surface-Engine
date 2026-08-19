@@ -8,7 +8,6 @@ parameter-object identity across maturities.
 import sys
 from pathlib import Path
 
-import pytest
 
 _scripts = Path(__file__).resolve().parent.parent / "scripts"
 if str(_scripts) not in sys.path:

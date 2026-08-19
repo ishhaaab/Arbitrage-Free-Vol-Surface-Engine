@@ -10,7 +10,6 @@ algebraic self-consistency identities — ``test_benchmark_svi_gatheral2004_iden
 
 from math import sqrt
 
-import numpy as np
 from pytest import approx
 
 from arbfree_vol.arbitrage.svi_detect import detect_svi, min_total_variance

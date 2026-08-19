@@ -5,7 +5,6 @@ from datetime import date
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.iteration import iterative_repair
-from arbfree_vol.repair.engine import repair
 
 
 SPOT = 100.0

@@ -6,11 +6,11 @@ package, so ``repair.engine`` (the pipeline) has no knowledge of any
 model API; adding a model family means adding one strategy module here.
 """
 from arbfree_vol.repair.strategies._common import (
-    RepairStrategy,
-    _PathFitResult,
-    _PrepStatus,
-    _SlicePrep,
-    _prepare_slice,
+    RepairStrategy as RepairStrategy,
+    _PathFitResult as _PathFitResult,
+    _PrepStatus as _PrepStatus,
+    _SlicePrep as _SlicePrep,
+    _prepare_slice as _prepare_slice,
 )
 from arbfree_vol.repair.strategies.svi import SVIStrategy
 from arbfree_vol.repair.strategies.essvi import ESSVIStrategy

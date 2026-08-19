@@ -35,7 +35,7 @@ class RejectionRecord:
 def _check_zero_price(q: Quote) -> RejectionRecord | None:
     """Reject if price is exactly zero (IV solver will fail)."""
     if q.price== 0:
-        return RejectionRecord(q, RejectionRule.ZERO_PRICE, f"price=0")
+        return RejectionRecord(q, RejectionRule.ZERO_PRICE, "price=0")
     return None
 
 
