@@ -26,6 +26,18 @@ all degrade to the documented fallbacks instead of raising.
 If fetching fails, callers should fall back to
 ``YieldTermStructure.flat(^IRX or 0.05)`` — the same fallback the old
 single-rate path used.
+
+Structure (deep module)
+-----------------------
+``fetch_treasury_curve`` is a thin orchestrator over four small seams,
+each testable without the network:
+
+* :func:`parse_fred_csv` — pure CSV -> latest-observation parser.
+* ``_fetch_fred_series`` — one series over the wire (network seam).
+* ``_cache_load`` / ``_cache_save`` — disk cache with TTL (cache seam).
+* ``_fetch_pillars`` — SOFR + Treasury series composition (policy seam).
+
+``build_fred_curve`` stays the flat-fallback wrapper on top.
 """
 
 from __future__ import annotations
@@ -61,28 +73,17 @@ _CACHE_TTL_S = 24 * 3600
 _MEMO: dict[str, list[tuple[float, float]]] = {}
 
 
-def _cache_path(as_of: date) -> str:
-    # repo root is two levels above src/arbfree_vol/rates
-    here = os.path.dirname(__file__)
-    repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    d = os.path.join(repo, ".cache", "rates")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"{as_of.isoformat()}.json")
+def parse_fred_csv(raw: str) -> float | None:
+    """Parse FRED's ``DATE,VALUE`` CSV into the latest observation.
 
-
-def _fetch_fred_series(series_id: str, timeout: float = 8.0) -> float | None:
-    """Fetch the latest observation for a FRED series via CSV endpoint."""
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
-            raw = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        _logger.warning("FRED fetch failed for %s: %s", series_id, exc)
-        return None
-    # CSV: DATE,VALUE  — last non-missing row is latest
+    Pure function — no I/O, no state.  FRED quotes percent (4.85 ->
+    0.0485); missing observations are ``.`` (or empty) and are skipped;
+    malformed values are skipped.  The LAST parseable row wins, matching
+    FRED's "latest observation" semantics.
+    """
     last_val: float | None = None
     for line in raw.splitlines()[1:]:
-        line = line.strip()
+        line = line.strip().lstrip("\ufeff")
         if not line or line.startswith("DATE"):
             continue
         parts = line.split(",")
@@ -98,42 +99,65 @@ def _fetch_fred_series(series_id: str, timeout: float = 8.0) -> float | None:
     return last_val
 
 
-def fetch_treasury_curve(
-    as_of: date | None = None,
-    *,
-    include_sofr: bool = True,
-    timeout: float = 8.0,
-    offline: bool = False,
-) -> list[tuple[float, float]] | None:
-    """Fetch a Treasury zero-curve as ``[(T, r), ...]``.
+def _cache_path(as_of: date) -> str:
+    # repo root is two levels above src/arbfree_vol/rates
+    here = os.path.dirname(__file__)
+    repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
+    d = os.path.join(repo, ".cache", "rates")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f"{as_of.isoformat()}.json")
 
-    Returns ``None`` on failure / offline so callers can fall back.
-    Results are cached on disk per *as_of* date.
+
+def _cache_load(path: str, ttl_s: float) -> list[tuple[float, float]] | None:
+    """Cache seam: fresh pillars from disk, or ``None`` to refetch.
+
+    Missing, stale (mtime older than ``ttl_s``), corrupt, or empty cache
+    files all yield ``None`` — the caller refetches.  Never raises.
     """
-    if as_of is None:
-        as_of = date.today()
-    if offline or os.environ.get("FRED_OFFLINE") == "1":
-        _logger.info("FRED offline mode — skipping fetch")
+    if not os.path.exists(path):
         return None
+    try:
+        if time.time() - os.path.getmtime(path) >= ttl_s:
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if not (isinstance(data, list) and data):
+            return None
+        return [(float(t), float(r)) for t, r in data]
+    except Exception:
+        return None  # corrupt cache — refetch
 
-    cache_key = f"{as_of.isoformat()}:{include_sofr}"
-    if cache_key in _MEMO:
-        return _MEMO[cache_key]
 
-    # disk cache
-    cp = _cache_path(as_of)
-    if os.path.exists(cp):
-        try:
-            if time.time() - os.path.getmtime(cp) < _CACHE_TTL_S:
-                with open(cp, encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, list) and data:
-                    pillars = [(float(t), float(r)) for t, r in data]
-                    _MEMO[cache_key] = pillars
-                    return pillars
-        except Exception:
-            pass  # corrupt cache — refetch
+def _cache_save(path: str, pillars: list[tuple[float, float]]) -> None:
+    """Cache seam: best-effort disk write (never raises)."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(pillars, f)
+    except Exception:
+        pass  # cache is an optimisation, not a contract
 
+
+def _fetch_fred_series(series_id: str, timeout: float = 8.0) -> float | None:
+    """Network seam: latest observation for one FRED series via CSV."""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+            raw = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        _logger.warning("FRED fetch failed for %s: %s", series_id, exc)
+        return None
+    return parse_fred_csv(raw)
+
+
+def _fetch_pillars(
+    *,
+    include_sofr: bool,
+    timeout: float,
+) -> list[tuple[float, float]] | None:
+    """Policy seam: compose the SOFR + Treasury pillar list.
+
+    Returns ``None`` when no series produced a usable observation.
+    """
     pillars: list[tuple[float, float]] = []
     if include_sofr:
         v = _fetch_fred_series(FRED_SOFR_SERIES, timeout=timeout)
@@ -148,12 +172,43 @@ def fetch_treasury_curve(
         return None
 
     pillars.sort(key=lambda p: p[0])
+    return pillars
+
+
+def fetch_treasury_curve(
+    as_of: date | None = None,
+    *,
+    include_sofr: bool = True,
+    timeout: float = 8.0,
+    offline: bool = False,
+) -> list[tuple[float, float]] | None:
+    """Fetch a Treasury zero-curve as ``[(T, r), ...]``.
+
+    Orchestrator: offline check -> in-memory memo -> disk cache (TTL)
+    -> network.  Returns ``None`` on failure / offline so callers can
+    fall back.  Results are cached on disk per *as_of* date.
+    """
+    if as_of is None:
+        as_of = date.today()
+    if offline or os.environ.get("FRED_OFFLINE") == "1":
+        _logger.info("FRED offline mode — skipping fetch")
+        return None
+
+    cache_key = f"{as_of.isoformat()}:{include_sofr}"
+    if cache_key in _MEMO:
+        return _MEMO[cache_key]
+
+    cached = _cache_load(_cache_path(as_of), _CACHE_TTL_S)
+    if cached is not None:
+        _MEMO[cache_key] = cached
+        return cached
+
+    pillars = _fetch_pillars(include_sofr=include_sofr, timeout=timeout)
+    if pillars is None:
+        return None
+
     _MEMO[cache_key] = pillars
-    try:
-        with open(cp, "w", encoding="utf-8") as f:
-            json.dump(pillars, f)
-    except Exception:
-        pass
+    _cache_save(_cache_path(as_of), pillars)
     return pillars
 
 
