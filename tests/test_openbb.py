@@ -534,3 +534,142 @@ class TestOpenBBFetchChainMainPath:
 
         with pytest.raises(ValueError, match="No valid slices"):
             openbb_mod.fetch_chain("SPY")
+
+    def test_fetch_chain_provider_error_wrapped(self, monkeypatch) -> None:
+        """A provider failure in the chains fetch is wrapped with the
+        symbol/provider context so the caller can attribute the failure."""
+        fake_openbb = types.ModuleType("openbb")
+        fake_obb = MagicMock()
+        fake_obb.derivatives.options.chains.side_effect = RuntimeError("boom")
+        fake_openbb.obb = fake_obb
+        monkeypatch.setitem(sys.modules, "openbb", fake_openbb)
+        monkeypatch.setattr("yfinance.Ticker", _FakeTicker)
+
+        with pytest.raises(ValueError, match="Failed to fetch option chains for 'SPY' via OpenBB \\(provider='yfinance'\\)"):
+            openbb_mod.fetch_chain("SPY")
+
+    def test_fetch_chain_spot_undeterminable_raises(self, monkeypatch) -> None:
+        """No underlying_price column and no usable equity quote → the spot
+        cannot be resolved and fetch_chain raises a clear error."""
+        df = _chains_df().drop(columns=["underlying_price"])
+        fake_obb = _fake_openbb(monkeypatch, df)
+        # equity quote returns an empty frame — nothing to extract
+        fake_obb.equity.price.quote.return_value.to_df.return_value = pd.DataFrame()
+
+        with pytest.raises(ValueError, match="Could not determine spot price"):
+            openbb_mod.fetch_chain("SPY")
+
+    def test_fetch_chain_spot_quote_failure_logged(self, monkeypatch, caplog) -> None:
+        """When the equity-quote fetch raises, the failure is logged and
+        fetch_chain reports the spot as undetermined (rather than crashing
+        with the raw exception)."""
+        df = _chains_df().drop(columns=["underlying_price"])
+        fake_obb = _fake_openbb(monkeypatch, df)
+        fake_obb.equity.price.quote.side_effect = RuntimeError("quote down")
+
+        with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.openbb"):
+            with pytest.raises(ValueError, match="Could not determine spot price"):
+                openbb_mod.fetch_chain("SPY")
+
+        assert "OpenBB equity price quote failed for SPY" in caplog.text
+
+    def test_fetch_chain_max_expiries_caps_slices(self, monkeypatch) -> None:
+        """max_expiries limits how many expiry slices are built."""
+        df = _chains_df()
+        _fake_openbb(monkeypatch, df)
+
+        surface, _, _ = openbb_mod.fetch_chain("SPY", max_expiries=1)
+
+        assert len(surface.slices) == 1
+
+    def test_fetch_chain_calendar_adjusts_non_business_expiry(self, monkeypatch) -> None:
+        """A non-business-day expiry is rolled to the following business day
+        before the time-to-expiry is computed, so the slice T reflects the
+        adjusted settlement date."""
+        from arbfree_vol.time import Calendar
+
+        # Pick an expiry that lands on a Saturday by scanning forward.
+        d = date.today() + timedelta(days=45)
+        while d.weekday() != 5:
+            d += timedelta(days=1)
+
+        rows = []
+        for strike_frac in (0.9, 1.0, 1.1):
+            strike = 100.0 * strike_frac
+            for otype, intrinsic in (
+                ("call", max(0.0, 100.0 - strike)),
+                ("put", max(0.0, strike - 100.0)),
+            ):
+                mid = intrinsic + 2.5
+                rows.append({
+                    "strike": strike,
+                    "option_type": otype,
+                    "expiration": d.isoformat(),
+                    "bid": round(mid * 0.95, 2),
+                    "ask": round(mid * 1.05, 2),
+                    "last_trade_price": round(mid, 2),
+                    "open_interest": 100,
+                    "volume": 10,
+                    "underlying_price": 100.0,
+                })
+        _fake_openbb(monkeypatch, pd.DataFrame(rows))
+
+        cal = Calendar("USNYSE")
+        # The adjusted date is the following business day — T grows by the
+        # weekend gap, and the slice records the business-day T.
+        surface, _, _ = openbb_mod.fetch_chain("SPY", calendar=cal)
+
+        assert len(surface.slices) == 1
+        # The Saturday is rolled forward to Monday: T is the Monday expiry.
+        expected_monday = cal.adjust(d, "following")
+        expected_T = (expected_monday - date.today()).days / 365.0
+        assert surface.slices[0].expiry_time == pytest.approx(expected_T)
+
+    def test_fetch_chain_calendar_string_accepted(self, monkeypatch) -> None:
+        """calendar may be passed as the string name; it is resolved to a
+        Calendar instance internally."""
+        df = _chains_df()
+        _fake_openbb(monkeypatch, df)
+
+        surface, _, _ = openbb_mod.fetch_chain("SPY", calendar="USNYSE")
+
+        assert len(surface.slices) >= 1
+
+    def test_fetch_chain_fred_curve_applies_per_slice_rates(
+        self, monkeypatch,
+    ) -> None:
+        """A supplied curve wins over the ^IRX rate source and its per-slice
+        r(T) is threaded onto each expiry slice."""
+        from arbfree_vol.rates import YieldTermStructure
+
+        df = _chains_df()
+        _fake_openbb(monkeypatch, df)
+
+        # Non-flat curve so per-slice rates differ from the flat ^IRX 0.05.
+        curve = YieldTermStructure.from_pillars(
+            [(0.1, 0.03), (1.0, 0.04)]
+        )
+        surface, _, _ = openbb_mod.fetch_chain("SPY", curve=curve)
+
+        assert surface.risk_free == pytest.approx(curve.zero_rate(1.0))
+        for sl in surface.slices:
+            assert sl.risk_free == pytest.approx(curve.zero_rate(sl.expiry_time))
+
+    def test_fetch_chain_fred_curve_flag_builds_curve(self, monkeypatch) -> None:
+        """use_fred_curve=True builds the FRED curve (patched to a stub) and
+        threads per-slice r(T) from it."""
+        df = _chains_df()
+        _fake_openbb(monkeypatch, df)
+
+        from arbfree_vol.rates import YieldTermStructure
+        fake_curve = YieldTermStructure.from_pillars([(0.5, 0.035)])
+
+        monkeypatch.setattr(
+            "arbfree_vol.ingestion._index_rates.build_fred_curve",
+            lambda: fake_curve,
+        )
+        surface, _, _ = openbb_mod.fetch_chain("SPY", use_fred_curve=True)
+
+        assert surface.risk_free == pytest.approx(0.035)
+        for sl in surface.slices:
+            assert sl.risk_free == pytest.approx(0.035)
