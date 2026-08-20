@@ -378,3 +378,325 @@ class TestDupireNonUniformSecondDifference:
         symmetric = (wp - 2.0 * w0 + wm) / (h * h)
         non_uniform = 2.0 / (h + h) * ((wp - w0) / h - (w0 - wm) / h)
         assert non_uniform == approx(symmetric, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Test: _dw_dk forward-difference branch and nan guards
+# ---------------------------------------------------------------------------
+class TestFirstDerivativeBranches:
+    """Exercise the low-strike forward difference and nan-guard branches of
+    the first derivative of total variance w.r.t. log-moneyness."""
+
+    def test_dw_dk_forward_diff_at_low_strike(self) -> None:
+        """K ≤ dK selects the forward-difference branch (no left point
+        exists).  For a flat smile the slope is ~0 and the branch must
+        return a finite value, not nan."""
+        from arbfree_vol.pricing.local_vol import _dw_dk
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        F_T = _forward(1.0)
+
+        # K=1e-4, dK defaults to 1e-3 → K - dK <= 0 → forward branch
+        dwdk = _dw_dk(fs, K=1e-4, T=1.0, F_T=F_T)
+        assert not math.isnan(dwdk)
+        assert dwdk == approx(0.0, abs=1e-9)
+
+    def test_dw_dk_central_diff(self) -> None:
+        """Interior K uses the central difference and matches the forward
+        branch value on a flat smile."""
+        from arbfree_vol.pricing.local_vol import _dw_dk
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        F_T = _forward(1.0)
+
+        dwdk = _dw_dk(fs, K=100.0, T=1.0, F_T=F_T)
+        assert not math.isnan(dwdk)
+        assert dwdk == approx(0.0, abs=1e-9)
+
+    def test_dw_dk_central_precision_nan_guard(self) -> None:
+        """When the central-difference k-step collapses below 1e-15 the
+        branch returns nan."""
+        from arbfree_vol.pricing.local_vol import _dw_dk
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+
+        # Central branch: K > dK, dk = 0.5*log((K+dK)/(K-dK)).  With a tiny
+        # dK relative to K, (K+dK)/(K-dK) ~ 1 -> dk collapses.
+        val = _dw_dk(fs, K=100.0, T=1.0, F_T=_forward(1.0), dK=1e-18)
+        assert math.isnan(val)
+
+
+class TestSecondDerivativeGuards:
+    """The second-derivative stencil guards: edge (no left point) and
+    precision (degenerate k-step) both return nan."""
+
+    def test_d2w_dk2_edge_guard_returns_nan(self) -> None:
+        """K - dK <= 0 (no left point for the central second difference)
+        returns nan rather than crashing or extrapolating."""
+        from arbfree_vol.pricing.local_vol import _d2w_dk2
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        F_T = _forward(1.0)
+
+        val = _d2w_dk2(fs, K=1e-4, T=1.0, F_T=F_T)
+        assert math.isnan(val)
+
+    def test_d2w_dk2_normal_stencil_finite(self) -> None:
+        """Interior K on a flat smile gives a finite (zero) second
+        derivative."""
+        from arbfree_vol.pricing.local_vol import _d2w_dk2
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        F_T = _forward(1.0)
+
+        val = _d2w_dk2(fs, K=100.0, T=1.0, F_T=F_T)
+        assert not math.isnan(val)
+        assert val == approx(0.0, abs=1e-9)
+
+    def test_d2w_dk2_precision_nan_guard(self) -> None:
+        """When either k-space half-step collapses below 1e-15 the stencil
+        returns nan (degenerate grid, second derivative undefined)."""
+        from arbfree_vol.pricing.local_vol import _d2w_dk2
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+
+        # h_plus = log((K+dK)/K), h_minus = log(K/(K-dK)); a tiny dK
+        # collapses both half-steps.
+        val = _d2w_dk2(fs, K=100.0, T=1.0, F_T=_forward(1.0), dK=1e-18)
+        assert math.isnan(val)
+
+
+# ---------------------------------------------------------------------------
+# Test: dupire_at nan propagation via denominator
+# ---------------------------------------------------------------------------
+class TestDupireDenominatorNan:
+    """dupire_at maps a non-positive Dupire denominator to nan (local
+    volatility undefined there), rather than raising or returning a
+    negative square root."""
+
+    def test_dupire_at_nan_at_extreme_wing(self) -> None:
+        """A steep smile (large b, rho near -1) drives the Dupire
+        denominator negative at extreme moneyness → dupire_at returns nan."""
+        from arbfree_vol.svi.model import SVIParams
+        from arbfree_vol.models.fitted import FittedSlice, FittedSurface
+
+        spot = 100.0
+        r = 0.05
+        q = 0.0
+
+        sl_low = FittedSlice(
+            expiry_time=0.5,
+            params=SVIParams(a=0.02, b=0.5, rho=-0.9, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=_forward(0.5, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        sl_high = FittedSlice(
+            expiry_time=2.0,
+            params=SVIParams(a=0.08, b=0.5, rho=-0.9, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=_forward(2.0, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        fs = FittedSurface(
+            spot=spot,
+            risk_free=r,
+            div_yield=q,
+            forward_curve=(
+                (0.5, _forward(0.5, spot, r, q)),
+                (2.0, _forward(2.0, spot, r, q)),
+            ),
+            fitted_slices=(sl_low, sl_high),
+        )
+
+        # K=50 on the steep smile gives a negative denominator → nan.
+        val = dupire_at(fs, K=50.0, T=1.0)
+        assert math.isnan(val)
+
+        # Interior, well-behaved moneyness still evaluates.
+        ok = dupire_at(fs, K=100.0, T=1.0)
+        assert not math.isnan(ok)
+        assert ok > 0.0
+
+    def test_dupire_at_nan_propagated_from_dw_dk(self, monkeypatch) -> None:
+        """When the moneyness derivative is nan (degenerate step), dupire_at
+        propagates nan — the caller sees undefined, not a crash."""
+        from arbfree_vol.pricing import local_vol as lv_mod
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        monkeypatch.setattr(
+            lv_mod, "_dw_dk", lambda *a, **k: math.nan
+        )
+
+        val = dupire_at(fs, K=100.0, T=1.0)
+        assert math.isnan(val)
+
+    def test_dupire_at_nan_through_nan_denominator(self, monkeypatch) -> None:
+        """A nan denominator propagates to nan (nan comparisons are False,
+        so neither the denominator nor the sigma_loc_sq guard trips; the
+        sqrt of nan is nan).  Pins that the guard rails do not misclassify
+        an undefined cell as a valid one."""
+        from arbfree_vol.pricing import local_vol as lv_mod
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        monkeypatch.setattr(
+            lv_mod, "_dupire_denominator", lambda *a, **k: math.nan
+        )
+
+        val = dupire_at(fs, K=100.0, T=1.0)
+        assert math.isnan(val)
+
+
+# ---------------------------------------------------------------------------
+# Test: dupire grid validation
+# ---------------------------------------------------------------------------
+class TestDupireGridValidation:
+    """dupire validates the grid dimensions up front."""
+
+    def test_dupire_requires_three_strikes(self) -> None:
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        with pytest.raises(ValueError, match="at least 3 strikes"):
+            dupire(fs, strikes=[90.0, 100.0], maturities=[0.5, 1.0, 1.5])
+
+    def test_dupire_requires_three_maturities(self) -> None:
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        with pytest.raises(ValueError, match="at least 3 maturities"):
+            dupire(fs, strikes=[90.0, 100.0, 110.0], maturities=[0.5, 1.0])
+
+
+# ---------------------------------------------------------------------------
+# Test: sub-2-slice surface + fallback masking
+# ---------------------------------------------------------------------------
+class TestDupireSubTwoSliceFallbackMask:
+    """A sub-2-slice surface cannot produce a Dupire time derivative.  The
+    only accepted grid is one whose EVERY row is masked as a fallback
+    maturity (all-nan, no evaluation); any other row must fail clearly."""
+
+    def _single_slice_surface(self) -> FittedSurface:
+        from arbfree_vol.svi.model import SVIParams
+        from arbfree_vol.models.fitted import FittedSlice, FittedSurface
+
+        spot = 100.0
+        r = 0.05
+        q = 0.0
+        sl = FittedSlice(
+            expiry_time=1.0,
+            params=SVIParams(a=0.04, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=_forward(1.0, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        return FittedSurface(
+            spot=spot,
+            risk_free=r,
+            div_yield=q,
+            forward_curve=((1.0, _forward(1.0, spot, r, q)),),
+            fitted_slices=(sl,),
+        )
+
+    def test_single_slice_unmasked_raises(self) -> None:
+        """A single-slice surface with an unmasked grid row raises the
+        clear sub-2-slice error instead of leaking an obscure
+        out-of-range ValueError."""
+        fs = self._single_slice_surface()
+        with pytest.raises(ValueError, match="at least 2 fitted slices"):
+            dupire(fs, strikes=[90.0, 100.0, 110.0], maturities=[0.5, 1.0, 1.5])
+
+    def test_single_slice_all_rows_masked_ok(self) -> None:
+        """When EVERY grid row is masked as a fallback maturity the grid is
+        all-nan and dupire returns without evaluating any cell."""
+        fs = self._single_slice_surface()
+        lv = dupire(
+            fs,
+            strikes=[90.0, 100.0, 110.0],
+            maturities=[1.0, 1.0 + 1e-4, 1.0 + 2e-4],
+            fallback_slices=[1.0],
+        )
+        assert len(lv.grid) == 3
+        for row in lv.grid:
+            assert all(math.isnan(v) for v in row)
+
+    def test_single_slice_partial_mask_raises(self) -> None:
+        """Only SOME rows masked on a single-slice surface still raises:
+        the unmasked row would need evaluation."""
+        fs = self._single_slice_surface()
+        with pytest.raises(ValueError, match="at least 2 fitted slices"):
+            dupire(
+                fs,
+                strikes=[90.0, 100.0, 110.0],
+                maturities=[0.5, 1.0, 1.5],
+                fallback_slices=[1.0],
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test: _eval_cell calendar-arb vs genuine out-of-range
+# ---------------------------------------------------------------------------
+class TestEvalCell:
+    """_eval_cell maps a calendar-arbitrage ValueError to nan but re-raises
+    genuine out-of-surface errors."""
+
+    def test_eval_cell_calendar_arb_maps_to_nan(self) -> None:
+        """A cell whose dw/dT <= 0 (calendar arbitrage) is marked undefined
+        (nan), not fatal."""
+        spot = 100.0
+        r = 0.05
+        q = 0.0
+        # Later slice has LOWER total variance → w decreasing with T
+        sl_low = FittedSlice(
+            expiry_time=0.5,
+            params=SVIParams(a=0.3 ** 2 * 0.5, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=_forward(0.5, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        sl_high = FittedSlice(
+            expiry_time=2.0,
+            params=SVIParams(a=0.1 ** 2 * 2.0, b=0.0, rho=0.0, m=0.0, sigma=0.2),
+            rmse=0.0,
+            forward_price=_forward(2.0, spot, r, q),
+            n_quotes_total=5,
+            n_quotes_used=5,
+        )
+        fs = FittedSurface(
+            spot=spot,
+            risk_free=r,
+            div_yield=q,
+            forward_curve=(
+                (0.5, _forward(0.5, spot, r, q)),
+                (2.0, _forward(2.0, spot, r, q)),
+            ),
+            fitted_slices=(sl_low, sl_high),
+        )
+
+        from arbfree_vol.pricing.local_vol import _eval_cell
+        val = _eval_cell(fs, K=100.0, T=1.5, dT=1e-3)
+        assert math.isnan(val)
+
+    def test_eval_cell_out_of_range_reraised(self) -> None:
+        """A genuinely out-of-range query (T below the surface) is
+        re-raised, not silently nan."""
+        from arbfree_vol.pricing.local_vol import _eval_cell
+
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        with pytest.raises(ValueError, match="below"):
+            _eval_cell(fs, K=100.0, T=0.001, dT=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Test: _fallback_precompute empty branch
+# ---------------------------------------------------------------------------
+class TestFallbackPrecompute:
+    """_fallback_precompute short-circuits when no fallback slices are
+    supplied."""
+
+    def test_no_fallback_slices_returns_empty(self) -> None:
+        from arbfree_vol.pricing.local_vol import _fallback_precompute
+        fs = _flat_fitted_surface(0.5, 2.0, 0.2)
+        fallback_set, fitted_times = _fallback_precompute(fs, None)
+        assert fallback_set == set()
+        assert fitted_times == ()
