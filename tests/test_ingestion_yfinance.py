@@ -2,8 +2,9 @@
 
 import logging
 from unittest.mock import patch, MagicMock
-from datetime import date
+from datetime import date, timedelta
 
+import pytest
 from pytest import approx
 
 from arbfree_vol.models.surface import VolSurface
@@ -493,3 +494,174 @@ def test_fetch_chain_disable_quality_filter(mock_date_class, mock_ticker_class) 
         "SPY", max_expiries=1, disable_quality_filter=False
     )
     assert len(quality_drops_filtered) > 0  # OI=1 < 10 → dropped
+
+
+# ---------------------------------------------------------------------------
+# Test: yahoo.py uncovered seams (FRED curve, spot failure, calendar, empty)
+# ---------------------------------------------------------------------------
+
+def _basic_chain_mock(mock_ticker_class):
+    """Return a fully-mocked yfinance ticker with a valid SPY chain."""
+    import pandas as pd
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.005}
+    mock_ticker.options = ["2030-08-15", "2030-09-15"]
+
+    mock_irx = MagicMock()
+    mock_irx.info = {"regularMarketPrice": 4.85}
+    mock_ticker_class.side_effect = lambda s: (
+        mock_irx if s == "^IRX" else mock_ticker
+    )
+
+    strikes = [440, 450, 460]
+    cols = {"strike": strikes, "lastPrice": [20, 15, 10],
+            "bid": [19, 14, 9], "ask": [21, 16, 11],
+            "volume": [100, 100, 100], "openInterest": [500, 500, 500]}
+    mock_chain = MagicMock()
+    mock_chain.calls = pd.DataFrame(cols | {"contractSymbol": ["c1", "c2", "c3"]})
+    mock_chain.puts = pd.DataFrame(cols | {"contractSymbol": ["p1", "p2", "p3"]})
+    mock_ticker.option_chain.return_value = mock_chain
+    return mock_ticker
+
+
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
+def test_fetch_chain_supplied_curve_wins_over_irx(
+    mock_date_class, mock_ticker_class,
+) -> None:
+    """A supplied YieldTermStructure wins over the ^IRX rate source: the
+    surface r is the curve's 1y rate and per-slice r(T) is threaded from
+    it, while q still comes from the shared rate orchestration."""
+    from datetime import date as real_date
+    from arbfree_vol.rates import YieldTermStructure
+
+    _basic_chain_mock(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    # Non-flat curve so per-slice rates differ from flat ^IRX 0.0485.
+    curve = YieldTermStructure.from_pillars([(0.1, 0.03), (1.0, 0.04)])
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    surface, _, _ = fetch_chain("SPY", max_expiries=2, curve=curve)
+
+    assert surface.risk_free == approx(curve.zero_rate(1.0))
+    for sl in surface.slices:
+        assert sl.risk_free == approx(curve.zero_rate(sl.expiry_time))
+    assert surface.div_yield == approx(0.005)  # q still from ticker info
+
+
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
+def test_fetch_chain_spot_fetch_failure_logged_and_raises(
+    mock_date_class, mock_ticker_class, caplog,
+) -> None:
+    """When the ticker's spot fetch raises, the failure is logged and
+    fetch_chain raises a clear error (not a raw exception)."""
+    from datetime import date as real_date
+
+    mock_ticker = _basic_chain_mock(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    # Spot fetch raises: _fetch_spot reads ticker.info; make the property
+    # raise a RuntimeError so the except branch logs and re-raises the
+    # clear ValueError.
+
+    def _boom(self):
+        raise RuntimeError("info down")
+
+    type(mock_ticker).info = property(_boom)
+
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.ingestion.yahoo"):
+        with pytest.raises(ValueError, match="Could not fetch spot price"):
+            fetch_chain("SPY", max_expiries=2)
+
+    assert "Failed to fetch spot price for 'SPY'" in caplog.text
+
+
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
+def test_fetch_chain_spot_none_raises(mock_date_class, mock_ticker_class) -> None:
+    """A ticker with no usable spot price (None or non-numeric) raises a
+    clear ValueError rather than producing a surface with a bogus spot."""
+    from datetime import date as real_date
+
+    mock_ticker = _basic_chain_mock(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    # Empty info -> no spot -> ValueError
+    mock_ticker.info = {}
+
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with pytest.raises(ValueError, match="Could not fetch spot price"):
+        fetch_chain("SPY", max_expiries=2)
+
+
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
+def test_fetch_chain_no_expiries_raises(mock_date_class, mock_ticker_class) -> None:
+    """A ticker with an empty options list raises a clear error."""
+    from datetime import date as real_date
+
+    mock_ticker = MagicMock()
+    mock_ticker_class.return_value = mock_ticker
+    mock_ticker.info = {"regularMarketPrice": 450.0, "dividendYield": 0.005}
+    mock_ticker.options = []
+
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    with pytest.raises(ValueError, match="No expiries available"):
+        fetch_chain("SPY")
+
+
+@patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
+@patch("arbfree_vol.ingestion.yahoo.date")
+def test_fetch_chain_calendar_string_and_min_t_skip(
+    mock_date_class, mock_ticker_class,
+) -> None:
+    """A string calendar name is accepted and rolled; an expiry whose T is
+    at/below min_T_years is skipped."""
+    from datetime import date as real_date
+
+    mock_ticker = _basic_chain_mock(mock_ticker_class)
+    today = real_date(2030, 7, 15)
+    mock_date_class.today.return_value = today
+    mock_date_class.fromisoformat.side_effect = real_date.fromisoformat
+
+    # Expiry on a non-business day (Saturday) to exercise the roll
+    from arbfree_vol.time import Calendar
+    cal = Calendar("USNYSE")
+    sat = today + timedelta(days=30)
+    while sat.weekday() != 5:
+        sat += timedelta(days=1)
+    # Keep it before 2030-08-15 so it is the first expiry processed.
+    # Add a today+2 day expiry that is too close (T <= min_T_years) so
+    # the skip branch runs for it.
+    mock_ticker.options = [
+        (today + timedelta(days=2)).isoformat(),
+        sat.isoformat(),
+        "2030-08-15",
+    ]
+
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    surface, _, _ = fetch_chain(
+        "SPY", max_expiries=3, calendar="USNYSE", min_T_years=7.0 / 365.0
+    )
+
+    # The too-close expiry (T~0.0055y < 0.0192y) is skipped; the Saturday
+    # expiry was rolled to a business day; its T must be the adjusted
+    # date's year fraction.
+    assert len(surface.slices) == 2
+    expected_adjusted = cal.adjust(sat, "following")
+    expected_T = (expected_adjusted - today).days / 365.0
+    assert surface.slices[0].expiry_time == approx(expected_T)

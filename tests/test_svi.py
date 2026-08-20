@@ -164,3 +164,102 @@ def test_calibrate_constrained_warm_start_budget_capped(monkeypatch) -> None:
     calibrate_constrained(points)
 
     assert calls["max_nfev"] == calib_mod._WARM_START_MAX_NFEV == 150
+
+
+def test_calibrate_raises_on_non_convergence(monkeypatch) -> None:
+    """A least_squares run that does not converge raises RuntimeError with
+    the solver message."""
+    from arbfree_vol.svi import calibration as calib_mod
+
+    points = _points_from(TRUE, np.linspace(-0.4, 0.4, 9))
+
+    class _FailedResult:
+        success = False
+        message = "The maximum number of function evaluations is exceeded."
+
+    monkeypatch.setattr(
+        calib_mod, "least_squares", lambda *a, **k: _FailedResult()
+    )
+
+    with pytest.raises(RuntimeError, match="SVI calibration failed"):
+        calibrate(points)
+
+
+def test_calibrate_constrained_warm_start_failure_is_best_effort(
+    monkeypatch,
+) -> None:
+    """If the unconstrained warm-start fit fails (ValueError/RuntimeError),
+    the constrained multi-start skips it and still returns a fit from the
+    default seed."""
+    from arbfree_vol.svi import calibration as calib_mod
+
+    points = _points_from(TRUE_FLAT, np.linspace(-0.4, 0.4, 9))
+
+    def _failing_calibrate(points, max_nfev=None):
+        raise RuntimeError("warm start exploded")
+
+    monkeypatch.setattr(calib_mod, "calibrate", _failing_calibrate)
+
+    fit = calibrate_constrained(points)
+
+    # The warm start was skipped; the default-seed multi-start still ran.
+    assert isinstance(fit, SVIParams)
+    assert fit.a == approx(TRUE_FLAT.a, abs=1e-2)
+
+
+def test_calibrate_constrained_all_starts_fail_raises(monkeypatch) -> None:
+    """When every start fails (including the warm start), calibrate_constrained
+    raises a RuntimeError reporting the first failure."""
+    from arbfree_vol.svi import calibration as calib_mod
+
+    points = _points_from(TRUE_FLAT, np.linspace(-0.4, 0.4, 9))
+
+    def _failing_calibrate(points, max_nfev=None):
+        raise RuntimeError("warm start exploded")
+
+    monkeypatch.setattr(calib_mod, "calibrate", _failing_calibrate)
+
+    class _FailedLS:
+        success = False
+        message = "both starts failed"
+
+    monkeypatch.setattr(
+        calib_mod, "least_squares", lambda *a, **k: _FailedLS()
+    )
+
+    with pytest.raises(
+        RuntimeError, match="SVI constrained calibration failed: both starts failed"
+    ):
+        calibrate_constrained(points)
+
+
+def test_calibrate_constrained_non_finite_start_is_failed_start(
+    monkeypatch,
+) -> None:
+    """A start whose residual vector is non-finite at x0 makes least_squares
+    raise ValueError; that start is a failed start, not a crash, and the
+    remaining start still produces a fit."""
+    from arbfree_vol.svi import calibration as calib_mod
+
+    points = _points_from(TRUE_FLAT, np.linspace(-0.4, 0.4, 9))
+
+    # least_squares is called (in order): warm-start calibrate, then the
+    # two _run_multistart starts (default seed, warm seed).  The FIRST
+    # _run_multistart call (index 1) is the default seed — make it raise
+    # the non-finite-start ValueError so _run_multistart treats it as a
+    # failed start; the warm seed then succeeds.
+    calls = {"n": 0}
+    real_ls = calib_mod.least_squares
+
+    def _flaky_ls(residuals, x0, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("residuals contain non-finite values")
+        return real_ls(residuals, x0, **kwargs)
+
+    monkeypatch.setattr(calib_mod, "least_squares", _flaky_ls)
+
+    fit = calibrate_constrained(points)
+
+    assert isinstance(fit, SVIParams)
+    assert calls["n"] >= 3  # warm-start calibrate + default(failed) + warm(success)

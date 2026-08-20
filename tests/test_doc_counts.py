@@ -15,9 +15,9 @@ from pathlib import Path
 _DOC = Path(__file__).resolve().parent.parent / "docs" / "AGENTS.md"
 
 # Refresh with `pytest --collect-only -q`:
-#   tests   = collected items (706 = 692 passing + 14 deselected, 2026-08-20)
+#   tests   = collected items (715 = 701 passing + 14 deselected, 2026-08-20)
 #   files   = derived from the tree below, no constant needed
-_EXPECTED_TESTS = 706
+_EXPECTED_TESTS = 715
 
 
 def _suite_claim() -> tuple[int, int]:

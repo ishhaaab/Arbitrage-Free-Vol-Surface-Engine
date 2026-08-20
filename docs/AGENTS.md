@@ -72,7 +72,7 @@ Model parameters, market conventions, and dataset-specific constants must be con
 
 ## Testing Approach
 
-- **54 test files, 706 tests** (692 passing + 14 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
+- **54 test files, 715 tests** (701 passing + 14 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
 - **Known-value regression**: BS prices and Greeks checked against independently computed reference values (`abs=1e-4` to `1e-6`).
 - **Round-trip**: IV solver tested by pricing at a known vol, then recovering the same vol from the price.
 - **Synthetic surface tests**: Construction of `VolSurface` from BS-generated quotes to test arb detection on clean data; deliberate injection of violations (parity break, monotonicity break, butterfly break, calendar break) to test detection.
@@ -103,7 +103,7 @@ Yahoo Finance / CSV → fetch_chain() / load_chain_csv()
 ## How to run
 
 ```
-python -m pytest tests/                          # all 706 tests
+python -m pytest tests/                          # all 715 tests
 python demo/yfinance/yfinance_demo.py --symbol SPY   # end-to-end SPY demo (7 plots)
 python demo/essvi/essvi_demo.py                  # raw SVI vs eSSVI comparison
 python demo/ticker_compare/ticker_compare.py     # cross-ticker SVI/eSSVI/SABR comparison
