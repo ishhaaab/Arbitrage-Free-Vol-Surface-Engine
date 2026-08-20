@@ -13,6 +13,7 @@ import pytest
 
 from arbfree_vol.ingestion._index_rates import (
     apply_curve_rates,
+    estimate_index_dividend_yields,
     resolve_index_q,
     resolve_rate_curve,
 )
@@ -149,4 +150,63 @@ def test_resolve_index_q_empty_chain_keeps_fallback(monkeypatch) -> None:
         _boom,
     )
     q = resolve_index_q([], spot=100.0, r=0.05, symbol="^SPX", fallback_q=0.0)
+    assert q == 0.0
+
+
+# ---------- estimate_index_dividend_yields (surface-level q) ----------
+
+
+def test_estimate_index_dividend_yields_etf_fallback(monkeypatch) -> None:
+    """All parity estimates fail -> representative ETF yield, no mutation."""
+    slices = [_slice(0.25), _slice(1.0)]
+
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: None,
+    )
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates."
+        "_get_representative_dividend_yield",
+        lambda symbol: 0.022,
+    )
+    q = estimate_index_dividend_yields(
+        slices, spot=100.0, r=0.05, symbol="^SPX"
+    )
+    assert q == pytest.approx(0.022)
+    # The fallback never mutates per-slice div_yield (parity successes
+    # are the only writers), per the function's docstring contract.
+    assert all(sl.div_yield is None for sl in slices)
+
+
+def test_estimate_index_dividend_yields_per_slice_mutation(monkeypatch) -> None:
+    """Parity estimates mutate each slice's div_yield; q is their median."""
+    slices = [_slice(0.25), _slice(1.0)]
+    estimates = iter([0.011, 0.013])
+
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: next(estimates),
+    )
+    q = estimate_index_dividend_yields(
+        slices, spot=100.0, r=0.05, symbol="^SPX"
+    )
+    assert q == pytest.approx(0.012)
+    assert slices[0].div_yield == pytest.approx(0.011)
+    assert slices[1].div_yield == pytest.approx(0.013)
+
+
+def test_estimate_index_dividend_yields_no_source_q_is_zero(monkeypatch) -> None:
+    """No parity, no representative yield -> q=0.0, never a fake positive."""
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates._estimate_index_dividend_yield",
+        lambda sl, spot, r: None,
+    )
+    monkeypatch.setattr(
+        "arbfree_vol.ingestion._index_rates."
+        "_get_representative_dividend_yield",
+        lambda symbol: None,
+    )
+    q = estimate_index_dividend_yields(
+        [_slice(0.25)], spot=100.0, r=0.05, symbol="^SPX"
+    )
     assert q == 0.0

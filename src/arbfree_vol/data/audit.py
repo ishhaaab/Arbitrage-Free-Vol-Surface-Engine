@@ -204,28 +204,52 @@ def compute_atm_quality_metrics(
             "n_atm_strikes": 0,
         }
 
-    # NaN -> 0 for counting/medians (pandas-stubs types masked-DataFrame
-    # column access as ndarray, so extraction goes through numpy; the
-    # nan_to_num(..., nan=0.0) substitution reproduces the old
-    # ``Series.fillna(0)`` semantics exactly, and ``nanmedian`` matches
-    # pandas' NaN-skipping ``Series.median()``).
-    oi = np.nan_to_num(np.asarray(atm["openInterest"], dtype=float), nan=0.0)
-    vol = np.nan_to_num(np.asarray(atm["volume"], dtype=float), nan=0.0)
-    bid = np.nan_to_num(np.asarray(atm["bid"], dtype=float), nan=0.0)
-    ask = np.nan_to_num(np.asarray(atm["ask"], dtype=float), nan=0.0)
+    # NaN -> 0 for counting/medians; infinities stay INFINITE.  This
+    # reproduces pandas ``Series.fillna(0)`` exactly: fillna only touches
+    # NaN, while nan_to_num's DEFAULT would also rewrite +-inf to ~1.8e308
+    # and silently change medians/masks.  (numpy extraction is used
+    # because pandas-stubs types masked-DataFrame column access as
+    # ndarray; nan_to_num(..., nan=0.0, posinf=np.inf, neginf=-np.inf) is
+    # the exact fillna(0) substitute, and ``nanmedian`` matches pandas'
+    # NaN-skipping ``Series.median()``.)
+    oi = np.nan_to_num(
+        np.asarray(atm["openInterest"], dtype=float),
+        nan=0.0, posinf=np.inf, neginf=-np.inf,
+    )
+    vol = np.nan_to_num(
+        np.asarray(atm["volume"], dtype=float),
+        nan=0.0, posinf=np.inf, neginf=-np.inf,
+    )
+    bid = np.nan_to_num(
+        np.asarray(atm["bid"], dtype=float),
+        nan=0.0, posinf=np.inf, neginf=-np.inf,
+    )
+    ask = np.nan_to_num(
+        np.asarray(atm["ask"], dtype=float),
+        nan=0.0, posinf=np.inf, neginf=-np.inf,
+    )
 
-    # bid-ask spread as % of mid
+    # bid-ask spread as % of mid (inf-inf quote pairs -> NaN, like pandas)
     mid = (bid + ask) / 2.0
-    # Avoid division by zero where mid=0
-    spread_pct = np.where(mid > 0, (ask - bid) / mid * 100.0, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        # Avoid division by zero where mid=0
+        spread_pct = np.where(mid > 0, (ask - bid) / mid * 100.0, np.nan)
 
     # Count zero-quote strikes (bid==0 AND ask==0)
     zero_quote_mask = (bid == 0) & (ask == 0)
 
+    # nanmedian skips NaN (matches Series.median); guard the all-NaN
+    # case, which would otherwise emit a RuntimeWarning for NaN anyway
+    median_bid_ask_pct = (
+        float(np.nanmedian(spread_pct))
+        if np.any(np.isfinite(spread_pct))
+        else float("nan")
+    )
+
     return {
         "median_OI": float(np.median(oi)),
         "median_volume": float(np.median(vol)),
-        "median_bid_ask_pct": float(np.nanmedian(spread_pct)),
+        "median_bid_ask_pct": median_bid_ask_pct,
         "zero_vol_count": int((vol == 0).sum()),
         "zero_oi_count": int((oi == 0).sum()),
         "zero_quote_count": int(zero_quote_mask.sum()),
@@ -252,7 +276,10 @@ def compute_per_expiry_oi_drops(
     if atm.empty:
         return {"total_strikes": 0, "oi_dropped": 0, "drop_rate": 0.0}
 
-    oi = np.nan_to_num(np.asarray(atm["openInterest"], dtype=float), nan=0.0)
+    oi = np.nan_to_num(
+        np.asarray(atm["openInterest"], dtype=float),
+        nan=0.0, posinf=np.inf, neginf=-np.inf,
+    )
     total = len(atm)
     dropped = int((oi < min_oi).sum())
     return {
@@ -311,7 +338,12 @@ _TENOR_BUCKETS = [
 
 
 def _bucket_T(T: float) -> str:
-    """Map a maturity in years to a tenor bucket label."""
+    """Map a maturity in years to a tenor bucket label.
+
+    Strict ``T < upper``: a value exactly on a boundary (e.g. ``T ==
+    0.25``) lands in the NEXT bucket ("0.25-0.50y").  This matches the
+    original audit script's behavior.
+    """
     for upper, label in _TENOR_BUCKETS:
         if T < upper:
             return label
@@ -704,6 +736,11 @@ def run_audit(args) -> dict:
 
     Delegates the per-source audits and the comparison table to
     :func:`compute_results`, then prints the tenor-bucket breakdown.
+
+    Note: this is intentionally NOT a backwards-compatible re-export of
+    the old script's ``run_audit(args=None)`` — library users should
+    call :func:`compute_results` or :func:`audit_surface`; the script
+    (``scripts/audit_theta_dip_data_quality.py``) is the only driver.
     """
     print("=" * 72)
     print("  Data Quality Audit: eSSVI fallback across underlyings / ingestion paths")

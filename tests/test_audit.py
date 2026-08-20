@@ -123,6 +123,34 @@ def test_atm_quality_metrics_zero_quotes_counted() -> None:
     assert m["n_atm_strikes"] == 1
 
 
+def test_atm_quality_metrics_infinite_quotes_preserved_not_zero() -> None:
+    """Infinities behave exactly like pandas ``fillna(0)``: left as-is.
+
+    fillna(0) only replaces NaN.  Rewriting ``inf -> ~1.8e308`` (the
+    nan_to_num default) would turn the inf-inf quote pair's NaN spread
+    into a fake 0.0 and shrink median_OI from inf to a huge float.
+    """
+    import numpy as np
+
+    calls = _chain_df([
+        {"strike": 100, "bid": np.inf, "ask": np.inf, "volume": 1,
+         "openInterest": np.inf, "impliedVolatility": 0.2},
+        {"strike": 102, "bid": 10.0, "ask": 10.5, "volume": 2,
+         "openInterest": 42, "impliedVolatility": 0.2},
+    ])
+    puts = _chain_df([])
+    m = audit.compute_atm_quality_metrics(calls, puts, spot=100.0)
+
+    # inf survives as inf (a rewritten ~1.8e308 / ~9e307 mean fails this)
+    assert np.isinf(m["median_OI"])
+    # inf-inf pair contributes NaN (skipped); only the finite pair counts:
+    # (10.5 - 10.0) / 10.25 * 100 = 4.8780...
+    assert m["median_bid_ask_pct"] == pytest.approx(4.8780487805)
+    assert m["zero_oi_count"] == 0
+    assert m["zero_quote_count"] == 0
+    assert m["n_atm_strikes"] == 2
+
+
 # ---------- compute_per_expiry_oi_drops ----------
 
 
@@ -130,13 +158,15 @@ def test_per_expiry_oi_drops_rate() -> None:
     calls = _chain_df([
         {"strike": 98, "bid": 1, "ask": 1, "volume": 0, "openInterest": 5},
         {"strike": 100, "bid": 1, "ask": 1, "volume": 0, "openInterest": 10},
+        {"strike": 101, "bid": 1, "ask": 1, "volume": 0, "openInterest": None},
         {"strike": 102, "bid": 1, "ask": 1, "volume": 0, "openInterest": 15},
     ])
     puts = _chain_df([])
     info = audit.compute_per_expiry_oi_drops(calls, puts, spot=100.0, min_oi=10)
-    assert info["total_strikes"] == 3
-    assert info["oi_dropped"] == 1  # OI 5 < 10
-    assert info["drop_rate"] == pytest.approx(1.0 / 3.0)
+    assert info["total_strikes"] == 4
+    # OI 5 < 10, and None -> 0 via the fillna(0) substitute, so 0 < 10
+    assert info["oi_dropped"] == 2
+    assert info["drop_rate"] == pytest.approx(0.5)
 
 
 def test_per_expiry_oi_drops_empty_band() -> None:
@@ -195,6 +225,34 @@ def test_tenor_bucket_breakdown_assigns_buckets() -> None:
     assert tb["0.50-1.00y"] == {"fallback": 0, "total": 1}
     assert tb["1.00-2.00y"] == {"fallback": 0, "total": 1}
     assert tb["> 2.00y"] == {"fallback": 1, "total": 1}
+
+
+@pytest.mark.parametrize(
+    ("T", "expected_bucket"),
+    [
+        (0.05, "< 0.10y"),
+        (0.0999, "< 0.10y"),
+        # Exact boundaries are strict-< (matches the original audit
+        # script): a value ON a boundary lands in the NEXT bucket.
+        (0.10, "0.10-0.25y"),
+        (0.25, "0.25-0.50y"),
+        (0.50, "0.50-1.00y"),
+        (1.00, "1.00-2.00y"),
+        (2.00, "> 2.00y"),
+        (3.0, "> 2.00y"),
+    ],
+)
+def test_tenor_bucket_breakdown_exact_boundaries(
+    T: float, expected_bucket: str
+) -> None:
+    """Boundary maturities pin the strict-< bucket assignment."""
+    surface = _surface(T)
+    tb = audit.compute_tenor_bucket_breakdown(surface, fallback_Ts=[T])
+
+    assert tb[expected_bucket] == {"fallback": 1, "total": 1}
+    for bucket, counts in tb.items():
+        if bucket != expected_bucket:
+            assert counts == {"fallback": 0, "total": 0}
 
 
 # ---------- audit_surface (offline fixture mode) ----------

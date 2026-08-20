@@ -71,7 +71,7 @@ Model parameters, market conventions, and dataset-specific constants must be con
 
 ## Testing Approach
 
-- **54 test files, 646 tests** (633 passing + 13 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
+- **54 test files, 658 tests** (645 passing + 13 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
 - **Known-value regression**: BS prices and Greeks checked against independently computed reference values (`abs=1e-4` to `1e-6`).
 - **Round-trip**: IV solver tested by pricing at a known vol, then recovering the same vol from the price.
 - **Synthetic surface tests**: Construction of `VolSurface` from BS-generated quotes to test arb detection on clean data; deliberate injection of violations (parity break, monotonicity break, butterfly break, calendar break) to test detection.
