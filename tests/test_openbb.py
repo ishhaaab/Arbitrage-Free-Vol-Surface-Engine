@@ -588,8 +588,9 @@ class TestOpenBBFetchChainMainPath:
         adjusted settlement date."""
         from arbfree_vol.time import Calendar
 
+        ref_date = date.today()
         # Pick an expiry that lands on a Saturday by scanning forward.
-        d = date.today() + timedelta(days=45)
+        d = ref_date + timedelta(days=45)
         while d.weekday() != 5:
             d += timedelta(days=1)
 
@@ -620,20 +621,56 @@ class TestOpenBBFetchChainMainPath:
         surface, _, _ = openbb_mod.fetch_chain("SPY", calendar=cal)
 
         assert len(surface.slices) == 1
-        # The Saturday is rolled forward to Monday: T is the Monday expiry.
-        expected_monday = cal.adjust(d, "following")
-        expected_T = (expected_monday - date.today()).days / 365.0
+        # The Saturday is rolled forward to the next business day: T is the
+        # adjusted date's year fraction from the SAME captured reference date.
+        expected_adjusted = cal.adjust(d, "following")
+        expected_T = (expected_adjusted - ref_date).days / 365.0
         assert surface.slices[0].expiry_time == pytest.approx(expected_T)
 
-    def test_fetch_chain_calendar_string_accepted(self, monkeypatch) -> None:
-        """calendar may be passed as the string name; it is resolved to a
-        Calendar instance internally."""
-        df = _chains_df()
-        _fake_openbb(monkeypatch, df)
+    def test_fetch_chain_calendar_string_matches_instance(self, monkeypatch) -> None:
+        """A string calendar name behaves exactly like the equivalent
+        Calendar instance: the same non-business-day expiry is rolled to the
+        same adjusted T."""
+        from arbfree_vol.time import Calendar
 
-        surface, _, _ = openbb_mod.fetch_chain("SPY", calendar="USNYSE")
+        ref_date = date.today()
+        d = ref_date + timedelta(days=45)
+        while d.weekday() != 5:
+            d += timedelta(days=1)
 
-        assert len(surface.slices) >= 1
+        def _make_rows():
+            rows = []
+            for strike_frac in (0.9, 1.0, 1.1):
+                strike = 100.0 * strike_frac
+                for otype, intrinsic in (
+                    ("call", max(0.0, 100.0 - strike)),
+                    ("put", max(0.0, strike - 100.0)),
+                ):
+                    mid = intrinsic + 2.5
+                    rows.append({
+                        "strike": strike,
+                        "option_type": otype,
+                        "expiration": d.isoformat(),
+                        "bid": round(mid * 0.95, 2),
+                        "ask": round(mid * 1.05, 2),
+                        "last_trade_price": round(mid, 2),
+                        "open_interest": 100,
+                        "volume": 10,
+                        "underlying_price": 100.0,
+                    })
+            return pd.DataFrame(rows)
+
+        # Instance calendar
+        _fake_openbb(monkeypatch, _make_rows())
+        surface_inst, _, _ = openbb_mod.fetch_chain("SPY", calendar=Calendar("USNYSE"))
+
+        # String calendar — same chain, same result
+        _fake_openbb(monkeypatch, _make_rows())
+        surface_str, _, _ = openbb_mod.fetch_chain("SPY", calendar="USNYSE")
+
+        assert surface_inst.slices[0].expiry_time == pytest.approx(
+            surface_str.slices[0].expiry_time
+        )
 
     def test_fetch_chain_fred_curve_applies_per_slice_rates(
         self, monkeypatch,
