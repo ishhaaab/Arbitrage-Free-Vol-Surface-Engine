@@ -644,9 +644,10 @@ def test_fetch_chain_calendar_string_and_min_t_skip(
     sat = today + timedelta(days=30)
     while sat.weekday() != 5:
         sat += timedelta(days=1)
-    # Keep it before 2030-08-15 so it is the first expiry processed.
-    # Add a today+2 day expiry that is too close (T <= min_T_years) so
-    # the skip branch runs for it.
+    # The options list is processed IN ORDER, so the Saturday expiry is
+    # handled before the later 2030-08-15 expiry regardless of the
+    # generated Saturday's calendar position.  Add a today+2 day expiry
+    # that is too close (T <= min_T_years) so the skip branch runs for it.
     mock_ticker.options = [
         (today + timedelta(days=2)).isoformat(),
         sat.isoformat(),

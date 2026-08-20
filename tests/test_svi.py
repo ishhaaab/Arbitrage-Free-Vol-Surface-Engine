@@ -181,7 +181,9 @@ def test_calibrate_raises_on_non_convergence(monkeypatch) -> None:
         calib_mod, "least_squares", lambda *a, **k: _FailedResult()
     )
 
-    with pytest.raises(RuntimeError, match="SVI calibration failed"):
+    with pytest.raises(
+        RuntimeError, match="SVI calibration failed: The maximum number"
+    ):
         calibrate(points)
 
 
