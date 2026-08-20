@@ -24,6 +24,7 @@ import logging
 import sys
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from arbfree_vol.config import load_config
 from arbfree_vol.rates import YieldTermStructure, build_fred_curve
@@ -147,34 +148,29 @@ def _repair_build_payload(report, metrics) -> dict:  # type: ignore[no-untyped-d
     }
 
 
-def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
+def _repair_ingest(
+    args: argparse.Namespace,
+    cfg: dict,
+    csv_path: Path,
+    dc: DayCount,
+    calendar: Calendar | None,
+    day_count_str: str,
+    calendar_name: str | None,
+) -> tuple[Any, Any] | int:
+    """Ingest stage: load + clean the chain CSV into a surface.
+
+    Returns ``(surface, rejected)``, or exit code 1 on load failure.
+    """
     from arbfree_vol.ingestion.loader import load_chain_csv
-    from arbfree_vol.repair.engine import repair
 
-    csv_path = Path(args.chain)
-    if not csv_path.exists():
-        print(f"error: chain file not found: {csv_path}", file=sys.stderr)
-        return 2
-
-    err = _repair_validate_exclusive(args)
-    if err is not None:
-        return err
-
-    day_count_str = _resolve_day_count(getattr(args, "day_count", None), cfg)
-    calendar_name = _resolve_calendar(getattr(args, "calendar", None), cfg)
-
-    try:
-        dc = _as_day_count(day_count_str)
-    except ValueError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 2
-
-    calendar = _as_calendar(calendar_name)
     risk_free_arg = _resolve_risk_free(args, cfg, day_count_str)
     div_yield = _resolve_div_yield(args, cfg)
     as_of_date = _parse_as_of(getattr(args, "as_of", None))
 
-    print(f"[ingest] loading {csv_path} (spot={args.spot} day_count={dc.convention} calendar={calendar_name or 'none'})")
+    print(
+        f"[ingest] loading {csv_path} (spot={args.spot} "
+        f"day_count={dc.convention} calendar={calendar_name or 'none'})"
+    )
     try:
         surface, rejected = load_chain_csv(
             csv_path,
@@ -195,6 +191,13 @@ def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
         for rec in rejected[:20]:
             print(f"  reject {rec.rule.value}: {rec.detail}")
 
+    return surface, rejected
+
+
+def _repair_run(args: argparse.Namespace, surface: Any) -> tuple[Any, Any]:
+    """Execute stage: fit the repair and report remaining violations."""
+    from arbfree_vol.repair.engine import repair
+
     report = repair(surface, use_ssvi=bool(args.use_ssvi), use_sabr=bool(args.use_sabr))
     m = report.metrics
     print(
@@ -205,10 +208,19 @@ def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
     if report.remaining_violations.violations and getattr(args, "verbose", False):
         for v in report.remaining_violations.violations[:20]:
             print(f"  remaining {v.kind.value}: {v.detail}")
+    return report, m
 
+
+def _repair_emit(
+    args: argparse.Namespace,
+    cfg: dict,
+    report: Any,
+    metrics: Any,
+) -> None:
+    """Output stage: optional JSON dump + optional plot stub."""
     out = getattr(args, "output", None) or cfg.get("output")
     if out:
-        _write_json(out, _repair_build_payload(report, m))
+        _write_json(out, _repair_build_payload(report, metrics))
 
     if getattr(args, "plot", False):
         try:
@@ -218,6 +230,37 @@ def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
         except Exception as exc:
             print(f"[plot] skipped: {exc}", file=sys.stderr)
 
+
+def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
+    csv_path = Path(args.chain)
+    if not csv_path.exists():
+        print(f"error: chain file not found: {csv_path}", file=sys.stderr)
+        return 2
+
+    err = _repair_validate_exclusive(args)
+    if err is not None:
+        return err
+
+    day_count_str = _resolve_day_count(getattr(args, "day_count", None), cfg)
+    calendar_name = _resolve_calendar(getattr(args, "calendar", None), cfg)
+
+    try:
+        dc = _as_day_count(day_count_str)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    calendar = _as_calendar(calendar_name)
+
+    ingested = _repair_ingest(
+        args, cfg, csv_path, dc, calendar, day_count_str, calendar_name
+    )
+    if isinstance(ingested, int):
+        return ingested
+    surface, rejected = ingested
+
+    report, metrics = _repair_run(args, surface)
+    _repair_emit(args, cfg, report, metrics)
     return 0
 
 
