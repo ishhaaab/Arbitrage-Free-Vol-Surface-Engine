@@ -8,6 +8,13 @@ the ``(r, q)`` orchestration that both ``ingestion.yahoo`` and
 re-import these names so their call sites keep working unchanged, and so
 a fix to the estimation logic lands in exactly one place.
 
+The rate-source SEAM (``resolve_rate_curve``, ``apply_curve_rates``,
+``resolve_index_q``) is the single home for the policy both fetchers
+previously inlined: supplied curve > FRED curve > shared ^IRX
+orchestration, per-slice ``r(T)`` threading, and the index parity-``q``
+reconcile.  The fetchers call the seam instead of re-implementing the
+blocks, so a rate-policy change lands in exactly one file.
+
 This module does not hard-require ``yfinance`` at import time: it is
 imported lazily inside the rate helpers so that importing this module
 (or the ``openbb`` ingestion module that re-imports its names) does not
@@ -21,6 +28,7 @@ import math
 
 from arbfree_vol.models.surface import ExpirySlice
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.rates import YieldTermStructure, build_fred_curve
 
 _logger = logging.getLogger(__name__)
 
@@ -374,3 +382,60 @@ def fetch_rates(symbol: str, is_index: bool, ticker=None) -> tuple[float, float]
         r = 0.05
 
     return r, q
+
+
+# ── Shared rate-source seam ─────────────────────────────────────────
+# Both ``ingestion.yahoo`` and ``ingestion.openbb`` run the SAME rate
+# policy: a supplied curve wins, else ``use_fred_curve`` builds one,
+# else the shared ^IRX orchestration; then per-slice ``r(T)`` is
+# threaded from the curve; then index symbols reconcile q per-expiry
+# via put-call parity.  These three functions are the ONE home for that
+# policy — the fetchers call them instead of re-implementing the blocks.
+
+
+def resolve_rate_curve(
+    curve: YieldTermStructure | None,
+    use_fred_curve: bool,
+) -> YieldTermStructure | None:
+    """Rate-source policy: supplied curve > FRED curve > None (^IRX).
+
+    Single home for the FRED/^IRX sourcing decision shared by the
+    yfinance and OpenBB ingestion adapters: a supplied curve wins,
+    otherwise ``use_fred_curve`` builds one (network FRED fetch), and
+    ``None`` signals the shared ^IRX orchestration.
+    """
+    if curve is not None:
+        return curve
+    if use_fred_curve:
+        return build_fred_curve()
+    return None
+
+
+def apply_curve_rates(
+    slices: list[ExpirySlice],
+    curve: YieldTermStructure | None,
+) -> None:
+    """Thread per-slice ``risk_free = r(T)`` from the curve; no-op when None."""
+    if curve is None:
+        return
+    for sl in slices:
+        sl.risk_free = curve.zero_rate(sl.expiry_time)
+
+
+def resolve_index_q(
+    slices: list[ExpirySlice],
+    spot: float,
+    r: float,
+    symbol: str,
+    fallback_q: float,
+) -> float:
+    """Index q reconcile: per-expiry put-call parity, or the pre-loop q.
+
+    Index symbols with at least one slice re-estimate q per-expiry via
+    put-call parity (representative-ETF fallback inside); non-index
+    symbols or an empty chain keep the pre-loop ``fallback_q`` unchanged.
+    This is the exact policy both fetchers previously inlined.
+    """
+    if not symbol.startswith("^") or not slices:
+        return fallback_q
+    return estimate_index_dividend_yields(slices, spot, r, symbol)

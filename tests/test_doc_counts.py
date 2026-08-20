@@ -1,6 +1,6 @@
 """Guard the suite-size claims in docs/AGENTS.md.
 
-``docs/AGENTS.md`` states the current suite size ("50 test files, 568
+``docs/AGENTS.md`` states the current suite size ("53 test files, 628
 tests").  The claim and the actual suite drift apart whenever files or
 tests are added or removed, so this test pins them together: refresh the
 numbers with ``pytest --collect-only -q`` and update ``docs/AGENTS.md``
@@ -15,9 +15,9 @@ from pathlib import Path
 _DOC = Path(__file__).resolve().parent.parent / "docs" / "AGENTS.md"
 
 # Refresh with `pytest --collect-only -q`:
-#   tests   = collected items (619 = 608 passing + 11 deselected, 2026-08-19)
+#   tests   = collected items (628 = 617 passing + 11 deselected, 2026-08-20)
 #   files   = derived from the tree below, no constant needed
-_EXPECTED_TESTS = 619
+_EXPECTED_TESTS = 628
 
 
 def _suite_claim() -> tuple[int, int]:

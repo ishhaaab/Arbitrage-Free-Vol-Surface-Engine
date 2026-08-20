@@ -21,11 +21,13 @@ from arbfree_vol.data.snapshot_guard import check_snapshot_time
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    estimate_index_dividend_yields,
+    apply_curve_rates,
     fetch_rates,
+    resolve_index_q,
+    resolve_rate_curve,
 )
 from arbfree_vol.models.surface import ExpirySlice, VolSurface
-from arbfree_vol.rates import YieldTermStructure, build_fred_curve
+from arbfree_vol.rates import YieldTermStructure
 from arbfree_vol.time import DayCount, Calendar
 
 _logger = logging.getLogger(__name__)
@@ -270,14 +272,12 @@ def fetch_chain(
     raw_df = _fetch_raw_chain(obb, symbol, provider)
 
     # Rates: FRED curve / explicit curve -> per-slice r(T); otherwise ^IRX
-    _fred_curve: YieldTermStructure | None = None
-    if curve is not None:
-        _fred_curve = curve
-    elif use_fred_curve:
-        _fred_curve = build_fred_curve()
+    _fred_curve: YieldTermStructure | None = resolve_rate_curve(
+        curve, use_fred_curve
+    )
 
     # ── Spot price (and r/q baseline) ──────────────────────────────────
-    spot, r, q, _is_index = _resolve_spot_and_rates(obb, symbol, provider, raw_df)
+    spot, r, q, _ = _resolve_spot_and_rates(obb, symbol, provider, raw_df)
     if _fred_curve is not None:
         r = _fred_curve.zero_rate(1.0)
 
@@ -293,14 +293,14 @@ def fetch_chain(
         day_count=_dc, calendar=_cal,
     )
 
-    if _fred_curve is not None:
-        for sl in slices:
-            sl.risk_free = _fred_curve.zero_rate(sl.expiry_time)
+    # per-slice r(T) from curve when available
+    apply_curve_rates(slices, _fred_curve)
 
-    # For index symbols, estimate q per-expiry via put-call parity.
-    # If all slices fail estimation, fall back to representative ETF yield.
-    if _is_index and slices:
-        q = estimate_index_dividend_yields(slices, spot, r, symbol)
+    # Reconcile index q per-expiry via put-call parity.  Non-index
+    # symbols (or an empty chain) keep the pre-loop q unchanged; if all
+    # slices fail estimation, the seam falls back to representative ETF
+    # yield.
+    q = resolve_index_q(slices, spot, r, symbol, q)
 
     if not slices:
         raise ValueError(

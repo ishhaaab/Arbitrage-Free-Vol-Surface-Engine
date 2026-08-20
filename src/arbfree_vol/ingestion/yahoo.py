@@ -23,12 +23,14 @@ from arbfree_vol.models.surface import VolSurface, ExpirySlice
 from arbfree_vol.ingestion.cleaning import RejectionRecord
 from arbfree_vol.ingestion._common import build_slice
 from arbfree_vol.ingestion._index_rates import (
-    estimate_index_dividend_yields,
+    apply_curve_rates,
     fetch_rates,
+    resolve_index_q,
+    resolve_rate_curve,
 )
 from arbfree_vol.data.quality import DataQualityConfig, DropRecord
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
-from arbfree_vol.rates import YieldTermStructure, build_fred_curve
+from arbfree_vol.rates import YieldTermStructure
 from arbfree_vol.time import DayCount, Calendar
 
 _logger = logging.getLogger(__name__)
@@ -46,16 +48,11 @@ def _resolve_rates(
     Returns ``(r, q, fred_curve)``.  ``fred_curve`` is ``None`` on the
     ^IRX path; when a curve is present, surface-level ``r`` is its rate
     at ~1y for display and per-slice ``r(T)`` is threaded later by
-    ``_apply_curve_rates``.  ``q`` comes from the shared orchestration
+    ``apply_curve_rates``.  ``q`` comes from the shared orchestration
     either way.
     """
     is_index = symbol.startswith("^")
-    fred_curve: YieldTermStructure | None = None
-    if curve is not None:
-        fred_curve = curve
-    elif use_fred_curve:
-        fred_curve = build_fred_curve()
-
+    fred_curve = resolve_rate_curve(curve, use_fred_curve)
     if fred_curve is not None:
         _, q = fetch_rates(symbol, is_index, ticker)
         r = fred_curve.zero_rate(1.0)
@@ -127,17 +124,6 @@ def _build_slices(
             slices.append(sl)
 
     return slices, all_rejected, all_quality_drops
-
-
-def _apply_curve_rates(
-    slices: list[ExpirySlice],
-    curve: YieldTermStructure | None,
-) -> None:
-    """Thread per-slice ``risk_free = r(T)`` from the curve; no-op when None."""
-    if curve is None:
-        return
-    for sl in slices:
-        sl.risk_free = curve.zero_rate(sl.expiry_time)
 
 
 def fetch_chain(
@@ -228,14 +214,13 @@ def fetch_chain(
     )
 
     # per-slice r(T) from curve when available
-    _apply_curve_rates(slices, _fred_curve)
+    apply_curve_rates(slices, _fred_curve)
 
-    # For index symbols, estimate q per-expiry via put-call parity.
-    # If all slices fail estimation, fall back to representative ETF yield.
-    _is_index = symbol.startswith("^")
-    if _is_index and slices:
-        # use the curve's per-slice r when present for the parity solve
-        q = estimate_index_dividend_yields(slices, spot, r, symbol)
+    # Reconcile index q per-expiry via put-call parity.  Non-index
+    # symbols (or an empty chain) keep the pre-loop q unchanged; if all
+    # slices fail estimation, the seam falls back to representative ETF
+    # yield.
+    q = resolve_index_q(slices, spot, r, symbol, q)
 
     return (
         VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices),
