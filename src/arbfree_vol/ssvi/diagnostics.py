@@ -1,0 +1,897 @@
+"""Diagnostics for eSSVI slices that take the repair-engine fallback path.
+
+Investigates why SPY eSSVI slices take the fallback path (hard-constrained
+H&M Prop 3.1 fit fails; unconstrained per-slice fit succeeds) by running,
+per fallback slice:
+
+- slice analytics (T, ATM vol/w, 25d/10d skew, k-range)
+- the unconstrained fit (theta/rho/psi + RMSE)
+- hard-constrained fit attempts: default seed, warm-start from the
+  unconstrained params, and ``n_restarts`` independent constrained solves
+  each started from its own seed-derived initial point
+- whether the unconstrained params already satisfy H&M with neighbors
+
+This is a RESEARCH / DIAGNOSTIC module, not a library hot path.  Its
+outputs are snapshot- and optimizer-dependent:
+
+- the data is fetched live (yfinance) at run time, or built synthetically
+  when the fetch fails — the numbers change day to day;
+- the hard-constrained fits depend on the scipy optimizer (trust-constr
+  with an SLSQP retry), its tolerances, and the starting point, so the
+  "converged" columns are statements about this optimizer run, not about
+  the data in general.
+
+The synthetic fixture (``_build_synthetic_data``) re-arms the diagnostic
+for the current fitter: the original hump configuration used to fail on
+T = 0.0849 / 0.2575 / 0.4274, but the optimizer retry added for the
+sequential fitter (commit 8061f5c) now converges there, so the old
+fixture produced zero fallbacks.  The current config keeps the vol hump,
+deepens the inversion (rho -0.62), and FLIPS rho positive (+0.20) on the
+declining leg (T=0.5), which the calendar-ratio constraint cannot
+follow; verified deterministic on scipy 1.17.1 with fallbacks at
+T = 0.4270 / 0.7500 / 1.0000.
+
+Run via the thin driver script: ``python scripts/diagnose_fallback_slices.py``.
+"""
+
+import importlib.util
+from math import log, sqrt
+
+import numpy as np
+
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
+from arbfree_vol.ssvi.term_structure import (
+    fit_ssvi_surface_sequential,
+    verify_hm_condition,
+    _fit_slice,
+    _butterfly_constraints,
+)
+from arbfree_vol.variance import slice_total_variance
+from arbfree_vol.models.surface import VolSurface, ExpirySlice
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
+
+
+# ── Data fetching ────────────────────────────────────────────────────
+
+
+def fetch_spy_data() -> tuple[VolSurface, list]:
+    """Fetch SPY option data via yfinance, same approach as the demo."""
+    if importlib.util.find_spec("yfinance") is None:
+        print("yfinance not installed. Using synthetic fallback data.")
+        return _build_synthetic_data()
+
+    from arbfree_vol.ingestion.yahoo import fetch_chain
+    try:
+        surface, rejected, quality_drops = fetch_chain("SPY", max_expiries=20, min_T_years=7.0 / 365.0)
+        return surface, rejected
+    except Exception as e:
+        print(f"yfinance fetch failed ({e}). Using synthetic fallback data.")
+        return _build_synthetic_data()
+
+
+def _build_synthetic_data() -> tuple[VolSurface, list]:
+    """Build synthetic SPY-like data that triggers the fallback path.
+
+    Term structure with a vol hump at 0.25-0.5y, DEEP negative skew on
+    the hump (rho -0.62), and an abrupt rho FLIP to +0.20 at T=0.5 —
+    the calendar-ratio constraint cannot follow the flip while the
+    remaining slices stay monotone, so the hard-constrained fit fails
+    deterministically on T=0.427/0.75/1.00 (verified scipy 1.17.1).
+
+    This re-arms the diagnostic for the current fitter: the original
+    hump config (vol 0.22->0.32, rho -0.45/-0.5) no longer fails since
+    the sequential fitter gained an SLSQP retry (commit 8061f5c).
+    """
+    spot = 550.0
+    r, q = 0.05, 0.013
+
+    strikes_base = [spot * x for x in [
+        0.85, 0.88, 0.90, 0.92, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99,
+        1.00, 1.01, 1.02, 1.03, 1.04, 1.05, 1.06, 1.08, 1.10, 1.12, 1.15,
+    ]]
+
+    # (T, ATM vol, rho, psi shift): vol hump at 0.25-0.5y with a sharp
+    # negative->positive skew flip at the declining leg.
+    expiry_configs = [
+        (0.03,  0.20, -0.45, 0.0),   # very short: lower vol
+        (0.085, 0.30, -0.62, 0.0),   # hump rising, deep inversion
+        (0.13,  0.33, -0.62, 0.0),
+        (0.18,  0.35, -0.62, 0.0),
+        (0.258, 0.36, -0.60, 0.0),   # hump peak
+        (0.33,  0.35, -0.56, 0.0),   # declining
+        (0.427, 0.33, -0.52, 0.0),   # declining — fallback
+        (0.50,  0.31,  0.20, 0.0),   # rho FLIP -> unrepresentable
+        (0.75,  0.28, -0.20, 0.0),   # fallback
+        (1.00,  0.26, -0.34, 0.0),   # fallback
+        (1.50,  0.24, -0.30, 0.0),
+        (2.00,  0.22, -0.27, 0.0),
+    ]
+
+    slices = []
+    for T, atm_vol, rho, psi_shift in expiry_configs:
+        F = spot * np.exp((r - q) * T)
+        psi = 0.5 + 0.1 * (T ** 0.5) + psi_shift
+
+        quotes = _build_quotes_for_expiry(spot, F, T, r, q, atm_vol, rho, psi, strikes_base)
+        sl = ExpirySlice(expiry_time=T, quotes=quotes)
+        slices.append(sl)
+
+    surface = VolSurface(spot=spot, risk_free=r, div_yield=q, slices=slices)
+    return surface, []
+
+
+def _build_quotes_for_expiry(
+    spot: float,
+    F: float,
+    T: float,
+    r: float,
+    q: float,
+    atm_vol: float,
+    rho: float,
+    psi: float,
+    strikes_base: list[float],
+) -> list:
+    """Build CALL/PUT quotes for every base strike at one expiry.
+
+    Each quote's price comes from the SSVI smile (``ssvi_w``) converted to
+    Black-Scholes price via ``price_floats``; strikes whose price is not
+    economically positive (> $0.01) are dropped.
+    """
+    from arbfree_vol.models.surface import Quote
+    from arbfree_vol.pricing.black_scholes import price_floats
+
+    theta = atm_vol ** 2 * T
+
+    quotes = []
+    for K in strikes_base:
+        k = log(K / F)
+        w = ssvi_w(k, theta, rho, psi)
+        sigma = sqrt(w / T) if T > 0 else atm_vol
+        for otype in (OptionType.CALL, OptionType.PUT):
+            price = price_floats(spot, K, T, r, q, sigma,
+                                 is_call=(otype == OptionType.CALL))
+            if price > 0.01:
+                quotes.append(Quote(strike=K, option_type=otype, price=price))
+    return quotes
+
+
+# ── Slice data extraction ────────────────────────────────────────────
+
+
+def extract_slice_data(surface: VolSurface) -> list[tuple[float, list[tuple[float, float]]]]:
+    """Extract (T, [(k, w)]) from a VolSurface, same as the repair engine."""
+    fwd_curve = estimate_forward_curve(surface)
+    populate_per_slice_r(surface, fwd_curve)
+
+    slices_data = []
+    for sl in sorted(surface.slices, key=lambda s: s.expiry_time):
+        F = fwd_curve.get(sl.expiry_time)
+        if F is None:
+            continue
+        strike_w = slice_total_variance(surface, sl)
+        if len(strike_w) < 5:
+            continue
+        pts = [(log(strike / F), w) for strike, w in strike_w.items()]
+        pts.sort()
+        slices_data.append((sl.expiry_time, pts))
+    return slices_data
+
+
+# ── Slice analytics ──────────────────────────────────────────────────
+
+
+def compute_slice_analytics(T: float, points: list[tuple[float, float]]) -> dict:
+    """Compute descriptive stats for a slice: ATM vol, skew measures."""
+    ks = np.array([k for k, _ in points])
+    ws = np.array([w for _, w in points])
+
+    # ATM: interpolate w at k=0
+    atm_w = float(np.interp(0.0, ks, ws))
+    atm_vol = sqrt(atm_w / T) if T > 0 else 0.0
+
+    # 25-delta skew (approximate: k ~ -0.6745 for 25-delta put, k ~ +0.6745 for call)
+    k_25d_put = -0.6745
+    k_25d_call = 0.6745
+    w_25d_put = float(np.interp(k_25d_put, ks, ws))
+    w_25d_call = float(np.interp(k_25d_call, ks, ws))
+    skew_25d = (sqrt(w_25d_put / T) - sqrt(w_25d_call / T)) if T > 0 else 0.0
+
+    # 10-delta skew (approximate: k ~ -1.2816 for 10-delta put)
+    k_10d_put = -1.2816
+    k_10d_call = 1.2816
+    w_10d_put = float(np.interp(k_10d_put, ks, ws))
+    w_10d_call = float(np.interp(k_10d_call, ks, ws))
+    skew_10d = (sqrt(w_10d_put / T) - sqrt(w_10d_call / T)) if T > 0 else 0.0
+
+    return {
+        "T": T,
+        "n_points": len(points),
+        "atm_vol": atm_vol,
+        "atm_w": atm_w,
+        "skew_25d": skew_25d,
+        "skew_10d": skew_10d,
+        "k_range": (float(ks.min()), float(ks.max())),
+    }
+
+
+# ── Hard-constrained fit attempts ────────────────────────────────────
+
+
+def _build_violation_info(params: SSVIParams, prev: SSVIParams | None) -> dict:
+    """Build the constraint-violation info dict for a fitted slice.
+
+    Encodes butterfly-feasibility (bf_min_residual) and, when a
+    previous slice exists, calendar-feasibility (theta_delta,
+    chi_delta, ratio, ratio_ok).  Shared by the hard-constrained and
+    warm-start diagnostics so the two paths cannot drift.
+    """
+    chi = params.theta * params.psi
+    bf_resid = _butterfly_constraints(params.theta, params.rho, params.psi)
+
+    violation_info = {
+        "bf_min_residual": float(bf_resid.min()),
+        "theta": params.theta,
+        "rho": params.rho,
+        "psi": params.psi,
+        "chi": chi,
+    }
+
+    # Calendar constraint violations (if prev exists)
+    if prev is not None:
+        prev_chi = prev.theta * prev.psi
+        violation_info["theta_delta"] = params.theta - prev.theta
+        violation_info["chi_delta"] = chi - prev_chi
+        denom = max(chi - prev_chi, 1e-6)
+        ratio = (params.rho * chi - prev.rho * prev_chi) / denom
+        violation_info["ratio"] = ratio
+        violation_info["ratio_ok"] = abs(ratio) <= 1.0 + 1e-8
+
+    return violation_info
+
+
+def try_hard_constrained(
+    points: list[tuple[float, float]],
+    prev: SSVIParams | None,
+    label: str = "default",
+) -> dict:
+    """Try the hard-constrained _fit_slice; report success/failure and params."""
+    try:
+        params = _fit_slice(points, prev=prev)
+        # Check constraint violations at the solution
+        violation_info = _build_violation_info(params, prev)
+
+        return {
+            "label": label,
+            "converged": True,
+            "params": params,
+            "violations": violation_info,
+        }
+    except RuntimeError as e:
+        return {
+            "label": label,
+            "converged": False,
+            "params": None,
+            "error": str(e),
+        }
+
+
+def try_warm_start(
+    points: list[tuple[float, float]],
+    prev: SSVIParams | None,
+    warm_params: SSVIParams,
+    label: str = "warm-start",
+) -> dict:
+    """Run the hard-constrained optimizer from a caller-supplied start point.
+
+    This is the module-local wrapper that passes a start through to the
+    constrained optimizer (``_fit_slice`` has no ``start`` parameter, so
+    the optimizer loop is reproduced here with the given initial point).
+    It is the key diagnostic: does a given starting point let the
+    constrained optimizer converge?
+
+    Returns a dict describing the run:
+    - "label": identifier for this attempt
+    - "start": the actual initial point used, as SSVIParams
+    - "x0": the internal (theta, u, v) initial point passed to scipy
+    - "converged": bool
+    - on success: "params", "violations", "final_objective",
+      "optimizer_status", "optimizer_message"
+    - on failure: "error", "final_objective", "optimizer_status",
+      "optimizer_message" (status/message from the last solver run)
+    """
+    # We need to temporarily monkeypatch the seed in _fit_slice.
+    # Instead, let's directly call the optimizer with the warm-started x0.
+    from scipy.optimize import minimize, NonlinearConstraint, Bounds
+
+    ks = np.array([k for k, _ in points], dtype=np.float64)
+    ws = np.array([w for _, w in points], dtype=np.float64)
+
+    # Convert warm_params to internal (theta, u, v) representation
+    theta0 = float(warm_params.theta)
+    rho0 = float(np.clip(warm_params.rho, -0.99, 0.99))
+    p0 = float(np.clip(warm_params.psi, 1e-6, 20.0))
+    u0 = float(np.arctanh(rho0))
+    v0 = float(np.log(p0))
+    x0 = np.array([theta0, u0, v0], dtype=np.float64)
+    start_params = SSVIParams(theta=theta0, rho=rho0, psi=p0)
+
+    eps_theta = 1e-9
+    eps_chi = 1e-6
+
+    bounds = Bounds(
+        lb=[1e-6, -6.0, float(np.log(1e-8))],
+        ub=[10.0, 6.0, float(np.log(20.0))],
+    )
+
+    def _objective(x):
+        theta, u, v = x
+        rho = float(np.tanh(u))
+        p = float(np.exp(v))
+        return float(np.sum(
+            (np.array([ssvi_w(float(k), theta, rho, p) for k in ks]) - ws) ** 2
+        ))
+
+    constraints = []
+
+    def _bf_con(x):
+        theta, u, v = x
+        rho = float(np.tanh(u))
+        p = float(np.exp(v))
+        return _butterfly_constraints(theta, rho, p)
+
+    constraints.append(NonlinearConstraint(_bf_con, 0.0, np.inf))
+
+    if prev is not None:
+        prev_chi = prev.theta * prev.psi
+
+        def _theta_nd(x):
+            return x[0] - prev.theta
+
+        constraints.append(NonlinearConstraint(_theta_nd, eps_theta, np.inf))
+
+        def _chi_nd(x):
+            theta, u, v = x
+            return theta * float(np.exp(v)) - prev_chi
+
+        constraints.append(NonlinearConstraint(_chi_nd, eps_chi, np.inf))
+
+        rho_prev_chi_prev = prev.rho * prev_chi
+
+        def _ratio_upper(x):
+            theta, u, v = x
+            rho = float(np.tanh(u))
+            chi = theta * float(np.exp(v))
+            denom = max(chi - prev_chi, eps_chi)
+            return (rho * chi - rho_prev_chi_prev) / denom
+
+        def _ratio_lower(x):
+            theta, u, v = x
+            rho = float(np.tanh(u))
+            chi = theta * float(np.exp(v))
+            denom = max(chi - prev_chi, eps_chi)
+            return -(rho * chi - rho_prev_chi_prev) / denom
+
+        constraints.append(NonlinearConstraint(_ratio_upper, -1.0, 1.0))
+        constraints.append(NonlinearConstraint(_ratio_lower, -1.0, 1.0))
+
+    def _run(method, x_init, tol, maxiter):
+        opts = {"maxiter": maxiter}
+        if method == "trust-constr":
+            opts["gtol"] = tol
+        else:
+            opts["ftol"] = tol
+        return minimize(
+            _objective, x_init, method=method, bounds=bounds,
+            constraints=constraints, options=opts,
+        )
+
+    result = _run("trust-constr", x0, tol=1e-10, maxiter=500)
+    success = result.success or (
+        getattr(result, "status", -1) in (1, 2, 3)
+    )
+
+    if not success:
+        result = _run("SLSQP", result.x, tol=1e-12, maxiter=1000)
+        success = result.success or (
+            getattr(result, "status", -1) in (0, 1, 2, 3)
+        )
+
+    if not success:
+        return {
+            "label": label,
+            "start": start_params,
+            "x0": x0.tolist(),
+            "converged": False,
+            "params": None,
+            "error": str(result.message),
+            "final_objective": float(_objective(result.x)),
+            "optimizer_status": int(result.status),
+            "optimizer_message": str(result.message),
+        }
+
+    theta, u, v = result.x
+    params = SSVIParams(
+        theta=float(theta),
+        rho=float(np.tanh(u)),
+        psi=float(np.exp(v)),
+    )
+
+    violation_info = _build_violation_info(params, prev)
+
+    return {
+        "label": label,
+        "start": start_params,
+        "x0": x0.tolist(),
+        "converged": True,
+        "params": params,
+        "violations": violation_info,
+        "final_objective": float(_objective(result.x)),
+        "optimizer_status": int(result.status),
+        "optimizer_message": str(result.message),
+    }
+
+
+def try_random_restarts(
+    points: list[tuple[float, float]],
+    prev: SSVIParams | None,
+    n_restarts: int = 5,
+) -> list[dict]:
+    """Run the hard-constrained fit from ``n_restarts`` random starts.
+
+    Every restart runs the constrained optimizer from its OWN seed-derived
+    start point: a random theta/rho/psi seed (per-restart RNG), refined by
+    an unconstrained least-squares solve.  The deterministic default-seed
+    attempt is NOT used as a gate — there is no "try default first, then
+    warm-start only on failure".  Each restart is an independent
+    constrained solve from its own initial point, and each returned dict
+    records the actual initial point ("start" / "x0") and the optimizer
+    result.
+    """
+    ws = np.array([w for _, w in points])
+    w_min = float(ws.min())
+
+    results = []
+    for i in range(n_restarts):
+        rng = np.random.RandomState(42 + i * 7)
+
+        # Random seed: theta in [w_min*0.5, w_min*2], rho in [-0.8, 0.1], psi in [0.1, 2.0]
+        theta_seed = rng.uniform(w_min * 0.5, w_min * 2.0)
+        rho_seed = rng.uniform(-0.8, 0.1)
+        psi_seed = rng.uniform(0.1, 2.0)
+
+        # Adjust for calendar constraints if prev exists
+        if prev is not None:
+            prev_chi = prev.theta * prev.psi
+            theta_seed = max(prev.theta + 1e-9, theta_seed)
+            chi_seed = theta_seed * psi_seed
+            if chi_seed < prev_chi + 1e-6:
+                psi_seed = (prev_chi + 1e-6) / theta_seed
+
+        rho_seed = float(np.clip(rho_seed, -0.99, 0.99))
+        psi_seed = float(np.clip(psi_seed, 1e-6, 20.0))
+
+        # Refine the random seed with an unconstrained least-squares solve
+        # to get this restart's seed-derived start point.
+        from scipy.optimize import least_squares as _ls
+
+        def _seed_resid(p):
+            th, rh, ps = p
+            return np.array([
+                ssvi_w(float(k), th, rh, ps) - float(w)
+                for k, w in points
+            ])
+
+        seed_result = _ls(
+            _seed_resid,
+            x0=[theta_seed, rho_seed, psi_seed],
+            bounds=([1e-6, -0.999, 1e-6], [10.0, 0.999, 20.0]),
+        )
+        seed_params = SSVIParams(
+            theta=float(seed_result.x[0]),
+            rho=float(seed_result.x[1]),
+            psi=float(seed_result.x[2]),
+        )
+
+        # EVERY restart runs the constrained optimizer from its own
+        # seed-derived start — the deterministic default-seed attempt is
+        # not used as a gate.
+        r = try_warm_start(points, prev, seed_params, label=f"restart-{i}")
+        results.append(r)
+
+    return results
+
+
+# ── Check if unconstrained params satisfy H&M with neighbors ────────
+
+
+def check_unconstrained_satisfies_hm(
+    all_params: list[tuple[float, SSVIParams]],
+    fallback_T: float,
+    unconstrained_params: SSVIParams,
+) -> dict:
+    """Check if the unconstrained fit's params satisfy H&M conditions
+    with both the predecessor and successor slices.
+
+    Returns a dict with:
+    - satisfies_with_prev: bool
+    - satisfies_with_next: bool
+    - satisfies_both: bool
+    - details: dict with the constraint values
+    """
+    # Find predecessor and successor
+    sorted_params = sorted(all_params, key=lambda x: x[0])
+
+    idx = None
+    for i, (T, _) in enumerate(sorted_params):
+        if abs(T - fallback_T) < 1e-6:
+            idx = i
+            break
+
+    result = {
+        "satisfies_with_prev": True,
+        "satisfies_with_next": True,
+        "satisfies_both": True,
+        "details": {},
+    }
+
+    if idx is None:
+        result["satisfies_both"] = False
+        return result
+
+    # Check with predecessor
+    if idx > 0:
+        prev_T, prev_p = sorted_params[idx - 1]
+        # Build params list with [prev, unconstrained] and check
+        test_params = [prev_p, unconstrained_params]
+        hm_ok = verify_hm_condition(test_params)
+        result["satisfies_with_prev"] = hm_ok
+
+        # Compute the actual constraint values
+        prev_chi = prev_p.theta * prev_p.psi
+        my_chi = unconstrained_params.theta * unconstrained_params.psi
+        denom = max(my_chi - prev_chi, 1e-6)
+        ratio = (unconstrained_params.rho * my_chi - prev_p.rho * prev_chi) / denom
+        result["details"]["prev_pair"] = {
+            "prev_T": prev_T,
+            "theta_delta": unconstrained_params.theta - prev_p.theta,
+            "chi_delta": my_chi - prev_chi,
+            "ratio": ratio,
+            "ratio_ok": abs(ratio) <= 1.0 + 1e-8,
+        }
+
+    # Check with successor
+    if idx < len(sorted_params) - 1:
+        next_T, next_p = sorted_params[idx + 1]
+        test_params = [unconstrained_params, next_p]
+        hm_ok = verify_hm_condition(test_params)
+        result["satisfies_with_next"] = hm_ok
+
+        my_chi = unconstrained_params.theta * unconstrained_params.psi
+        next_chi = next_p.theta * next_p.psi
+        denom = max(next_chi - my_chi, 1e-6)
+        ratio = (next_p.rho * next_chi - unconstrained_params.rho * my_chi) / denom
+        result["details"]["next_pair"] = {
+            "next_T": next_T,
+            "theta_delta": next_p.theta - unconstrained_params.theta,
+            "chi_delta": next_chi - my_chi,
+            "ratio": ratio,
+            "ratio_ok": abs(ratio) <= 1.0 + 1e-8,
+        }
+
+    result["satisfies_both"] = (
+        result["satisfies_with_prev"] and result["satisfies_with_next"]
+    )
+    return result
+
+
+# ── Main diagnostic ──────────────────────────────────────────────────
+
+
+def run_diagnostics() -> list[dict] | None:
+    """Run the full diagnostic pipeline; return the summary rows (None if no fallbacks)."""
+    print("=" * 72)
+    print("  Fallback Slice Diagnostic: SPY eSSVI term structure")
+    print("=" * 72)
+
+    # Step 1: Fetch data
+    print("\n[1/4] Fetching SPY data...")
+    surface, rejected = fetch_spy_data()
+    print(f"  Spot: {surface.spot:.2f}")
+    print(f"  Slices: {len(surface.slices)}")
+    print(f"  Quotes: {sum(len(s.quotes) for s in surface.slices)}")
+    if rejected:
+        print(f"  Rejected: {len(rejected)}")
+
+    # Step 2: Extract slice data
+    print("\n[2/4] Extracting (k, w) data...")
+    slices_data = extract_slice_data(surface)
+    print(f"  Extracted {len(slices_data)} slices")
+    for T, pts in slices_data:
+        print(f"    T={T:.4f}: {len(pts)} points")
+
+    # Step 3: Run sequential fit
+    print("\n[3/4] Running sequential eSSVI fit...")
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    print(f"  Fitted: {len(result.fitted_slices)} slices")
+    print(f"  Fallback: {len(result.fallback_slices)} slices")
+    if result.fallback_slices:
+        print(f"    T = {[f'{T:.4f}' for T in result.fallback_slices]}")
+    print(f"  Failed: {len(result.failed_slices)} slices")
+    if result.failed_slices:
+        print(f"    T = {[f'{T:.4f}' for T in result.failed_slices]}")
+
+    if not result.fallback_slices:
+        print("\n  No fallback slices found. Nothing to diagnose.")
+        return None
+
+    # Step 4: Detailed diagnostics for each fallback slice
+    print("\n[4/4] Detailed diagnostics for fallback slices...")
+    print("=" * 72)
+
+    # Build a map of all slices_data by T
+    data_by_T = {T: pts for T, pts in slices_data}
+
+    summary_rows = []
+
+    for fallback_T in result.fallback_slices:
+        pts = data_by_T.get(fallback_T)
+        if pts is None:
+            print("  ERROR: No data found for this T")
+            continue
+        row = _diagnose_slice(fallback_T, pts, result)
+        if row is not None:
+            summary_rows.append(row)
+
+    _print_summary_and_interpretation(summary_rows)
+
+    return summary_rows
+
+
+def _diagnose_slice(fallback_T: float, pts: list[tuple[float, float]], result) -> dict | None:
+    """Run the full diagnostic for one fallback slice.
+
+    Prints the slice analytics, unconstrained fit, predecessor, hard-constrained
+    fit attempts (default seed, warm-start, random restarts), and the H&M
+    neighbour check.  Returns the summary row dict, or None when the slice
+    could not be diagnosed (no data).
+    """
+    print(f"\n{'-' * 72}")
+    print(f"  FALLBACK SLICE: T = {fallback_T:.4f}")
+    print(f"{'-' * 72}")
+
+    # (a) Slice analytics
+    analytics = compute_slice_analytics(fallback_T, pts)
+    print("\n  Slice data:")
+    print(f"    T          = {analytics['T']:.4f}")
+    print(f"    n_points   = {analytics['n_points']}")
+    print(f"    ATM vol    = {analytics['atm_vol']:.4f}")
+    print(f"    ATM w      = {analytics['atm_w']:.6f}")
+    print(f"    25d skew   = {analytics['skew_25d']:.4f}")
+    print(f"    10d skew   = {analytics['skew_10d']:.4f}")
+    print(f"    k range    = [{analytics['k_range'][0]:.3f}, {analytics['k_range'][1]:.3f}]")
+
+    # (b) Unconstrained fit
+    unc_params, unc_rmse = _fit_unconstrained(pts)
+
+    # (c) Find predecessor (last hard-constrained fit before this T)
+    prev_params, prev_T = _find_predecessor(result.fitted_slices, fallback_T)
+    _print_predecessor(prev_params, prev_T)
+
+    # (d) Hard-constrained fit attempts
+    default_result, warm_result, n_restart_converged = _run_constrained_attempts(
+        pts, prev_params, unc_params
+    )
+
+    # (e) Check if unconstrained params satisfy H&M with neighbors
+    hm_check = _check_hm_neighbors(unc_params, result.fitted_slices, fallback_T)
+
+    # Summary row
+    return {
+        "T": fallback_T,
+        "unc_rmse": unc_rmse,
+        "default_converged": default_result["converged"],
+        "warm_start_converged": warm_result["converged"],
+        "restart_converged": n_restart_converged,
+        "unc_satisfies_hm": hm_check["satisfies_both"],
+    }
+
+
+def _fit_unconstrained(pts: list[tuple[float, float]]) -> tuple[SSVIParams | None, float]:
+    """Fit the slice unconstrained; return (params, RMSE), (None, nan) on failure."""
+    print("\n  Unconstrained fit (fit_ssvi_slice):")
+    try:
+        unc_params = fit_ssvi_slice(pts)
+        unc_rmse = sqrt(np.mean([
+            (ssvi_w(k, unc_params.theta, unc_params.rho, unc_params.psi) - w) ** 2
+            for k, w in pts
+        ]))
+        print(f"    theta = {unc_params.theta:.6f}")
+        print(f"    rho   = {unc_params.rho:.6f}")
+        print(f"    psi   = {unc_params.psi:.6f}")
+        print(f"    chi   = {unc_params.theta * unc_params.psi:.6f}")
+        print(f"    RMSE  = {unc_rmse:.8f}")
+        return unc_params, unc_rmse
+    except RuntimeError as e:
+        print(f"    FAILED: {e}")
+        return None, float("nan")
+
+
+def _find_predecessor(
+    fitted_slices: list[tuple[float, SSVIParams]],
+    fallback_T: float,
+) -> tuple[SSVIParams | None, float | None]:
+    """Return (params, T) of the last fitted slice with T < fallback_T.
+
+    Returns ``(None, None)`` when no predecessor exists.  The returned T
+    is the maturity of the selected predecessor, so callers can display
+    the same slice that was used for selection without re-deriving it.
+    Note: "last fitted slice" includes unconstrained fallback slices —
+    for consecutive fallbacks the predecessor may itself be unconstrained.
+    """
+    prev_params = None
+    prev_T = None
+    sorted_fitted = sorted(fitted_slices, key=lambda x: x[0])
+    for T_i, p_i in sorted_fitted:
+        if T_i < fallback_T:
+            prev_params = p_i
+            prev_T = T_i
+        else:
+            break
+    return prev_params, prev_T
+
+
+def _print_predecessor(prev_params, prev_T) -> None:
+    """Print the predecessor-slice params (or a none-found note)."""
+    if prev_params:
+        print("\n  Predecessor slice (last hard-constrained fit):")
+        print(f"    T     = {prev_T:.4f}")
+        print(f"    theta = {prev_params.theta:.6f}")
+        print(f"    rho   = {prev_params.rho:.6f}")
+        print(f"    psi   = {prev_params.psi:.6f}")
+        print(f"    chi   = {prev_params.theta * prev_params.psi:.6f}")
+    else:
+        print("\n  No predecessor (this is the first slice or all predecessors are fallback)")
+
+
+def _run_constrained_attempts(pts, prev_params, unc_params):
+    """Run the default-seed, warm-start, and random-restart fit attempts.
+
+    Returns (default_result, warm_result, n_restart_converged).
+    """
+    print("\n  Hard-constrained fit attempts:")
+
+    # Default seed
+    default_result = try_hard_constrained(pts, prev_params, label="default")
+    print("\n    [default seed]")
+    if default_result["converged"]:
+        v = default_result["violations"]
+        print("      CONVERGED")
+        print(f"      theta = {v['theta']:.6f}, rho = {v['rho']:.6f}, psi = {v['psi']:.6f}")
+        print(f"      chi = {v['chi']:.6f}, bf_min_resid = {v['bf_min_residual']:.6f}")
+        if prev_params and "ratio" in v:
+            print(f"      theta_delta = {v['theta_delta']:.6f}, chi_delta = {v['chi_delta']:.6f}")
+            print(f"      ratio = {v['ratio']:.6f}, ratio_ok = {v['ratio_ok']}")
+    else:
+        print(f"      FAILED: {default_result.get('error', 'unknown')}")
+
+    # Warm-start from unconstrained
+    if unc_params is not None:
+        warm_result = try_warm_start(pts, prev_params, unc_params)
+        print("\n    [warm-start from unconstrained]")
+        if warm_result["converged"]:
+            v = warm_result["violations"]
+            print("      CONVERGED")
+            print(f"      theta = {v['theta']:.6f}, rho = {v['rho']:.6f}, psi = {v['psi']:.6f}")
+            print(f"      chi = {v['chi']:.6f}, bf_min_resid = {v['bf_min_residual']:.6f}")
+            if prev_params and "ratio" in v:
+                print(f"      theta_delta = {v['theta_delta']:.6f}, chi_delta = {v['chi_delta']:.6f}")
+                print(f"      ratio = {v['ratio']:.6f}, ratio_ok = {v['ratio_ok']}")
+            print(f"      final_objective = {warm_result['final_objective']:.8f}")
+        else:
+            print(f"      FAILED: {warm_result.get('error', 'unknown')}")
+            print(f"      final_objective = {warm_result.get('final_objective', 'N/A')}")
+    else:
+        warm_result = {"converged": False}
+
+    # Random restarts — each is an independent constrained solve from
+    # its own seed-derived start (no default-seed gate).
+    restart_results = try_random_restarts(pts, prev_params, n_restarts=5)
+    n_restart_converged = sum(1 for r in restart_results if r["converged"])
+    print("\n    [5 random restarts — each constrained solve starts from its own seed-derived point]")
+    print(f"      Converged: {n_restart_converged} / 5")
+    for r in restart_results:
+        start = r.get("start")
+        if start is not None:
+            start_str = (f"theta={start.theta:.6f}, rho={start.rho:.6f}, "
+                         f"psi={start.psi:.6f}")
+        else:
+            start_str = "N/A"
+        if r["converged"]:
+            v = r["violations"]
+            print(f"        {r['label']}: start=({start_str}) -> "
+                  f"theta={v['theta']:.6f}, rho={v['rho']:.6f}, "
+                  f"psi={v['psi']:.6f}, bf_min={v['bf_min_residual']:.6f}, "
+                  f"status={r['optimizer_status']} "
+                  f"({r['optimizer_message']})")
+        else:
+            print(f"        {r['label']}: start=({start_str}) -> FAILED "
+                  f"[status={r['optimizer_status']} "
+                  f"{r['optimizer_message']}]")
+
+    return default_result, warm_result, n_restart_converged
+
+
+def _check_hm_neighbors(unc_params, fitted_slices, fallback_T: float) -> dict:
+    """Check whether the unconstrained fit satisfies H&M with neighbours."""
+    print("\n  Does the unconstrained fit satisfy H&M with neighbors?")
+    if unc_params is not None:
+        hm_check = check_unconstrained_satisfies_hm(
+            fitted_slices, fallback_T, unc_params
+        )
+        print(f"    satisfies_with_prev  = {hm_check['satisfies_with_prev']}")
+        print(f"    satisfies_with_next  = {hm_check['satisfies_with_next']}")
+        print(f"    satisfies_both       = {hm_check['satisfies_both']}")
+
+        for pair_name, pair_info in hm_check["details"].items():
+            print(f"    {pair_name}:")
+            for k, v in pair_info.items():
+                print(f"      {k} = {v}")
+    else:
+        hm_check = {"satisfies_both": False}
+
+    return hm_check
+
+
+def _print_summary_and_interpretation(summary_rows: list[dict]) -> None:
+    """Print the fallback-slice summary table and its interpretation.
+
+    The convergence interpretation is drawn from the summary rows: how many
+    slices fail with the default seed, how many of those are fixed by a
+    warm-start, and how many are fundamentally infeasible under H&M.
+    """
+    # ── Summary table ────────────────────────────────────────────────
+    print(f"\n{'=' * 72}")
+    print("  SUMMARY TABLE")
+    print(f"{'=' * 72}")
+    print(f"\n  {'T':>8}  {'unc-RMSE':>10}  {'default':>8}  {'warm-st':>8}  "
+          f"{'restart':>8}  {'unc-HM':>8}")
+    print(f"  {'-' * 58}")
+    for row in summary_rows:
+        print(f"  {row['T']:>8.4f}  {row['unc_rmse']:>10.6f}  "
+              f"{'YES' if row['default_converged'] else 'NO':>8}  "
+              f"{'YES' if row['warm_start_converged'] else 'NO':>8}  "
+              f"{row['restart_converged']:>5}/5   "
+              f"{'YES' if row['unc_satisfies_hm'] else 'NO':>8}")
+
+    # ── Interpretation ───────────────────────────────────────────────
+    print(f"\n{'=' * 72}")
+    print("  INTERPRETATION")
+    print(f"{'=' * 72}")
+
+    convergence_failures = [r for r in summary_rows
+                           if not r["default_converged"]]
+    warm_fixes = [r for r in summary_rows
+                  if not r["default_converged"] and r["warm_start_converged"]]
+    fundamental = [r for r in summary_rows
+                   if not r["default_converged"] and not r["unc_satisfies_hm"]]
+
+    print(f"\n  Total fallback slices: {len(summary_rows)}")
+    print(f"  Convergence failures (default seed): {len(convergence_failures)}")
+    print(f"  Warm-start fixes: {len(warm_fixes)}")
+    print(f"  Fundamental infeasibility: {len(fundamental)}")
+
+    if len(warm_fixes) >= 2:
+        print(f"\n  => OUTCOME A: Warm-start from unconstrained fit fixes {len(warm_fixes)} slices.")
+        print("     The hard-constrained fit has a convergence problem, not a fundamental issue.")
+        print("     Recommended: implement 2-stage strategy (default seed -> warm-start).")
+    elif len(fundamental) >= 2:
+        print("\n  => OUTCOME B: Unconstrained fit's params don't satisfy H&M with neighbors.")
+        print("     SPY data has a term-structure feature the SSVI parametrization can't represent.")
+        print("     Recommended: document as known limitation in docs/issues.md.")
+    else:
+        print("\n  => OUTCOME C: Mixed results.")
+        print("     Some slices are convergence failures (warm-start would fix them).")
+        print("     Others are fundamental infeasibility (document as limitation).")

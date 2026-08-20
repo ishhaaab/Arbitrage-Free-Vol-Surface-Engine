@@ -333,7 +333,8 @@ that's not a minimum (the constraint surface pushes it to a saddle
 point or boundary).
 
 **Why warm-start doesn't help:**
-Diagnostic analysis (`scripts/diagnose_fallback_slices.py`) confirms:
+Diagnostic analysis (`arbfree_vol.ssvi.diagnostics`, run via
+`scripts/diagnose_fallback_slices.py`) confirms:
 - The unconstrained fit's theta is ALWAYS lower than the predecessor's
   theta for fallback slices (theta_delta is negative).
 - Warm-starting the hard-constrained optimizer from the unconstrained
@@ -389,7 +390,8 @@ cannot represent this.
 approach until one of the mitigations above is implemented.
 
 **Diagnostic scripts:**
-- `scripts/diagnose_fallback_slices.py`: full diagnostic with
+- `scripts/diagnose_fallback_slices.py`: thin driver for the diagnostics
+  library (`arbfree_vol.ssvi.diagnostics`) — full diagnostic with
   warm-start and random-restart analysis.
 - `scripts/deep_dive_fallback.py`: theta term structure analysis and
   RMSE comparison.

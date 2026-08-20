@@ -17,6 +17,7 @@ violating quotes and refitting.
 | `src/arbfree_vol/svi/` | Raw SVI parameterization (5-param: a, b, rho, m, sigma). `model.py` has `svi_total_variance(k, ...)` and `svi_g(k, ...)`. `calibration.py` has `calibrate()` and `calibrate_constrained()`. |
 | `src/arbfree_vol/ssvi/` | SSVI/eSSVI (Gatheral-Jacquier). `ssvi_w(k, theta, rho, psi)`, `essvi_w(k, theta, rho, eta, gamma)`, `gatheral_jacquier_condition(theta, rho, psi)`. `to_raw_svi_params()` maps SSVI back to raw SVI for pipeline compatibility. |
 | `src/arbfree_vol/ssvi/term_structure.py` | eSSVI calendar-arb-free sequential joint fit (Hendriks & Martini 2019 Prop 3.1; Corbetta et al. 2019). `fit_ssvi_surface_sequential()`, `verify_hm_condition()`. |
+| `src/arbfree_vol/ssvi/diagnostics.py` | Fallback-slice diagnostics (research tool, promoted from `scripts/diagnose_fallback_slices.py`): `run_diagnostics()` runs the full pipeline over live SPY data or the deterministic synthetic W7 fixture (vol hump + rho flip → 3 fallbacks at T=0.427/0.75/1.00), with default-seed / warm-start / random-restart fit attempts (`try_hard_constrained`, `try_warm_start`, `try_random_restarts`) and the H&M neighbour check. Numbers are optimizer- and snapshot-dependent. |
 | `src/arbfree_vol/repair/` | Repair pipeline — `repair(surface, use_ssvi=False, use_sabr=False)`, `iterative_repair()`. Forward curve estimation via median put-call parity (`fwd_curve.py`). `report.py` defines `RejectedQuote`, `FittedSlice`, `FittedSSVISlice`, `FittedSABRSlice`, `RepairMetrics`, `RepairReport`. |
 | `src/arbfree_vol/cli.py` + `config.py` + `time/` + `rates/` | CLI (`arbfree repair|detect|price|fetch`, `build_parser()`, `main()`), YAML config (`Config`, `load_config`), DayCount/Calendar (`ACT/365F` default, `ACT/360`, `30/360`, `USNYSE`), YieldTermStructure + FRED Treasury+SOFR curve. |
 | `src/arbfree_vol/ingestion/` | Data sources — `yfinance.py:fetch_chain()` (live, with `^IRX` rates), `loader.py:load_chain_csv()`. `cleaning.py:clean_quotes()` applies 8 rejection rules with audit records. |
@@ -71,7 +72,7 @@ Model parameters, market conventions, and dataset-specific constants must be con
 
 ## Testing Approach
 
-- **54 test files, 658 tests** (645 passing + 13 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
+- **54 test files, 681 tests** (667 passing + 14 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
 - **Known-value regression**: BS prices and Greeks checked against independently computed reference values (`abs=1e-4` to `1e-6`).
 - **Round-trip**: IV solver tested by pricing at a known vol, then recovering the same vol from the price.
 - **Synthetic surface tests**: Construction of `VolSurface` from BS-generated quotes to test arb detection on clean data; deliberate injection of violations (parity break, monotonicity break, butterfly break, calendar break) to test detection.
@@ -102,7 +103,7 @@ Yahoo Finance / CSV → fetch_chain() / load_chain_csv()
 ## How to run
 
 ```
-python -m pytest tests/                          # all 646 tests
+python -m pytest tests/                          # all 681 tests
 python demo/yfinance/yfinance_demo.py --symbol SPY   # end-to-end SPY demo (7 plots)
 python demo/essvi/essvi_demo.py                  # raw SVI vs eSSVI comparison
 python demo/ticker_compare/ticker_compare.py     # cross-ticker SVI/eSSVI/SABR comparison
