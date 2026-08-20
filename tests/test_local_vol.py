@@ -511,7 +511,24 @@ class TestDupireDenominatorNan:
             fitted_slices=(sl_low, sl_high),
         )
 
-        # K=50 on the steep smile gives a negative denominator → nan.
+        # K=50 on the steep smile drives the Dupire denominator NEGATIVE —
+        # prove the mechanism directly, then confirm dupire_at maps it to nan.
+        from arbfree_vol.pricing.local_vol import (
+            _dw_dk, _d2w_dk2, _dupire_denominator,
+        )
+        from arbfree_vol.surface.interpolate import total_variance_at, _forward_at
+
+        F_T = _forward_at(fs, 1.0)
+        w = total_variance_at(fs, 50.0, 1.0)
+        k = math.log(50.0 / F_T)
+        dwdk = _dw_dk(fs, 50.0, 1.0, F_T)
+        d2w = _d2w_dk2(fs, 50.0, 1.0, F_T)
+        den = _dupire_denominator(w, k, dwdk, d2w)
+        assert den < 0.0, (
+            f"expected negative Dupire denominator at K=50 on the steep "
+            f"smile, got {den}"
+        )
+
         val = dupire_at(fs, K=50.0, T=1.0)
         assert math.isnan(val)
 
