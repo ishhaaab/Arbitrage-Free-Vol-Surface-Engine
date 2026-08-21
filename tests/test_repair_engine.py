@@ -27,6 +27,8 @@ Shared constants and surface-builder helpers live in
 import logging
 import pytest
 
+import numpy as np
+
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.repair.engine import repair
@@ -740,24 +742,71 @@ def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:
     assert "slice T=1.0000 has 2 (k,w) points" in caplog.text
 
 
-def test_repair_infeasible_true_when_grid_finds_remaining_violations() -> None:
+def test_repair_infeasible_true_when_grid_finds_remaining_violations(monkeypatch) -> None:
     """repair_infeasible must be True when the grid-based
-    detect_svi_surface finds remaining violations, even if the eSSVI
-    H&M parameter check passed.
+    detect_svi_surface / verify_ssvi_calendar_free find remaining
+    violations, even if every slice was hard-certified and the H&M
+    parameter check passes.
 
-    The 7-strike variant of the dip ground truth fits all slices hard
-    (no fallback), so verify_hm_condition passes and the pre-fix code
-    kept repair_infeasible=False — yet the raw-SVI grid detects 2
-    calendar violations on the fitted surface.
+    Scripts the sequential fitter to return the documented issues.md
+    counterexample pair: both slices satisfy all three H&M Prop 3.1
+    conditions with healthy deltas (so the degenerate-corner guard stays
+    quiet), yet w2 - w1 < 0 at k ~= 0.68 — the parameter conditions are
+    necessary-only.  A surface like this kept repair_infeasible=False
+    before the native grid gate existed; this test pins that the grid is
+    load-bearing on ALL-HARD surfaces, not just fallback-containing ones.
     """
-    report = repair(_dip_truth_surface(n_strikes=7), use_ssvi=True)
+    import arbfree_vol.ssvi.term_structure as ts
+    from arbfree_vol.ssvi.model import SSVIParams, ssvi_w as _ssvi_w
 
+    surface = _flat_bs_surface([0.25, 1.0])
+
+    # The documented counterexample pair (docs/issues.md, "eSSVI calendar
+    # certificate is grid-based").
+    p1 = SSVIParams(theta=0.0149505446, rho=-0.6548551, psi=0.11491999)
+    p2 = SSVIParams(theta=0.0574982989, rho=-0.8830506, psi=2.5226500)
+
+    # Setup sanity 1: the pair passes the H&M parameter check.
+    assert ts.verify_hm_condition([p1, p2])
+
+    # Setup sanity 2: healthy deltas — far outside the degenerate-corner
+    # margins, so the hard fits are certified without corner routing.
+    theta_delta = p2.theta - p1.theta
+    chi_delta = p2.theta * p2.psi - p1.theta * p1.psi
+    assert theta_delta > ts._HM_BOUNDARY_MARGIN_THETA
+    assert chi_delta > ts._HM_BOUNDARY_MARGIN_CHI
+
+    # Setup sanity 3: yet the slices cross (min of w2 - w1 < 0) well
+    # inside both the native [-3, 3] gate and the raw-SVI [-1.5, 1.5]
+    # detector grid.
+    gaps = [
+        _ssvi_w(float(k), p2.theta, p2.rho, p2.psi)
+        - _ssvi_w(float(k), p1.theta, p1.rho, p1.psi)
+        for k in np.linspace(-1.5, 1.5, 241)
+    ]
+    assert min(gaps) < -1e-4
+
+    # Script the hard fit by call order (slices ascend in maturity).
+    scripted = [p1, p2]
+    calls = {"n": 0}
+
+    def _scripted_fit_slice(points, prev=None, **kwargs):
+        params = scripted[calls["n"]]
+        calls["n"] += 1
+        return params
+
+    monkeypatch.setattr(ts, "_fit_slice", _scripted_fit_slice)
+
+    report = repair(surface, use_ssvi=True)
+
+    assert calls["n"] == 2, "expected one scripted hard fit per slice"
     assert report.fallback_slices == [], (
         f"test setup error: expected no fallback, got {report.fallback_slices}"
     )
+    assert report.failed_slices == []
     assert report.metrics.n_violations_after >= 1, (
         "test setup error: expected remaining grid violations on the "
-        "7-strike dip surface"
+        "crossing surface"
     )
     assert report.repair_infeasible is True, (
         "repair_infeasible must be True when the grid detects remaining "

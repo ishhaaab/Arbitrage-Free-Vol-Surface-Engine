@@ -13,37 +13,40 @@ _EPS_CHI: float = 1e-6
 
 # ── Post-fit margin check for degenerate H&M boundary corners (m66) ──
 # docs/code_review_findings.md §6.7: a hard eSSVI fit can converge to a
-# feasible-but-wrong corner pinned exactly ON the H&M Prop 3.1 boundary
-# (theta_delta = eps_theta, chi_delta = eps_chi, ratio ~ 1.0) with an
-# anomalously bad per-slice RMSE, and the optimizer reports it as a
-# successful certified arb-free fit.  Measured m66 corner (mutmut_66 /
-# the dip fixture): theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
-# ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
+# feasible-but-wrong corner pinned ON the H&M Prop 3.1 boundary (theta
+# and/or chi pinned at their eps floors, parameters equal to the
+# predecessor's) with an anomalously bad per-slice RMSE, and the optimizer
+# reports it as a successful certified arb-free fit.
 #
-# Values re-derived 2026-08-17 against the real dip-truth pipeline
-# (docs/review_campaign.md "m66 over-flagging investigation" +
-# fresh measurement of _DIP_TRUTH_ENGINE through
-# fit_ssvi_surface_sequential):
+# Measured corners:
 #
+#   Synthetic dip fixture (_DIP_TRUTH_ENGINE, 2026-08-17):
 #   | T    | theta_delta | chi_delta | ratio | hard_rmse | unc_rmse  | routing |
 #   | 0.5  | 1.000e-09   | 1.000e-06 | 1.0   | 5.05e-02  | 6.27e-09  | fallback (flagged) |
 #   | 1.0  | 3.981e-02   | 1.678e-02 | 1.0   | 1.66e-04  | 1.18e-10  | hard, NOT flagged |
 #   | 2.0  | 1.000e-09   | 1.000e-06 | 1.0   | 5.00e-02  | ~1.6e-11  | fallback (flagged) |
 #
-# Conclusion: values are well-separated, no tuning needed.
-#   - ratio is NOT a discriminator (both rows have ratio=1.0); the
-#     theta/chi boundary window is what separates them — the honest fit
-#     sits ~4e4x OUTSIDE the window (3.98e-2 vs margin 1e-8), the corner
-#     sits ON it (1e-9 vs margin 1e-8 = 10x clearance).
-#   - both RMSE ratios (8e6 corner, 1.4e6 honest) exceed _HM_RMSE_RATIO_MAX;
-#     the RMSE check only matters INSIDE the window, where the corner's
-#     absolute hard_rmse (2e-2..5e-2) is ~5 orders above the 1e-9 floor.
-#   - the 10x-eps window margins give 10x clearance above the measured
-#     corner and 4e6x separation below the measured honest fit.
-_HM_BOUNDARY_MARGIN_THETA: float = 1e-8   # 10x eps_theta
-_HM_BOUNDARY_MARGIN_CHI: float = 1e-5     # 10x eps_chi
-_HM_BOUNDARY_MARGIN_RATIO: float = 1e-3
-_HM_RMSE_RATIO_MAX: float = 5.0
+#   Live SPY (2026-08-22, T=0.0932 — ESCAPED the old gate):
+#   theta_delta = 5.0e-08, chi_delta = 1.000e-06, ratio = 0.999999,
+#   hard params == prev params to 4 decimals, hard_rmse = 6.30e-03 vs
+#   unc_rmse = 1.27e-03 (ratio 4.97x).  Certified hard despite being a
+#   pure predecessor copy.
+#
+# Design (revised 2026-08-22 after the live escape):
+#   - The window is an OR over the two floor-pinning conditions, NOT an
+#     AND over three: a corner only needs ONE floor pinned, and ratio is
+#     not discriminative (a copy with rho ~= prev's has ratio ~ 0; one
+#     with slightly different rho has ratio ~ 1).
+#   - Margins are 100x eps (was 10x): live solver tolerance lands corners
+#     at theta_delta ~ 5e-8, not at exactly eps_theta.
+#   - _HM_RMSE_RATIO_MAX lowered 5.0 -> 3.0: the measured live corner sits
+#     at 4.97x, just under the old wire.  A hard fit 3x+ worse than the
+#     unconstrained solution while pinned on a floor is the feasible-but-
+#     wrong class; legitimately-constrained slices that poor belong in the
+#     honest fallback anyway.
+_HM_BOUNDARY_MARGIN_THETA: float = 1e-7   # 100x eps_theta
+_HM_BOUNDARY_MARGIN_CHI: float = 1e-4     # 100x eps_chi
+_HM_RMSE_RATIO_MAX: float = 3.0
 _HM_RMSE_FLOOR: float = 1e-9
 
 
@@ -87,11 +90,16 @@ def _hm_boundary_deltas(
     return theta_delta, chi_delta, ratio
 
 
-def _within_boundary_window(theta_delta: float, chi_delta: float,
-                            ratio: float) -> bool:
-    """True iff the hard fit sits within the H&M boundary margin window."""
+def _within_boundary_window(theta_delta: float, chi_delta: float) -> bool:
+    """True iff the hard fit pins EITHER H&M floor within its margin.
+
+    OR semantics, not AND: a degenerate corner only needs one floor
+    pinned (theta_delta <= margin OR chi_delta <= margin).  The ratio is
+    deliberately absent -- a predecessor copy with rho ~= prev's has
+    ratio ~ 0 while one with slightly different rho has ratio ~ 1, so it
+    discriminates nothing (see the measured-corners table above).
+    """
     return (
         theta_delta <= _HM_BOUNDARY_MARGIN_THETA
-        and chi_delta <= _HM_BOUNDARY_MARGIN_CHI
-        and ratio >= 1.0 - _HM_BOUNDARY_MARGIN_RATIO
+        or chi_delta <= _HM_BOUNDARY_MARGIN_CHI
     )

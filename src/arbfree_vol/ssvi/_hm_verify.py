@@ -12,10 +12,16 @@ def verify_hm_condition(
 ) -> bool:
     """Check the Hendriks-Martini Prop 3.1 no-calendar-spread conditions.
 
-    These parameter conditions are NECESSARY AND SUFFICIENT for the
-    absence of calendar-spread arbitrage between two eSSVI slices (with
-    maturity-dependent rho) — see Hendriks & Martini (2019) Prop 3.1,
-    as restated in Corbetta et al. (2019), arXiv:1804.04924, Sec 2.2.
+    These parameter conditions are NECESSARY for the absence of
+    calendar-spread arbitrage between two eSSVI slices (with
+    maturity-dependent rho).  They are treated as sufficient by this
+    implementation, but that is NOT established: a documented
+    counterexample pair passes all three conditions yet crosses in the
+    wings (docs/issues.md, "eSSVI calendar certificate is grid-based").
+    The full Hendriks & Martini sufficient statement (Prop 3.5) adds a
+    disjunction this code does not enforce.  Until it is implemented,
+    ``verify_ssvi_calendar_free`` (the dense-grid check) is the
+    load-bearing defense and must accompany any arb-free claim.
 
     Parameters
     ----------
@@ -37,8 +43,13 @@ def verify_hm_condition(
         ``| rho_{i+1}*chi_{i+1} - rho_i*chi_i | / max(chi_{i+1}-chi_i, tol)
         <= 1 + tol``
 
-    Reference: Hendriks & Martini (2019), J. Comput. Finance 22(5),
-    Prop 3.1.
+    Note (a)-(c) are algebraically the single necessary condition
+    ``chi_{i+1} >= chi_i * max((1+rho_i)/(1+rho_{i+1}),
+    (1-rho_i)/(1-rho_{i+1}))`` split into monotonicity + slope form.
+
+    Reference: Hendriks & Martini (2019), J. Comput. Finance 22(5);
+    restated in Corbetta et al. (2019), arXiv:1804.04924, Sec 2.2, and
+    Mingone (2022), arXiv:2204.00312, Sec 2.1.
     """
     n = len(params_seq)
     if n <= 1:
@@ -76,9 +87,9 @@ def verify_ssvi_calendar_free(
 ) -> bool:
     """Post-fit calendar-arbitrage verification on native eSSVI slices.
 
-    ``verify_hm_condition`` already certifies no-calendar-spread
-    absence in closed form (the Hendriks & Martini Prop 3.1 conditions
-    are necessary and sufficient).  This function is a DISCRETE NUMERIC
+    ``verify_hm_condition`` checks the necessary H&M parameter conditions
+    (treated by this codebase as sufficient — see its docstring for the
+    open-counterexample caveat).  This function is a DISCRETE NUMERIC
     complement / defense-in-depth against optimizer or numerical error:
     it directly evaluates ``w_{i+1}(k) >= w_i(k)`` on a dense
     log-moneyness grid, catching any residual crossing that the

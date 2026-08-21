@@ -457,6 +457,85 @@ def test_hard_fit_is_degenerate_corner_first_slice_not_flagged() -> None:
     assert _hard_fit_is_degenerate_corner(None, params, points) is False
 
 
+# ── Live-data corner escapes (regressions for the 2026-08-22 fix) ────────
+# The original AND-gate (theta_delta <= 1e-8 AND chi_delta <= 1e-5 AND
+# ratio >= 0.999) was calibrated on the synthetic m66 corner, where the
+# optimizer lands exactly on eps.  Real SPY data produces corners at
+# solver-tolerance offsets that escaped through each gate in turn:
+#
+#   T=0.0932 (2026-08-22): theta_delta = 5.0e-8 > 1e-8, chi pinned,
+#       ratio = 0.999999 — escaped via the theta margin; hard params were
+#       a pure predecessor copy with 5x the unconstrained RMSE.
+#   T=0.4384 (same day): theta_delta ~ 1e-9, chi_delta ~ 1e-6,
+#       ratio = 4.1e-10 (rho ~= prev's, so rho*chi barely moves) —
+#       escaped via the ratio >= 0.999 gate.
+#
+# Both must now be flagged: OR-of-floors window with 100x-eps margins.
+
+
+def _live_escape_corner_params(prev: SSVIParams) -> SSVIParams:
+    """The measured T=0.0932-shaped corner: solver lands 50x eps_theta
+    off the floor instead of exactly on it."""
+    chi_prev = prev.theta * prev.psi
+    theta = prev.theta + 5e-8          # outside the OLD 10x-eps margin
+    chi = chi_prev + 1e-6              # pinned at the chi floor
+    psi = chi / theta
+    rho = (prev.rho * chi_prev + 0.999999 * 1e-6) / chi   # ratio ~= 1
+    return SSVIParams(theta=theta, rho=rho, psi=psi)
+
+
+def _zero_ratio_corner_params(prev: SSVIParams) -> SSVIParams:
+    """The measured T=0.4384-shaped corner: rho ~= prev's so the
+    rho*chi slope is ~ 0 and the OLD ratio >= 0.999 gate failed."""
+    chi_prev = prev.theta * prev.psi
+    theta = prev.theta + 1e-9
+    chi = chi_prev + 1e-6
+    psi = chi / theta
+    # Solve rho*chi = prev.rho*chi_prev exactly => ratio ~= 0.
+    rho = prev.rho * chi_prev / chi
+    return SSVIParams(theta=theta, rho=rho, psi=psi)
+
+
+def test_hard_fit_live_theta_offset_corner_flagged() -> None:
+    """A predecessor copy sitting 50x eps_theta off the floor (the
+    measured live T=0.0932 escape) must be flagged."""
+    prev = SSVIParams(theta=0.005277, rho=-0.5251, psi=20.0)
+    params = _live_escape_corner_params(prev)
+
+    # Sanity: this is exactly the shape that escaped the old gate.
+    assert 1e-8 < params.theta - prev.theta
+    chi_delta = params.theta * params.psi - prev.theta * prev.psi
+    assert chi_delta <= 1e-5
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    # Data follows a genuinely different smile (the dip truth), so the
+    # copy's RMSE is far worse than the unconstrained fit's.
+    points = [(float(k), ssvi_w(float(k), 0.002376, -0.8107, 20.0)) for k in ks]
+
+    assert _hard_fit_is_degenerate_corner(prev, params, points) is True
+
+
+def test_hard_fit_zero_ratio_copy_flagged() -> None:
+    """A predecessor copy whose rho matches prev's (ratio ~ 0, the
+    measured live T=0.4384 escape) must be flagged despite failing the
+    old ratio >= 0.999 gate."""
+    prev = SSVIParams(theta=0.022615, rho=-0.5095, psi=1.0)
+    params = _zero_ratio_corner_params(prev)
+
+    # Sanity: floors are pinned but the ratio is ~ 0.
+    assert params.theta - prev.theta <= 1e-8
+    ratio = abs(
+        params.rho * params.theta * params.psi
+        - prev.rho * prev.theta * prev.psi
+    ) / max(params.theta * params.psi - prev.theta * prev.psi, 1e-6)
+    assert ratio < 1e-3
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    points = [(float(k), ssvi_w(float(k), 0.009051, -0.5095, 15.7)) for k in ks]
+
+    assert _hard_fit_is_degenerate_corner(prev, params, points) is True
+
+
 def test_slice_rmse_zero_on_exact_fit() -> None:
     """_slice_rmse returns ~0 when params reproduce the points exactly."""
     params = SSVIParams(theta=0.08, rho=-0.4, psi=0.5)

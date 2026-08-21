@@ -24,7 +24,7 @@ violating quotes and refitting.
 | `src/arbfree_vol/viz/` | Matplotlib visualization — 3D per-slice ribbons, 2D (T,k) heatmap, per-expiry smile plots, violation bar charts, repair comparison. |
 | `src/arbfree_vol/variance.py` | Shared helper: `slice_total_variance()` — maps a slice to `dict[strike, w]` where `w = sigma^2 * T`. Used by both arbitrage detection and SVI fitting. |
 | `src/arbfree_vol/sabr/` | SABR model (Hagan et al. 2002). `model.py`: `SABRParams`, `sabr_implied_vol()`, `sabr_total_variance()`, `to_raw_svi_params()`. `calibration.py`: `calibrate_sabr()` (per-slice, N=1 fallback + seeding). `term_structure.py`: `fit_sabr_term_structure()` -- B-spline term structure on alpha(t)/nu(t)/rho(t) + cross-slice calendar-arb SOFT penalty; empirical, not arb-free by construction. Beta is fixed-hint. |
-| `src/arbfree_vol/surface/` | Fitted-surface analytics. `interpolate.py`: `FittedSurface`, `build_fitted_surface(report)`, `iv_at(fs,K,T)`, `total_variance_at(fs,K,T)`. `greeks.py`: `PortfolioGreeks`, `portfolio_greeks()`, `bucketed_greeks()`. `risk.py`: `ScenarioResult`, `spot_bump_analysis()`, `vol_bump_analysis()`, `parallel_vega_pnl()`. |
+| `src/arbfree_vol/surface/` | Fitted-surface analytics. `interpolate.py`: `FittedSurface`, `build_fitted_surface(report)`, `iv_at(fs,K,T)`, `total_variance_at(fs,K,T)`. `greeks.py`: `PortfolioGreeks`, `portfolio_greeks()`, `bucketed_greeks()`. |
 | `src/arbfree_vol/pricing/local_vol.py` | Dupire local volatility. `LocalVolSurface`, `dupire_at(fs,K,T,dT)`, `dupire(fs,strikes,maturities,dT)`. Gatheral SSVI-compatible Dupire strip-out via finite differences on the fitted surface. |
 | `src/arbfree_vol/dynamics.py` | Time-series surface analysis. `SurfaceSnapshot`, `SurfaceSeries`, `PCAResult`; `fit_surface_series()`, `parameter_matrix()`, `pca_deformations()`. SVD-based PCA (no sklearn). |
 
@@ -72,7 +72,7 @@ Model parameters, market conventions, and dataset-specific constants must be con
 
 ## Testing Approach
 
-- **54 test files, 715 tests** (701 passing + 14 deselected, 2026-08-20). `pytest` with `approx()` for floating-point assertions.
+- **54 test files, 718 tests** (704 passing + 14 deselected, 2026-08-22). `pytest` with `approx()` for floating-point assertions.
 - **Known-value regression**: BS prices and Greeks checked against independently computed reference values (`abs=1e-4` to `1e-6`).
 - **Round-trip**: IV solver tested by pricing at a known vol, then recovering the same vol from the price.
 - **Synthetic surface tests**: Construction of `VolSurface` from BS-generated quotes to test arb detection on clean data; deliberate injection of violations (parity break, monotonicity break, butterfly break, calendar break) to test detection.
@@ -103,7 +103,7 @@ Yahoo Finance / CSV → fetch_chain() / load_chain_csv()
 ## How to run
 
 ```
-python -m pytest tests/                          # all 715 tests
+python -m pytest tests/                          # all 718 tests
 python demo/yfinance/yfinance_demo.py --symbol SPY   # end-to-end SPY demo (6 plots)
 python demo/ticker_compare/ticker_compare.py     # cross-ticker SVI/eSSVI/SABR comparison
 python demo/dynamics_pca/dynamics_pca.py         # surface dynamics PCA (synthetic by default)

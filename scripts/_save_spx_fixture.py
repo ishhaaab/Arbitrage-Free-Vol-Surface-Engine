@@ -18,7 +18,7 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from arbfree_vol.ingestion.yahoo import fetch_chain
+from arbfree_vol.ingestion.yahoo import fetch_chain  # noqa: E402
 
 
 def _sanitize(obj):
@@ -73,13 +73,21 @@ def main():
 
     fixture = _sanitize(fixture)
 
-    fixture_path = Path(__file__).resolve().parent / "_fixtures" / "spx_raw.json"
-    fixture_path.parent.mkdir(parents=True, exist_ok=True)
+    # Canonical fixture location: the committed snapshot used by
+    # tests/test_determinism.py and the audit's --use-fixture mode.
+    # Regenerating this REPLACES the committed snapshot -- docs/issues.md
+    # pins its byte size and date, so update those after a re-save.
+    fixture_path = (
+        Path(__file__).resolve().parent.parent
+        / "tests" / "fixtures" / "spx_sample.json"
+    )
     fixture_path.write_text(json.dumps(fixture, indent=2), encoding="utf-8")
 
     print(f"Saved {len(fixture['slices'])} slices to {fixture_path}")
     print(f"Spot: {fixture['spot']}")
     print(f"Total quotes: {sum(len(s['quotes']) for s in fixture['slices'])}")
+    print("WARNING: this overwrote the committed determinism fixture;")
+    print("re-run the determinism test and reconcile docs/issues.md.")
 
 
 if __name__ == "__main__":

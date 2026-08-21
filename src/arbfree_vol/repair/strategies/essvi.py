@@ -37,12 +37,14 @@ class ESSVIStrategy:
     (tanh-reparametrised, no cross-slice functional form).  The
     discrete formulation follows Corbetta et al. (2019),
     arXiv:1804.04924, Sec 2.2-2.3.  Slices that fit within the hard
-    constraints are arbitrage-free by construction; slices that fall
-    back to the unconstrained fit (see ``RepairReport.fallback_slices``
-    and ``repair_infeasible``) are NOT — the grid-based calendar
-    detector (detect_svi_surface) is then load-bearing and reports
-    those violations as remaining_violations, not merely a redundant
-    regression assertion.
+    constraints satisfy those necessary conditions plus the dense-grid
+    ``verify_ssvi_calendar_free`` gate; the closed-form sufficiency of
+    the parameter conditions alone is an open item (a documented pair
+    passes them yet crosses in the wings — see docs/issues.md), so the
+    grid gate is load-bearing for EVERY slice.  Slices that fall back
+    to the unconstrained fit (see ``RepairReport.fallback_slices`` and
+    ``repair_infeasible``) do not satisfy even the necessary
+    conditions.
     """
     name = "eSSVI"
 

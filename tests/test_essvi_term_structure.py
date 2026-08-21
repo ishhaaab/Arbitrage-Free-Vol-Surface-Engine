@@ -934,6 +934,54 @@ def test_degenerate_corner_with_failed_baseline_routes_to_fallback(monkeypatch) 
     assert fitted_by_T[2.00].theta == pytest.approx(0.07, rel=0.02)
 
 
+def test_live_shaped_corner_routes_to_fallback(monkeypatch) -> None:
+    """End-to-end: the measured live SPY corner shape (predecessor copy
+    sitting theta_delta = 5e-8 off the floor, ratio ~= 1) must route to
+    fallback_slices, not be certified hard.
+
+    Regression for the 2026-08-22 escape: on live SPY (T=0.0932) this
+    exact corner shape was certified as a hard arb-free fit because it
+    slipped past the old AND-gate's 10x-eps theta margin.
+    """
+    import arbfree_vol.ssvi.term_structure as ts
+
+    prev_params = SSVIParams(theta=0.005277, rho=-0.5251, psi=20.0)
+    chi_prev = prev_params.theta * prev_params.psi
+    theta = prev_params.theta + 5e-8
+    chi = chi_prev + 1e-6
+    corner = SSVIParams(
+        theta=theta,
+        rho=(prev_params.rho * chi_prev + 0.999999 * 1e-6) / chi,
+        psi=chi / theta,
+    )
+    truth2 = SSVIParams(theta=0.002376, rho=-0.8107, psi=20.0)
+
+    ks = np.linspace(-1.0, 1.0, 9)
+    slices_data = [
+        (0.0740, [(float(k), ssvi_w(float(k), 0.005277, -0.5251, 20.0)) for k in ks]),
+        (0.0932, [(float(k), ssvi_w(float(k), 0.002376, -0.8107, 20.0)) for k in ks]),
+    ]
+
+    real_fit_slice = ts._fit_slice
+
+    def _scripted_fit_slice(points, prev=None, **kwargs):
+        k0, w0 = points[0]
+        if abs(w0 - ssvi_w(k0, 0.002376, -0.8107, 20.0)) < 1e-12:
+            return corner        # T=0.0932 dip slice -> live-shaped corner
+        return real_fit_slice(points, prev=prev, **kwargs)
+
+    monkeypatch.setattr(ts, "_fit_slice", _scripted_fit_slice)
+    monkeypatch.setattr(ts, "fit_ssvi_slice", lambda points: truth2)
+
+    result = fit_ssvi_surface_sequential(slices_data)
+
+    assert 0.0932 in result.fallback_slices, (
+        "the live-shaped predecessor-copy corner must be routed to "
+        f"fallback, not silently certified; got fallback_slices="
+        f"{result.fallback_slices}"
+    )
+
+
 def test_fit_slice_raises_on_too_few_points() -> None:
     """``_fit_slice`` enforces the 5-point minimum before optimizing."""
     import arbfree_vol.ssvi.term_structure as ts

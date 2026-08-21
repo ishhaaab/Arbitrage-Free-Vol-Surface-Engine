@@ -17,7 +17,11 @@ let  p_i  = SSVIParams.psi  (the angle / wing function),
      rho_i   = SSVIParams.rho,
      chi_i   = theta_i * p_i.
 
-The surface is free of calendar-spread arbitrage iff (Prop 3.1):
+The surface satisfies these NECESSARY Prop 3.1 conditions (treated as
+sufficient by the implementation; see the caveat in
+``_hm_verify.verify_hm_condition`` — a documented counterexample pair
+passes all three yet crosses, so the grid-based
+``verify_ssvi_calendar_free`` remains load-bearing):
 
   (a) theta_1 <= theta_2 <= ... <= theta_N           (non-decreasing ATM variance)
   (b) chi_1   <= chi_2   <= ... <= chi_N             (non-decreasing wing magnitude)
@@ -71,7 +75,6 @@ from arbfree_vol.ssvi._hm_margin import (
     _EPS_CHI,
     _HM_BOUNDARY_MARGIN_THETA,
     _HM_BOUNDARY_MARGIN_CHI,
-    _HM_BOUNDARY_MARGIN_RATIO,
     _HM_RMSE_RATIO_MAX,
     _HM_RMSE_FLOOR,
     _slice_rmse,
@@ -97,7 +100,6 @@ __all__ = [
     "_EPS_CHI",
     "_HM_BOUNDARY_MARGIN_THETA",
     "_HM_BOUNDARY_MARGIN_CHI",
-    "_HM_BOUNDARY_MARGIN_RATIO",
     "_HM_RMSE_RATIO_MAX",
     "_HM_RMSE_FLOOR",
     "_slice_rmse",
@@ -269,16 +271,19 @@ def _hard_fit_is_degenerate_corner(
 
     **Path A — baseline available: two signals must AGREE.**
 
-    1. **Boundary proximity** — the hard fit landed within a small
-       margin of the H&M calendar-arb boundary that ``_fit_slice``
-       enforces with its eps floors:
+    1. **Boundary proximity** — the hard fit pinned at least ONE of the
+       two H&M floors that ``_fit_slice`` enforces with its eps floors:
 
-       - ``theta_delta <= _HM_BOUNDARY_MARGIN_THETA`` (10x eps_theta)
-       - ``chi_delta   <= _HM_BOUNDARY_MARGIN_CHI`` (10x eps_chi)
-       - ``ratio >= 1 - _HM_BOUNDARY_MARGIN_RATIO``
+       - ``theta_delta <= _HM_BOUNDARY_MARGIN_THETA`` (100x eps_theta), OR
+       - ``chi_delta   <= _HM_BOUNDARY_MARGIN_CHI`` (100x eps_chi)
 
-       where ``theta_delta``/``chi_delta`` are the deltas vs ``prev`` and
-       ``ratio`` is ``|rho*chi - rho_prev*chi_prev| / chi_delta``.
+       where ``theta_delta``/``chi_delta`` are the deltas vs ``prev``.
+       The ratio |rho*chi - rho_prev*chi_prev| / chi_delta is NOT part of
+       the gate: a predecessor copy with rho close to prev's has ratio
+       near 0 while one with slightly different rho has ratio near 1, so
+       it discriminates nothing (measured live: T=0.0932 on SPY escaped
+       an earlier AND-gate through both theta_delta=5e-8 > old margin and
+       ratio variants).
 
     2. **Bad per-slice RMSE** — the hard fit's RMSE over ``points``
        exceeds ``max(_HM_RMSE_RATIO_MAX * unconstrained_rmse,
@@ -290,17 +295,18 @@ def _hard_fit_is_degenerate_corner(
 
     **Path B — baseline unavailable: boundary proximity alone flags.**
     When the unconstrained baseline fit raises, the RMSE comparison
-    cannot be computed — but a fit pinned within the boundary window is
-    exactly the knife-edge pattern this check exists to catch, so it IS
-    flagged and routed to the fallback rather than silently certified.
-    Fits outside the boundary window are never flagged, baseline or no
-    baseline.
+    cannot be computed — but a floor-pinned fit is exactly the knife-edge
+    pattern this check exists to catch, so it IS flagged and routed to
+    the fallback rather than silently certified.  Fits outside the
+    boundary window are never flagged, baseline or no baseline.
 
     A fit flagged here is not a genuine arb-free solution — it is an
-    optimizer knife-edge that converged to a feasible-but-wrong corner.
-    This is the m66 / mutmut_66 pattern (docs/code_review_findings.md
-    §6.7): measured corner theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
-    ratio = 0.9998, hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11.
+    optimizer knife-edge that converged to a feasible-but-wrong corner
+    (typically a copy of the predecessor's parameters).  This is the
+    m66 / mutmut_66 pattern (docs/code_review_findings.md §6.7):
+    measured corner theta_delta = 9.99e-10, chi_delta = 1.0000e-6,
+    hard RMSE = 0.0499 vs unconstrained RMSE = 1.6e-11; live SPY adds
+    the T=0.0932 escape documented in ``_hm_margin.py``.
     ``fit_ssvi_surface_sequential`` routes flagged fits to the
     unconstrained fallback.
 
@@ -310,16 +316,16 @@ def _hard_fit_is_degenerate_corner(
     Returns
     -------
     bool
-        ``True`` iff the fit is within the boundary margin AND (its RMSE
-        is anomalously bad relative to the unconstrained fit, OR the
-        unconstrained baseline fit is unavailable).
+        ``True`` iff the fit pins an H&M floor within its margin AND
+        (its RMSE is anomalously bad relative to the unconstrained fit,
+        OR the unconstrained baseline fit is unavailable).
     """
     if prev is None:
         return False
 
-    theta_delta, chi_delta, ratio = _hm_boundary_deltas(prev, params)
+    theta_delta, chi_delta, _ratio = _hm_boundary_deltas(prev, params)
 
-    if not _within_boundary_window(theta_delta, chi_delta, ratio):
+    if not _within_boundary_window(theta_delta, chi_delta):
         # Fast path: far from the boundary, no need for the unconstrained
         # baseline fit.
         return False

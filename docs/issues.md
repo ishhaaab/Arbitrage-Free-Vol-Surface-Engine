@@ -704,30 +704,86 @@ that the H&M optimizer sees.
 3. Comparing the two runs' fallback lists exactly.
 
 **Result:** The two runs produced byte-identical output (SHA-256 matched).
-Fallback T values: 18 slices. No random number usage, no time-based values, no BLAS non-determinism (SciPy OpenBLAS 0.3.31.dev is
-deterministic with the current thread configuration).
+No random number usage, no time-based values, no BLAS non-determinism
+(SciPy OpenBLAS deterministic with the current thread configuration).
+
+> **CORRECTED 2026-08-22 — fixture provenance.** The "Fallback T values:
+> 18 slices" figure below originally came from a DIFFERENT, larger
+> snapshot (~40 slices) saved to `scripts/_fixtures/spx_raw.json`, which
+> was never committed.  The committed fixture
+> (`tests/fixtures/spx_sample.json`, 430,589 bytes, 2026-07-31) contains
+> **7 slices** and fits **7 / 0 fallback / 0 failed** (re-verified
+> 2026-08-22).  It therefore exercises determinism only — it does NOT
+> reproduce fallback behavior.  The historical 18-slice claim is not
+> reproducible from any artifact in the repo.
 
 **Implication for fallback counts:** Earlier audit runs produced
 different SPX raw fallback counts (9, 12, 15, 18, 21) depending on
 when the data was fetched. This is NOT a pipeline bug — the pipeline
-is deterministic. The variation is caused by **live retail feed
-changes between API calls**:
-- Quote prices update in real-time during market hours
-- Expiries roll daily (nearest weekly/monthly expires, new ones added)
-- Bid-ask spreads fluctuate, changing which strikes pass the quality filter
-- The optimizer is sensitive to small input changes near the constraint
-  boundary
+is deterministic. Two causes, now separated:
+
+1. **Live retail feed changes between API calls**: quote prices update
+   in real-time, expiries roll daily, spreads fluctuate, and the
+   optimizer is sensitive to small input changes near the constraint
+   boundary.  Measured 2026-08-22: three same-day SPY fetches produced
+   fallback counts of 8, 5, and 9.
+2. **Degenerate-corner detector knife-edge (fixed 2026-08-22)**: before
+   the fix, a boundary-pinned predecessor-copy fit could be certified
+   hard on one fetch (corner landed outside the detector's window) and
+   honestly routed to fallback on the next (corner landed inside it),
+   purely due to solver-tolerance offsets — see the follow-up section
+   below.
 
 **Conclusion:** Fallback counts from live data are only meaningful as a
 **snapshot-in-time metric**. They should not be compared across
-calendar dates, and small day-to-day variations (±50%) are expected
-and normal. For reproducible comparisons, use a saved data fixture
-instead of re-fetching from yfinance.
+calendar dates, and day-to-day variations are expected and normal. For
+reproducible comparisons, use a saved data fixture instead of
+re-fetching from yfinance — or the deterministic synthetic fixture in
+`arbfree_vol.ssvi.diagnostics` (3 fallbacks at T=0.427/0.75/1.00,
+verified per scipy version).
 
 **Fixture:** A saved SPX raw fixture is available at
 `tests/fixtures/spx_sample.json` (snapshot from 2026-07-31). The
 audit script can load this fixture via the `--use-fixture` flag
-instead of re-fetching from yfinance (see `audit_theta_dip_data_quality.py`).
+instead of re-fetching from yfinance (see `audit_theta_dip_data_quality.py`),
+and `scripts/_fit_spx_fixture.py` runs the sequential fit on it directly.
+
+### Degenerate-corner detector escaped live-data corners (Issue #15 follow-up) — FIXED 2026-08-22
+
+**Problem.** `_hard_fit_is_degenerate_corner` (the m66 guard) required
+ALL THREE conditions to flag a boundary-pinned predecessor-copy fit:
+`theta_delta <= 1e-8` AND `chi_delta <= 1e-5` AND `ratio >= 0.999`.
+Live SPY data produces corners at solver-tolerance offsets that escaped
+through each gate in turn:
+
+| Escape | Slice | Signature |
+|--------|-------|-----------|
+| theta margin | SPY T=0.0932 (2026-08-22) | theta_delta = 5.0e-8 (> old 1e-8 gate), chi pinned at floor, ratio = 0.999999; hard params == prev params to 4 decimals; hard_rmse/unc_rmse = 4.97x |
+| ratio gate | SPY T=0.4384 (same day) | theta_delta ~ 1e-9, chi_delta ~ 1e-6, ratio = 4.1e-10 (rho ~= prev's so rho*chi barely moves) |
+
+Both slices were **certified as hard-constrained arb-free fits** while
+being pure predecessor copies fitting the data ~5x worse than the
+unconstrained solution.  This also made the hard/fallback classification
+of such slices solver-lottery: the same slice could be certified hard on
+one fetch and honestly fall back on the next.
+
+**Fix.** In `ssvi/_hm_margin.py`:
+- Window is now OR-of-floors (`theta_delta <= margin` OR
+  `chi_delta <= margin`) — one pinned floor suffices; the ratio is
+  dropped from the gate entirely (it discriminates nothing: copies with
+  rho ~= prev's have ratio ~ 0, copies with slightly different rho have
+  ratio ~ 1).
+- Margins widened 10x -> 100x eps (theta: 1e-8 -> 1e-7, chi:
+  1e-5 -> 1e-4), covering measured solver offsets.
+- `_HM_RMSE_RATIO_MAX` lowered 5.0 -> 3.0: the measured live corner sits
+  at 4.97x, just under the old wire.  Legitimately-constrained slices
+  that fit this poorly belong in the honest fallback anyway.
+
+Regression tests: `tests/test_ssvi_term_structure.py`
+(`test_hard_fit_live_theta_offset_corner_flagged`,
+`test_hard_fit_zero_ratio_copy_flagged`) and
+`tests/test_essvi_term_structure.py`
+(`test_live_shaped_corner_routes_to_fallback`).
 
 ### eSSVI calendar certificate is grid-based, not a global analytic guarantee (OPEN)
 
