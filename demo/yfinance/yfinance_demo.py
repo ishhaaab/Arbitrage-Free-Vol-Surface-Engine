@@ -176,8 +176,11 @@ def run_repair(surface) -> dict[str, object]:
 
     # Pre-repair arbitrage report — used for the violations bar chart so the
     # plot always shows a real distribution (post-repair SVI is often 0).
-    from arbfree_vol.arbitrage.quote_detect import detect
-    before_report = detect(surface)
+    # Uses detect_with_forward so the chart's baseline matches the
+    # violations_before column in the summary table (repair()'s internal
+    # detection is forward-aware; plain detect() is not).
+    from arbfree_vol.arbitrage.quote_detect import detect_with_forward
+    before_report = detect_with_forward(surface)
 
     reports: dict[str, object] = {}
     configs = [
