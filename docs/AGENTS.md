@@ -51,7 +51,7 @@ Layering: `models/` is the shared kernel (no internal imports). `ingestion/` pro
 - **Median, not mean**: Forward curve estimates use median across strike-level parity pairs so one outlier can't corrupt the estimate.
 - **Per-slice r/q term structure**: Optional `risk_free`, `div_yield` on `ExpirySlice`. `get_r(surface, sl)` / `get_q(surface, sl)` falls back to surface-level. Populated automatically by `detect_with_forward()` and `repair()`.
 - **Constrained calibration**: `calibrate_constrained(points, arb_penalty=100.0, prev_slice=None)` augments the least-squares residual with `sqrt(arb_penalty)*sqrt(max(-g(k), 0))` on a k-grid, `sqrt(arb_penalty)*sqrt(max(-w_min, 0))` for min-variance, and — when `prev_slice` is supplied — `sqrt(arb_penalty)*sqrt(max(w_prev(k) - w(k), 0))` for calendar arbitrage. `_fit_slice()` in `repair/engine.py` threads the previous fitted slice's params through `prev_slice` when fitting in ascending-expiry order (SVI path only; eSSVI/SABR fit per-slice without it). The unconstrained `calibrate()` is preserved for back-compat/tests.
-- **Surface interpolation**: `build_fitted_surface(report)` extracts the surface from a `RepairReport`; `iv_at(K, T)` is the public entry point for IV at arbitrary strikes/maturities, used by Greek aggregation (`surface/greeks.py`), risk scenarios (`surface/risk.py`), and Dupire (`pricing/local_vol.py`).
+- **Surface interpolation**: `build_fitted_surface(report)` extracts the surface from a `RepairReport`; `iv_at(K, T)` is the public entry point for IV at arbitrary strikes/maturities, used by Greek aggregation (`surface/greeks.py`) and Dupire (`pricing/local_vol.py`).
 
 ## No-Hardcoding Rule
 
@@ -104,9 +104,10 @@ Yahoo Finance / CSV → fetch_chain() / load_chain_csv()
 
 ```
 python -m pytest tests/                          # all 715 tests
-python demo/yfinance/yfinance_demo.py --symbol SPY   # end-to-end SPY demo (7 plots)
-python demo/essvi/essvi_demo.py                  # raw SVI vs eSSVI comparison
+python demo/yfinance/yfinance_demo.py --symbol SPY   # end-to-end SPY demo (6 plots)
 python demo/ticker_compare/ticker_compare.py     # cross-ticker SVI/eSSVI/SABR comparison
+python demo/dynamics_pca/dynamics_pca.py         # surface dynamics PCA (synthetic by default)
+python demo/cli/cli_demo.py                      # CLI walkthrough (detect/repair/price)
 python bench/bench_iv.py                         # IV solver benchmark
 arbfree --help                                   # CLI: repair|detect|price|fetch
 ```

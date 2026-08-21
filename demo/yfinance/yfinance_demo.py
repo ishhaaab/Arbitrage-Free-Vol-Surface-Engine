@@ -185,16 +185,18 @@ def run_repair(surface) -> dict[str, object]:
         ("eSSVI", {"use_ssvi": True,  "use_sabr": False}),
         ("SABR",  {"use_ssvi": False, "use_sabr": True}),
     ]
-    print("\n  Model      violations_before  violations_after  rejected  slices  avg_RMSE")
+    print("\n  Model      violations_before  violations_after  rejected  slices  med_RMSE")
     print("  " + "-" * 68)
     for label, kw in configs:
         rep = repair(surface, **kw)
         reports[label] = rep
         m = rep.metrics
-        avg_rmse = (sum(s.rmse for s in rep.fitted_slices)
-                    / len(rep.fitted_slices)) if rep.fitted_slices else 0.0
+        med_rmse = (
+            float(np.median([s.rmse for s in rep.fitted_slices]))
+            if rep.fitted_slices else 0.0
+        )
         print(f"  {label:<8} {m.n_violations_before:>10} {m.n_violations_after:>12} "
-              f"{m.n_rejected:>8} {len(rep.fitted_slices):>6} {avg_rmse:.4f}")
+              f"{m.n_rejected:>8} {len(rep.fitted_slices):>6} {med_rmse:.4f}")
     return reports, before_report
 
 

@@ -26,9 +26,10 @@ Three smile models: raw SVI (Gatheral 2004), eSSVI (Gatheral–Jacquier 2014), a
 pip install -e .                                              # installs `arbfree` CLI
 arbfree --help                                                # repair | detect | price | fetch
 pytest tests/ -q                                              # full test suite
-python demo/full_pipeline_demo.py                             # full pipeline on synthetic data (no network)
-python demo/yfinance/yfinance_demo.py                         # live demo, 7 plots (needs network; --symbol TICKER for others)
-python demo/ticker_compare/ticker_compare.py                  # live cross-ticker comparison, 3 plots (SPY/QQQ/IWM by default)
+python demo/yfinance/yfinance_demo.py                         # live SPY pipeline, 6 plots (needs network; --offline for synthetic)
+python demo/ticker_compare/ticker_compare.py                  # cross-ticker SVI/eSSVI/SABR, 3 plots (SPY/QQQ/IWM; --offline available)
+python demo/dynamics_pca/dynamics_pca.py                      # PCA over a surface time series, 3 plots (synthetic by default)
+python demo/cli/cli_demo.py                                   # walk through `arbfree detect/repair/price` on a generated CSV
 ```
 
 ### CLI
@@ -44,39 +45,73 @@ arbfree price --spot 100 --strike 100 --expiry-date 2026-12-18 --as-of 2026-05-1
 arbfree fetch --symbol SPY --max-expiries 5 --use-fred-curve --repair --use-ssvi  # live yfinance
 ```
 
+CSV rows need `strike,expiry,option_type,price` and (for the cleaning layer
+to pass) `bid,ask` — the CLI demo writes one you can crib from.
+
 `config.yaml` in the repo root supplies defaults (`day_count`, `calendar`, `risk_free`, `div_yield`, `use_fred_curve`); every CLI flag overrides the file. Requires `pyyaml` only when a config file is present.
 
-## Live showcase (SPY options)
+## Demos
 
-`python demo/yfinance/yfinance_demo.py --symbol SPY` pulls live SPY options, repairs them with all three models, interpolates the surface, extracts Dupire local vol, computes portfolio Greeks, and writes the seven plots below.
+Four demo scripts cover the toolkit end to end. All of the data-driven ones
+accept `--offline` for a deterministic synthetic run (no network); live mode
+uses yfinance.
 
-### 3D implied volatility surface
+### 1. Single-ticker pipeline (`demo/yfinance/`)
+
+`python demo/yfinance/yfinance_demo.py` pulls live SPY options, repairs them
+with all three models, interpolates the surface, extracts Dupire local vol,
+computes Greeks, and writes six plots. It also exercises the modern ingestion
+seams: FRED `YieldTermStructure` for per-slice `r(T)`, `ACT/365F` day count,
+and the USNYSE calendar roll.
 
 ![SPY 3D surface](demo/yfinance/yfinance_demo_surface.png)
 
-### Smile model comparison (SVI / eSSVI / SABR)
-
-![Smile model comparison](demo/yfinance/yfinance_demo_smiles_comparison.png)
-
-### Model fit quality comparison
-
-![Model fit comparison](demo/yfinance/yfinance_demo_model_comparison.png)
-
-### Implied vol heatmap (via iv_at)
+![Smile fits](demo/yfinance/yfinance_demo_smiles.png)
 
 ![IV heatmap](demo/yfinance/yfinance_demo_iv_heatmap.png)
 
-### Dupire local volatility
-
 ![Dupire local vol](demo/yfinance/yfinance_demo_dupire.png)
-
-### Portfolio Greeks (delta / gamma / vega)
 
 ![Greeks heatmap](demo/yfinance/yfinance_demo_greeks.png)
 
-### Repair comparison (before vs after)
+![Pre-repair arbitrage violations](demo/yfinance/yfinance_demo_violations.png)
 
-![Repair comparison](demo/yfinance/yfinance_demo_repair.png)
+eSSVI slices that fall back to an unconstrained fit (H&M hard constraints
+couldn't be satisfied) are grayed out in the IV / Dupire / Greeks heatmaps and
+listed in the console output.
+
+### 2. Cross-ticker comparison (`demo/ticker_compare/`)
+
+`python demo/ticker_compare/ticker_compare.py` fetches several chains
+(SPY/QQQ/IWM by default) and compares the three models across tickers:
+ATM term structure, a ~30-day smile overlay, and median fit RMSE per model
+(median, not mean, so a couple of noisy expiries can't dominate).
+
+![ATM term structure](demo/ticker_compare/ticker_compare_atm_term_structure.png)
+
+![30-day smile overlay](demo/ticker_compare/ticker_compare_smiles.png)
+
+![Model RMSE comparison](demo/ticker_compare/ticker_compare_rmse.png)
+
+### 3. Surface dynamics via PCA (`demo/dynamics_pca/`)
+
+`python demo/dynamics_pca/dynamics_pca.py` fits a time series of surfaces,
+stacks the fitted SVI parameters into a matrix, and runs SVD-based PCA to find
+the dominant deformation modes (Level / Tilt / Curvature). It runs on a
+deterministic synthetic time series (no network) — collecting real daily
+snapshots is a roadmap item.
+
+![PCA explained variance](demo/dynamics_pca/dynamics_pca_variance.png)
+
+![PCA component loadings](demo/dynamics_pca/dynamics_pca_loadings.png)
+
+![ATM term structure through time](demo/dynamics_pca/dynamics_pca_term_structure.png)
+
+### 4. CLI walkthrough (`demo/cli/`)
+
+`python demo/cli/cli_demo.py` generates a small synthetic chain CSV and runs
+`arbfree detect`, `repair`, and `price` against it, printing what each command
+does. No network, no setup — the fastest way to see the toolkit work.
 
 ## How the modules fit
 
@@ -107,7 +142,7 @@ A few things baked into the code that are worth knowing:
 
 The core engine is built and tested: ingestion, cleaning, the five arbitrage checks, three smile models, repair, the query layer, Dupire, PCA, `DayCount`/`Calendar`, and `YieldTermStructure` with FRED `SOFR`+`DGS` Treasury curve. The test suite covers known-value cases, IV round-trips, synthetic violation injection, and calibration recovery, and it grows with the codebase.
 
-It's not a production service. No REST API, no database, no dashboard — but it does have a real CLI (`arbfree repair|detect|price|fetch`, see above) with `config.yaml` defaults, term-structure `r(T)` per slice, and selectable day-count/calendar. Plots are static PNGs. The raw-SVI path is not arbitrage-free by construction; eSSVI is, but only in the sense that slices fitting within the H&M hard constraints and passing the grid-based calendar check get certified, while fallback slices get surfaced through `RepairReport.fallback_slices` / `repair_infeasible`. SABR is fit as a comparison model, not an arb-free construction, so its residuals are reported rather than eliminated. Demonstrated on a handful of US equities and ETFs (SPY default; QQQ, AAPL, MSFT, NVDA via `--symbol`). See `demo/ticker_compare/`. European options only.
+It's not a production service. No REST API, no database, no dashboard but it does have a real CLI (`arbfree repair|detect|price|fetch`, see above) with `config.yaml` defaults, term-structure `r(T)` per slice, and selectable day-count/calendar. Plots are static PNGs. The raw-SVI path is not arbitrage-free by construction; eSSVI is, but only in the sense that slices fitting within the H&M hard constraints and passing the grid-based calendar check get certified, while fallback slices get surfaced through `RepairReport.fallback_slices` / `repair_infeasible`. SABR is fit as a comparison model, not an arb-free construction, so its residuals are reported rather than eliminated. Demonstrated on a handful of US equities and ETFs (SPY default; QQQ, AAPL, MSFT, NVDA via `--symbol`). European options only.
 
 ## Roadmap
 

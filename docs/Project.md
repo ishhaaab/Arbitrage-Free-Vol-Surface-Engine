@@ -122,9 +122,9 @@ arbfree-vol-surface/
     surface_research.ipynb
   demo/
     yfinance/yfinance_demo.py
-    essvi/essvi_demo.py
     ticker_compare/ticker_compare.py
-    # backtest demo removed (e1ed326)
+    dynamics_pca/dynamics_pca.py
+    cli/cli_demo.py
   examples/
     sample_chain.csv
 ```
