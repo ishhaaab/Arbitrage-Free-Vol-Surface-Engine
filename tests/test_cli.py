@@ -251,6 +251,35 @@ def test_detect_missing_file(tmp_path: Path) -> None:
     assert main(["detect", str(tmp_path / "nope.csv"), "--spot", "110"]) == 2
 
 
+def test_repair_exits_nonzero_when_infeasible(tmp_path: Path, capsys) -> None:
+    """Nothing fitted (every slice TOO_FEW on the 3-strike chain) must
+    exit non-zero and say so in the JSON — a zero exit would read as
+    success to any caller consuming the exit code."""
+    csv = _minimal_chain_csv(tmp_path / "chain.csv")
+    out = tmp_path / "out.json"
+    rc = main(["repair", str(csv), "--spot", "110", "--as-of", "2026-05-18", "-o", str(out)])
+    assert rc == 2
+    assert "infeasible=True" in capsys.readouterr().out
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["repair_infeasible"] is True
+    assert data["failed_slices"] == []
+    assert "sabr_mapping_failed_slices" in data
+
+
+def test_repair_json_payload_carries_failure_fields(tmp_path: Path) -> None:
+    """A successful repair still reports the failure-bookkeeping fields,
+    including sabr_mapping_failed_slices (previously omitted from the
+    JSON payload entirely)."""
+    csv = _bs_chain_csv(tmp_path / "chain.csv")
+    out = tmp_path / "out.json"
+    rc = main(["repair", str(csv), "--spot", "400", "--as-of", "2026-05-18", "-o", str(out)])
+    assert rc == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["repair_infeasible"] is False
+    assert "sabr_mapping_failed_slices" in data
+    assert "fallback_slices" in data and "failed_slices" in data
+
+
 # ── fetch (mocked yfinance) ─────────────────────────────────────────
 
 def test_fetch_mocked(capsys) -> None:

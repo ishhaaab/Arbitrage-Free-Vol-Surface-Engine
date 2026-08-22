@@ -649,6 +649,8 @@ def test_repair_svi_reports_slice_with_no_fit(monkeypatch) -> None:
     )
     assert report.metrics.n_slices_fitted == 0
     assert len(report.fitted_slices) == 0
+    # nothing fitted -> the run must not certify itself arb-free
+    assert report.repair_infeasible is True
 
 
 def test_repair_svi_skips_slice_with_few_points() -> None:
@@ -700,6 +702,28 @@ def test_sabr_failure_marks_failed_slices(monkeypatch) -> None:
     )
     assert report.fitted_sabr_slices == ()
     assert len(report.fitted_slices) == 0
+    # nothing fitted -> the run must not certify itself arb-free
+    assert report.repair_infeasible is True
+
+
+def test_repair_infeasible_when_every_slice_is_skipped() -> None:
+    """A surface whose every slice is TOO_FEW-skipped produces no fitted
+    slices; the empty fit list must set repair_infeasible rather than
+    read as a (vacuously) arbitrage-free success.
+
+    Skip semantics are unchanged: the expiry stays OUT of failed_slices
+    (TOO_FEW is a skip, not a failure) — only the infeasible flag flips.
+    """
+    surface = _flat_bs_surface([0.25])
+    _shrink_last_slice(surface)  # the only slice -> 4 (k,w) points
+
+    report = repair(surface)
+
+    assert report.metrics.n_slices_input == 1
+    assert report.metrics.n_slices_fitted == 0
+    assert report.fitted_slices == ()
+    assert report.failed_slices == []  # skip, not failure
+    assert report.repair_infeasible is True
 
 
 def test_repair_sabr_skips_slice_with_few_points(caplog, monkeypatch) -> None:

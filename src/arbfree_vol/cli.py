@@ -131,6 +131,7 @@ def _repair_build_payload(report, metrics) -> dict:  # type: ignore[no-untyped-d
         },
         "fallback_slices": report.fallback_slices,
         "failed_slices": report.failed_slices,
+        "sabr_mapping_failed_slices": report.sabr_mapping_failed_slices,
         "repair_infeasible": report.repair_infeasible,
         "remaining_violations": [
             {"kind": v.kind.value, "detail": v.detail, "magnitude": v.magnitude}
@@ -260,7 +261,11 @@ def _cmd_repair(args: argparse.Namespace, cfg: dict) -> int:
 
     report, metrics = _repair_run(args, surface)
     _repair_emit(args, cfg, report, metrics)
-    return 0
+    # An infeasible repair (remaining violations, or nothing fitted at
+    # all) must be visible to callers reading the exit code — a zero
+    # exit would read as success.  Partial failure (some slices in
+    # failed_slices) still exits 0: the report tells what it couldn't fix.
+    return 2 if report.repair_infeasible else 0
 
 
 # ── subcommand: detect ──────────────────────────────────────────────
@@ -440,6 +445,8 @@ def _cmd_fetch(args: argparse.Namespace, cfg: dict) -> int:
                         },
                         "fallback_slices": report.fallback_slices,
                         "failed_slices": report.failed_slices,
+                        "sabr_mapping_failed_slices": report.sabr_mapping_failed_slices,
+                        "repair_infeasible": report.repair_infeasible,
                     },
                     indent=2,
                     default=str,

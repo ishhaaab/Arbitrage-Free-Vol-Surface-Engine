@@ -214,6 +214,12 @@ def _run_pipeline(surface: VolSurface, strategy: RepairStrategy) -> RepairReport
     remaining = _verify_remaining(fitted)
     if remaining.violations:
         repair_infeasible = True
+    # step 6b: no fitted slices means no arb-free surface was produced.
+    # The grid check above is vacuous on an empty fit list, so a total
+    # strategy failure (every expiry in failed_slices) or an all-skipped
+    # surface (every slice TOO_FEW) must not read as success.
+    if not fitted:
+        repair_infeasible = True
 
     # step 7: metrics, then the failed_slices ordering contract
     metrics = _build_metrics(
@@ -261,6 +267,13 @@ def repair(surface: VolSurface, use_ssvi: bool= False, use_sabr: bool= False) ->
     appends the no-forward expiries, which can otherwise produce
     non-chronological lists (a no-forward expiry sorting BEFORE a
     failed-fit expiry).  Consumers may rely on chronological order.
+
+    ``repair_infeasible`` is True when the grid check finds remaining
+    violations on the fitted surface, and also when the run produced no
+    fitted slices at all — a total strategy failure (every expiry in
+    ``failed_slices``) or a surface whose every slice was skipped for
+    having fewer than 5 (k, w) points leaves the grid check vacuous, and
+    an empty fit list must never certify "arbitrage-free".
 
     ``use_ssvi`` and ``use_sabr`` are mutually exclusive.
     """
