@@ -1,11 +1,14 @@
 """YAML-backed defaults for the ``arbfree`` CLI.
 
 ``config.yaml`` (or ``arbfree.yaml``) in the working directory supplies
-defaults; CLI flags override them.  Requiring ``pyyaml`` only when a
-config file is actually present keeps the core install lean.
+defaults; CLI flags override them. ``pyyaml`` is imported lazily — only
+when a config file is actually present — and is a declared dependency,
+so a config file can always be honored.
 
-This module is intentionally small — it mirrors the ``Config`` type the
-roadmap promised without pulling config handling into ``cli.py``.
+An explicitly passed config path must be readable and take effect:
+a missing file, a missing ``pyyaml`` install, or invalid YAML raises
+instead of silently running with defaults. The implicit working-directory
+discovery keeps the lenient warn-and-continue behavior.
 """
 
 from __future__ import annotations
@@ -71,14 +74,32 @@ class Config:
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Load ``Config`` from *path* or the default search."""
-    candidates: list[Path] = []
+    """Load ``Config`` from *path* or the default search.
+
+    An explicit *path* raises on any problem (missing file, missing
+    ``pyyaml``, invalid YAML, non-mapping document) so callers like
+    ``arbfree --config ...`` fail loudly. The implicit search falls back
+    to defaults with a warning.
+    """
     if path is not None:
-        candidates.append(Path(path))
-    else:
-        candidates.append(Path("config.yaml"))
-        candidates.append(Path("arbfree.yaml"))
-    for p in candidates:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"config file not found: {p}")
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ImportError(
+                f"reading config file {p} requires pyyaml — install pyyaml"
+            ) from exc
+        try:
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise ValueError(f"config file {p} is not valid YAML: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"config file {p} is not a YAML mapping")
+        return Config.from_dict(data)
+
+    for p in (Path("config.yaml"), Path("arbfree.yaml")):
         if p.exists():
             try:
                 import yaml  # type: ignore[import-not-found]

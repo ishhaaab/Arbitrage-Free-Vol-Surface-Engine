@@ -13,7 +13,9 @@ through to ingestion: ``--day-count`` selects the year-fraction,
 Treasury+SOFR curve with flat fallback.
 
 Config file (``config.yaml``) is optional: flags override file values.
-Requires ``pyyaml`` only when a config file is present.
+An explicit ``--config`` path must be readable and valid YAML — an
+unreadable config aborts the run with an error instead of silently
+falling back to defaults.
 """
 
 from __future__ import annotations
@@ -30,21 +32,18 @@ from arbfree_vol.config import load_config
 from arbfree_vol.rates import YieldTermStructure, build_fred_curve
 from arbfree_vol.time import Calendar, DayCount
 
-logger = logging.getLogger(__name__)
-
 VERSION = "0.1.0"
 
 
 # ── config helpers ──────────────────────────────────────────────────
 
 def _load_config_dict(path: Path | None) -> dict:
-    """Load config file into a plain dict (via :mod:`arbfree_vol.config`)."""
-    try:
-        cfg = load_config(path)
-        return cfg.as_dict()
-    except Exception as exc:  # pragma: no cover
-        logger.warning("config load failed: %s", exc)
-        return {}
+    """Load config file into a plain dict (via :mod:`arbfree_vol.config`).
+
+    Raises on an unreadable explicit config — ``main`` turns that into a
+    clean error exit instead of silently running with defaults.
+    """
+    return load_config(path).as_dict()
 
 
 def _resolve_day_count(value: str | None, cfg: dict) -> str:
@@ -540,7 +539,11 @@ def main(argv: list[str] | None = None) -> int:
     if getattr(args, "verbose", False):
         logging.basicConfig(level=logging.INFO)
 
-    cfg = _load_config_dict(getattr(args, "config", None))
+    try:
+        cfg = _load_config_dict(getattr(args, "config", None))
+    except (FileNotFoundError, ImportError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     if args.cmd == "repair":
         return _cmd_repair(args, cfg)

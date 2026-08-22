@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
 from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -18,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from arbfree_vol.cli import main, build_parser
+from arbfree_vol.config import load_config
 from arbfree_vol.pricing.black_scholes import price_floats
 
 
@@ -327,6 +329,60 @@ def test_config_cli_flag_overrides_file(tmp_path: Path) -> None:
           "--as-of", "2026-05-18", "--day-count", "ACT/360", "-o", str(out2)])
     exp_360 = json.loads(out2.read_text(encoding="utf-8"))["fitted_slices"][0]["expiry"]
     assert exp_flag != pytest.approx(exp_360)
+
+
+def test_load_config_explicit_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match="nope.yaml"):
+        load_config(tmp_path / "nope.yaml")
+
+
+def test_load_config_explicit_missing_pyyaml_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("day_count: ACT/360\n", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    with pytest.raises(ImportError, match="pyyaml"):
+        load_config(cfg)
+
+
+def test_load_config_explicit_bad_yaml_raises(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("day_count: [unclosed\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="cfg.yaml"):
+        load_config(cfg)
+
+
+def test_load_config_explicit_non_mapping_raises(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("- just\n- a list\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="mapping"):
+        load_config(cfg)
+
+
+def test_load_config_implicit_missing_pyyaml_warns_and_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("day_count: ACT/360\n", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    # implicit discovery stays lenient: warn and continue with defaults
+    assert load_config().day_count == "ACT/365F"
+
+
+def test_load_config_implicit_bad_yaml_warns_and_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.yaml").write_text("day_count: [unclosed\n", encoding="utf-8")
+    assert load_config().day_count == "ACT/365F"
+
+
+def test_cli_config_unreadable_returns_nonzero(tmp_path: Path, capsys) -> None:
+    csv = _bs_chain_csv(tmp_path / "chain.csv")
+    rc = main(["--config", str(tmp_path / "nope.yaml"), "repair", str(csv), "--spot", "400"])
+    assert rc != 0
+    assert "nope.yaml" in capsys.readouterr().err
 
 
 # ── import vs runtime ───────────────────────────────────────────────
