@@ -4,6 +4,10 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.plotting.masking import (
+    FALLBACK_BAD_RGBA,
+    fallback_legend_handle,
+)
 from arbfree_vol.surface.greeks import bucketed_greeks
 from arbfree_vol.surface.interpolate import FittedSurface
 
@@ -34,7 +38,8 @@ def plot_greeks_heatmap(
     fallback_slices:
         Optional list of T values that used the eSSVI fallback path.
         If provided, those maturity rows are grayed out in the heatmap
-        and an annotation is added.
+        If provided, a legend explaining the gray rows is added under the
+        plot heading.
 
     Returns
     -------
@@ -75,12 +80,11 @@ def plot_greeks_heatmap(
         cmap = matplotlib.colormaps["RdYlBu_r"].copy()
         if fallback_slices:
             # with_extremes replaces the deprecated set_bad API (matplotlib
-            # >= 3.7 deprecation); the bad color is passed as an RGBA tuple
-            # because with_extremes has no alpha keyword. It returns a new
-            # colormap rather than mutating in place, so the result must be
-            # assigned back.
-            cmap = cmap.with_extremes(bad=(0.5019607843137255, 0.5019607843137255,
-                                           0.5019607843137255, 0.5))
+            # >= 3.7 deprecation). It returns a new colormap rather than
+            # mutating in place, so the result must be assigned back.  The
+            # bad RGBA is the shared fallback gray -- same constant the
+            # legend swatch uses.
+            cmap = cmap.with_extremes(bad=FALLBACK_BAD_RGBA)
 
         mesh = ax.pcolormesh(strike_mesh, T_mesh, data,
                              cmap=cmap, shading="auto")
@@ -90,16 +94,20 @@ def plot_greeks_heatmap(
         ax.set_ylabel("Time to expiry (yrs)")
         ax.set_title(name.capitalize())
 
-        if fallback_slices:
-            ax.text(
-                0.02, 0.02,
-                "Grayed: non-monotonic ATM variance — see Issue #15",
-                transform=ax.transAxes,
-                fontsize=7,
-                color="dimgray",
-                verticalalignment="bottom",
-            )
-
-    fig.tight_layout()
+    # ONE figure-level fallback legend for all panels, placed in the band
+    # between the suptitle and the panel titles (right-aligned so it never
+    # collides with the centered suptitle).  tight_layout is given a rect
+    # that reserves this band when a legend exists.
+    if fallback_slices:
+        fig.legend(
+            handles=[fallback_legend_handle()],
+            loc="upper right",
+            bbox_to_anchor=(0.995, 0.985),
+            frameon=False,
+            fontsize=9,
+        )
+        fig.tight_layout(rect=(0, 0, 1, 0.90))
+    else:
+        fig.tight_layout()
     return fig
 

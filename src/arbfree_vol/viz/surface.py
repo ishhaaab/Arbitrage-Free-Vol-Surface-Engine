@@ -9,6 +9,10 @@ from matplotlib import cm
 from scipy.interpolate import griddata
 
 from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.plotting.masking import (
+    FALLBACK_BAD_RGBA,
+    fallback_legend_handle,
+)
 from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.surface.interpolate import FittedSurface, iv_at
 
@@ -207,7 +211,7 @@ def plot_iv_heatmap(
     fallback_slices:
         Optional list of T values that used the eSSVI fallback path.
         If provided, those maturity columns are grayed out in the plot
-        and an annotation is added.
+        and a legend explaining them is added under the plot heading.
     strike_range:
         Optional ``(low, high)`` pair of spot-price multipliers defining
         the strike grid.  Defaults to ``(0.8, 1.2)``.
@@ -238,11 +242,10 @@ def plot_iv_heatmap(
     cmap = matplotlib.colormaps["plasma"].copy()
     if fallback_slices:
         # with_extremes replaces the deprecated set_bad API (matplotlib >= 3.7
-        # deprecation); the bad color is passed as an RGBA tuple because
-        # with_extremes has no alpha keyword. It returns a new colormap rather
-        # than mutating in place, so the result must be assigned back.
-        cmap = cmap.with_extremes(bad=(0.5019607843137255, 0.5019607843137255,
-                                       0.5019607843137255, 0.5))
+        # deprecation). It returns a new colormap rather than mutating in
+        # place, so the result must be assigned back.  The bad RGBA is the
+        # shared fallback gray -- same constant the legend swatch uses.
+        cmap = cmap.with_extremes(bad=FALLBACK_BAD_RGBA)
 
     mesh = ax.pcolormesh(strikes, maturities, iv_grid,
                          cmap=cmap, shading="auto")
@@ -250,19 +253,26 @@ def plot_iv_heatmap(
     cb = fig.colorbar(mesh, ax=ax, shrink=0.7, aspect=25, pad=0.02)
     cb.set_label("Implied volatility")
 
+    # Fallback legend ABOVE the axes (under the heading), not inside the
+    # plot: a legend row here is always readable, unlike an in-graph text
+    # annotation over dark heatmap cells.  The extra title pad reserves
+    # the band between axes top and title for the legend so tight_layout
+    # keeps both inside the figure.
     if fallback_slices:
-        ax.text(
-            0.02, 0.02,
-            "Grayed region: non-monotonic ATM variance — see Issue #15",
-            transform=ax.transAxes,
-            fontsize=8,
-            color="dimgray",
-            verticalalignment="bottom",
+        ax.legend(
+            handles=[fallback_legend_handle()],
+            loc="lower left",
+            bbox_to_anchor=(0.0, 1.01),
+            frameon=False,
+            fontsize=9,
         )
+        title_pad = 30
+    else:
+        title_pad = 6
 
     ax.set_xlabel("Strike")
     ax.set_ylabel("Time to expiry (yrs)")
-    ax.set_title(f"{symbol} implied volatility surface (iv_at)")
+    ax.set_title(f"{symbol} implied volatility surface (iv_at)", pad=title_pad)
 
     fig.tight_layout()
     return fig

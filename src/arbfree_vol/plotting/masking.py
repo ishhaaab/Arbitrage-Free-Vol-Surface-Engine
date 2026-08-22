@@ -53,3 +53,34 @@ def make_fallback_mask(
     mask = np.any(distances <= tol, axis=1)
 
     return mask
+
+
+# ── Shared fallback-gray styling (single source of truth) ────────────
+# The RGBA 'bad' color heatmaps paint fallback cells with, and the
+# legend Patch that explains them.  The legend swatch and the painted
+# cells must never drift apart, so both read this constant.
+FALLBACK_BAD_RGBA: tuple[float, float, float, float] = (
+    0.5019607843137255, 0.5019607843137255, 0.5019607843137255, 0.5,
+)
+
+_FALLBACK_LEGEND_LABEL: str = (
+    "Fallback slice: no arbitrage-free fit (non-monotonic ATM variance)"
+)
+
+
+def fallback_legend_handle():
+    """Return a matplotlib ``Patch`` legend handle for grayed fallback rows.
+
+    The swatch uses :data:`FALLBACK_BAD_RGBA`, i.e. exactly the color the
+    heatmap modules paint masked cells with.  Import of ``matplotlib`` is
+    deferred so non-plotting consumers of :func:`make_fallback_mask` keep
+    a numpy-only import surface.
+    """
+    from matplotlib.patches import Patch
+
+    return Patch(
+        facecolor=FALLBACK_BAD_RGBA[:3],
+        alpha=FALLBACK_BAD_RGBA[3],
+        edgecolor="gray",
+        label=_FALLBACK_LEGEND_LABEL,
+    )
