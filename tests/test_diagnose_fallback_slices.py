@@ -15,10 +15,15 @@ Covers ``arbfree_vol.ssvi.diagnostics`` (promoted from the former
 - the H&M neighbour check;
 - golden-parity pins for ``run_diagnostics`` end-to-end.
 
-The end-to-end and convergence-table pins rely on scipy optimizer
-determinism (trust-constr with an SLSQP retry); the fixture was
-verified deterministic on scipy 1.17.1.
+The optimizer-outcome pins are platform-dependent: the constrained
+fitter converges or fails on these degenerate slices depending on the
+platform's numerics (Windows/MKL fails where Linux/OpenBLAS converges
+at identical scipy/numpy versions — CI run #32). Cross-platform tests
+assert the reporting contract and invariants; exact outcome matrices are
+pinned on Windows only, where they were verified.
 """
+
+import sys
 
 import numpy as np
 import pytest
@@ -235,16 +240,27 @@ def test_try_hard_constrained_converges_on_clean_slice(synthetic_fit) -> None:
     assert "bf_min_residual" in r["violations"]
 
 
-def test_try_hard_constrained_fails_on_fallback_slice(synthetic_fit) -> None:
+def test_try_hard_constrained_contract_on_fallback_slice(synthetic_fit) -> None:
     pts_by_T, result = synthetic_fit
     pts = pts_by_T[0.427]
     prev, prev_T = _find_predecessor(result.fitted_slices, 0.427)
     assert prev_T == pytest.approx(0.33)  # last HARD fit before the fallback
 
     r = try_hard_constrained(pts, prev)
-    assert r["converged"] is False
-    assert r["params"] is None
-    assert "failed after retry" in r["error"]
+    if r["converged"]:
+        # converged: params present, no error, and the accepted fit must be
+        # feasible within solver tolerance (Linux/OpenBLAS takes this branch)
+        assert set(r.keys()) == {"label", "converged", "params", "violations"}
+        assert r["params"] is not None
+        assert "error" not in r
+        assert r["violations"]["bf_min_residual"] >= -1e-6
+        assert abs(r["violations"]["ratio"]) <= 1.0 + 1e-6
+    else:
+        # failed: exact failure dict, params cleared, error plumbed through
+        # (Windows/MKL takes this branch)
+        assert set(r.keys()) == {"label", "converged", "params", "error"}
+        assert r["params"] is None
+        assert "failed after retry" in r["error"]
 
 
 def test_try_warm_start_fixes_fixable_slice(synthetic_fit) -> None:
@@ -264,7 +280,7 @@ def test_try_warm_start_fixes_fixable_slice(synthetic_fit) -> None:
     assert "bf_min_residual" in r["violations"]
 
 
-def test_try_warm_start_fails_on_infeasible_slice(synthetic_fit) -> None:
+def test_try_warm_start_contract_on_infeasible_slice(synthetic_fit) -> None:
     pts_by_T, result = synthetic_fit
     pts = pts_by_T[0.75]
     prev, prev_T = _find_predecessor(result.fitted_slices, 0.75)
@@ -272,13 +288,75 @@ def test_try_warm_start_fails_on_infeasible_slice(synthetic_fit) -> None:
     unc = fit_ssvi_slice(pts)
 
     r = try_warm_start(pts, prev, unc)
-    assert r["converged"] is False
-    assert r["params"] is None
-    assert set(r.keys()) == {
-        "label", "start", "x0", "converged", "params",
-        "error", "final_objective", "optimizer_status", "optimizer_message",
+    assert r["label"] == "warm-start"
+    assert r["start"].theta > 0.0
+    assert len(r["x0"]) == 3
+    if r["converged"]:
+        # converged (Linux/OpenBLAS branch): params + solver info present,
+        # accepted fit feasible within solver tolerance
+        assert set(r.keys()) == {
+            "label", "start", "x0", "converged", "params", "violations",
+            "final_objective", "optimizer_status", "optimizer_message",
+        }
+        assert r["params"] is not None
+        assert r["optimizer_status"] in (0, 1, 2, 3)
+        assert r["violations"]["bf_min_residual"] >= -1e-6
+        assert abs(r["violations"]["ratio"]) <= 1.0 + 1e-6
+    else:
+        # failed (Windows/MKL branch): error + last-solver info, params cleared
+        assert set(r.keys()) == {
+            "label", "start", "x0", "converged", "params",
+            "error", "final_objective", "optimizer_status", "optimizer_message",
+        }
+        assert r["params"] is None
+        assert r["optimizer_status"] > 0
+        assert r["optimizer_message"]
+
+
+def test_failure_reporting_is_plumbed_deterministically(
+    synthetic_fit, monkeypatch
+) -> None:
+    """Force both failure paths and pin the failure *reporting*.
+
+    The real optimizer's outcome on the degenerate fixture slices is
+    platform-dependent (CI run #32), so the failure branches above may
+    not execute on every platform. Monkeypatching the fit and the solver
+    keeps the error/params/status plumbing covered everywhere.
+    """
+    import arbfree_vol.ssvi.diagnostics as diag
+
+    pts_by_T, result = synthetic_fit
+    pts = pts_by_T[0.427]
+    prev, _ = _find_predecessor(result.fitted_slices, 0.427)
+    unc = fit_ssvi_slice(pts)  # before patching minimize: this fits for real
+
+    def _boom(points, prev=None):
+        raise RuntimeError("forced: failed after retry")
+
+    monkeypatch.setattr(diag, "_fit_slice", _boom)
+    r = diag.try_hard_constrained(pts, prev)
+    assert r == {
+        "label": "default",
+        "converged": False,
+        "params": None,
+        "error": "forced: failed after retry",
     }
-    assert r["optimizer_status"] > 0
+
+    import scipy.optimize as sopt
+
+    fake = SimpleNamespace(
+        success=False,
+        status=8,
+        message="forced: Positive directional derivative for linesearch",
+        x=np.array([0.05, 0.0, 0.0]),
+    )
+    monkeypatch.setattr(sopt, "minimize", lambda *a, **k: fake)
+    r2 = diag.try_warm_start(pts, prev, unc)
+    assert r2["converged"] is False
+    assert r2["params"] is None
+    assert r2["optimizer_status"] == 8
+    assert "Positive directional derivative" in r2["error"]
+    assert r2["optimizer_message"] == fake.message
 
 
 def test_try_random_restarts_contract(synthetic_fit) -> None:
@@ -462,9 +540,13 @@ def test_run_diagnostics_missing_slice_data_reports_error(
 def test_run_diagnostics_end_to_end_golden_parity(monkeypatch, capsys) -> None:
     """End-to-end synthetic run — golden parity with the pre-promotion script.
 
-    The W7 fixture deterministically produces 3 fallback slices at
-    T = 0.427 / 0.75 / 1.00 (verified on scipy 1.17.1); this test pins the
-    exact convergence matrix the diagnostic reports for them.
+    Cross-platform, this asserts the reporting invariants: only known
+    fixture fallbacks appear, the fixture is exactly SSVI-representable
+    (unc_rmse ~ 0), and every outcome field is well-formed. The exact
+    convergence matrix and summary counts are pinned on Windows only —
+    the constrained optimizer's outcome on these degenerate slices is
+    platform-dependent (Linux/OpenBLAS converges where Windows/MKL fails
+    at identical scipy/numpy versions; CI run #32).
     """
     import arbfree_vol.ssvi.diagnostics as diag
 
@@ -472,8 +554,27 @@ def test_run_diagnostics_end_to_end_golden_parity(monkeypatch, capsys) -> None:
     rows = run_diagnostics()
 
     assert rows is not None
-    assert len(rows) == 3
+    assert 1 <= len(rows) <= len(_W7_FALLBACKS)
+    known_fallbacks = set(_W7_FALLBACKS)
 
+    for row in rows:
+        T = row["T"]
+        assert T in known_fallbacks, f"unexpected fallback T={T}"
+        assert row["unc_rmse"] < 1e-6  # fixture is exactly SSVI-representable
+        assert isinstance(row["default_converged"], bool)
+        assert isinstance(row["warm_start_converged"], bool)
+        assert isinstance(row["unc_satisfies_hm"], bool)
+        assert isinstance(row["restart_converged"], int)
+        assert row["restart_converged"] >= 0
+
+    out = capsys.readouterr().out
+    assert "OUTCOME" in out
+    assert "SUMMARY TABLE" in out
+
+    if sys.platform != "win32":
+        return  # exact matrix below was verified on Windows only
+
+    assert len(rows) == 3
     expected = {
         0.427: dict(default=False, warm=True, restart=5, hm=False),
         0.75: dict(default=False, warm=False, restart=0, hm=False),
@@ -481,16 +582,12 @@ def test_run_diagnostics_end_to_end_golden_parity(monkeypatch, capsys) -> None:
     }
     for row in rows:
         T = row["T"]
-        assert T in expected, f"unexpected fallback T={T}"
-        assert row["unc_rmse"] < 1e-6  # fixture is exactly SSVI-representable
         assert row["default_converged"] is expected[T]["default"]
         assert row["warm_start_converged"] is expected[T]["warm"]
         assert row["restart_converged"] == expected[T]["restart"]
         assert row["unc_satisfies_hm"] is expected[T]["hm"]
 
-    out = capsys.readouterr().out
     assert "OUTCOME B" in out
-    assert "SUMMARY TABLE" in out
     assert "Warm-start fixes: 1" in out
     assert "Fundamental infeasibility: 2" in out
     for T in _W7_FALLBACKS:
