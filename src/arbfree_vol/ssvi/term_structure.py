@@ -191,6 +191,41 @@ def _initial_guess(
     return np.array([theta0, u0, v0], dtype=np.float64)
 
 
+def _constrained_problem(
+    points: list[tuple[float, float]],
+    prev: SSVIParams | None = None,
+    *,
+    eps_theta: float = _EPS_THETA,
+    eps_chi: float = _EPS_CHI,
+):
+    """Objective + bounds + hard constraints for one constrained SSVI fit.
+
+    Single source of the ``(theta, u = arctanh(rho), v = log(psi))``
+    problem definition, shared by the production fitter (``_fit_slice``)
+    and the diagnostics warm-start path: the two must optimize the
+    identical problem or the diagnostic's convergence verdicts drift
+    from what production would accept.
+    """
+    ks = np.array([k for k, _ in points], dtype=np.float64)
+    ws = np.array([w for _, w in points], dtype=np.float64)
+
+    bounds = Bounds(
+        lb=[1e-6, -6.0, float(np.log(1e-8))],
+        ub=[10.0, 6.0, float(np.log(20.0))],
+    )
+
+    def _objective(x: NDArray[np.float64]) -> float:
+        theta, u, v = x
+        rho = float(np.tanh(u))
+        p = float(np.exp(v))
+        return float(np.sum(
+            (np.array([ssvi_w(float(k), theta, rho, p) for k in ks]) - ws) ** 2
+        ))
+
+    constraints = _hard_constraints(prev, eps_theta, eps_chi)
+    return _objective, bounds, constraints
+
+
 def _fit_slice(
     points: list[tuple[float, float]],
     prev: SSVIParams | None = None,
@@ -226,31 +261,13 @@ def _fit_slice(
     if len(points) < 5:
         raise ValueError("Need at least 5 points to fit SSVI slice")
 
-    ks = np.array([k for k, _ in points], dtype=np.float64)
-    ws = np.array([w for _, w in points], dtype=np.float64)
-
     x0 = _initial_guess(points, prev, eps_theta, eps_chi)
-
-    # ── Variable bounds ────────────────────────────────────────────
-    bounds = Bounds(
-        lb=[1e-6, -6.0, float(np.log(1e-8))],
-        ub=[10.0,  6.0, float(np.log(20.0))],
+    objective, bounds, constraints = _constrained_problem(
+        points, prev, eps_theta=eps_theta, eps_chi=eps_chi
     )
 
-    # ── Objective: sum of squared residuals ────────────────────────
-    def _objective(x: NDArray[np.float64]) -> float:
-        theta, u, v = x
-        rho = float(np.tanh(u))
-        p = float(np.exp(v))
-        return float(np.sum(
-            (np.array([ssvi_w(float(k), theta, rho, p) for k in ks]) - ws) ** 2
-        ))
-
-    # ── Hard constraints ───────────────────────────────────────────
-    constraints = _hard_constraints(prev, eps_theta, eps_chi)
-
     # ── Optimise ───────────────────────────────────────────────────
-    result = _constrained_minimize(_objective, x0, bounds, constraints, minimize)
+    result = _constrained_minimize(objective, x0, bounds, constraints, minimize)
 
     theta, u, v = result.x
     return SSVIParams(

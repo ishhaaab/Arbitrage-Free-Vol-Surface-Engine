@@ -46,6 +46,7 @@ from arbfree_vol.ssvi.term_structure import (
     verify_hm_condition,
     _fit_slice,
     _butterfly_constraints,
+    _constrained_problem,
 )
 from arbfree_vol.variance import slice_total_variance
 from arbfree_vol.models.surface import VolSurface, ExpirySlice
@@ -285,9 +286,11 @@ def try_warm_start(
 ) -> dict:
     """Run the hard-constrained optimizer from a caller-supplied start point.
 
-    This is the module-local wrapper that passes a start through to the
-    constrained optimizer (``_fit_slice`` has no ``start`` parameter, so
-    the optimizer loop is reproduced here with the given initial point).
+    The problem (objective/bounds/constraints) comes from the shared
+    ``term_structure._constrained_problem`` — identical to what
+    production ``_fit_slice`` optimizes — with the given initial point
+    passed through (``_fit_slice`` derives its own start, so this
+    wrapper drives the optimizer directly).
     It is the key diagnostic: does a given starting point let the
     constrained optimizer converge?
 
@@ -303,10 +306,17 @@ def try_warm_start(
     """
     # We need to temporarily monkeypatch the seed in _fit_slice.
     # Instead, let's directly call the optimizer with the warm-started x0.
-    from scipy.optimize import minimize, NonlinearConstraint, Bounds
+    from scipy.optimize import minimize
 
-    ks = np.array([k for k, _ in points], dtype=np.float64)
-    ws = np.array([w for _, w in points], dtype=np.float64)
+    # Shared problem definition — identical objective/bounds/constraints
+    # to what production ``_fit_slice`` optimizes (single source in
+    # ``term_structure._constrained_problem``).  Only the ACCEPTANCE rule
+    # below deliberately differs from production ``_constrained_minimize``:
+    # this diagnostic reports marginal solver statuses (trust-constr 3,
+    # SLSQP 1/2/3) as converged because its question is "does a given
+    # starting point let the optimizer converge", while production
+    # accepts only ``result.success``.
+    objective, bounds, constraints = _constrained_problem(points, prev)
 
     # Convert warm_params to internal (theta, u, v) representation
     theta0 = float(warm_params.theta)
@@ -317,65 +327,6 @@ def try_warm_start(
     x0 = np.array([theta0, u0, v0], dtype=np.float64)
     start_params = SSVIParams(theta=theta0, rho=rho0, psi=p0)
 
-    eps_theta = 1e-9
-    eps_chi = 1e-6
-
-    bounds = Bounds(
-        lb=[1e-6, -6.0, float(np.log(1e-8))],
-        ub=[10.0, 6.0, float(np.log(20.0))],
-    )
-
-    def _objective(x):
-        theta, u, v = x
-        rho = float(np.tanh(u))
-        p = float(np.exp(v))
-        return float(np.sum(
-            (np.array([ssvi_w(float(k), theta, rho, p) for k in ks]) - ws) ** 2
-        ))
-
-    constraints = []
-
-    def _bf_con(x):
-        theta, u, v = x
-        rho = float(np.tanh(u))
-        p = float(np.exp(v))
-        return _butterfly_constraints(theta, rho, p)
-
-    constraints.append(NonlinearConstraint(_bf_con, 0.0, np.inf))
-
-    if prev is not None:
-        prev_chi = prev.theta * prev.psi
-
-        def _theta_nd(x):
-            return x[0] - prev.theta
-
-        constraints.append(NonlinearConstraint(_theta_nd, eps_theta, np.inf))
-
-        def _chi_nd(x):
-            theta, u, v = x
-            return theta * float(np.exp(v)) - prev_chi
-
-        constraints.append(NonlinearConstraint(_chi_nd, eps_chi, np.inf))
-
-        rho_prev_chi_prev = prev.rho * prev_chi
-
-        def _ratio_upper(x):
-            theta, u, v = x
-            rho = float(np.tanh(u))
-            chi = theta * float(np.exp(v))
-            denom = max(chi - prev_chi, eps_chi)
-            return (rho * chi - rho_prev_chi_prev) / denom
-
-        def _ratio_lower(x):
-            theta, u, v = x
-            rho = float(np.tanh(u))
-            chi = theta * float(np.exp(v))
-            denom = max(chi - prev_chi, eps_chi)
-            return -(rho * chi - rho_prev_chi_prev) / denom
-
-        constraints.append(NonlinearConstraint(_ratio_upper, -1.0, 1.0))
-        constraints.append(NonlinearConstraint(_ratio_lower, -1.0, 1.0))
-
     def _run(method, x_init, tol, maxiter):
         opts = {"maxiter": maxiter}
         if method == "trust-constr":
@@ -383,7 +334,7 @@ def try_warm_start(
         else:
             opts["ftol"] = tol
         return minimize(
-            _objective, x_init, method=method, bounds=bounds,
+            objective, x_init, method=method, bounds=bounds,
             constraints=constraints, options=opts,
         )
 
@@ -406,7 +357,7 @@ def try_warm_start(
             "converged": False,
             "params": None,
             "error": str(result.message),
-            "final_objective": float(_objective(result.x)),
+            "final_objective": float(objective(result.x)),
             "optimizer_status": int(result.status),
             "optimizer_message": str(result.message),
         }
@@ -427,7 +378,7 @@ def try_warm_start(
         "converged": True,
         "params": params,
         "violations": violation_info,
-        "final_objective": float(_objective(result.x)),
+        "final_objective": float(objective(result.x)),
         "optimizer_status": int(result.status),
         "optimizer_message": str(result.message),
     }
