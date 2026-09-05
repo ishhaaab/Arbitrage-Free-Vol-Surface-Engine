@@ -16,6 +16,11 @@ dependencies = [
   "yfinance",
 ]
 
+# Optional ingestion source; imported lazily (ingestion/openbb.py) so the
+# base install stays light.
+[project.optional-dependencies]
+openbb = ["openbb"]
+
 [dependency-groups]
 dev = [
   "pytest",

@@ -1,0 +1,10 @@
+# Dev/test tooling. Includes the runtime deps plus what CI installs
+# (pytest, pytest-cov) and the local lint/type tools.
+-r requirements.txt
+pytest>=8.0
+pytest-cov
+ruff>=0.6
+basedpyright>=1.18
+
+# Mutation testing is configured in setup.cfg ([mutmut]); install on demand:
+#   pip install mutmut

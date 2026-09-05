@@ -23,7 +23,13 @@ Three smile models: raw SVI (Gatheral 2004), eSSVI (Gatheral–Jacquier 2014), a
 ## Quick start
 
 ```bash
-pip install -e .                                              # installs `arbfree` CLI
+git clone https://github.com/ishhaaab/Arbitrage-Free-Vol-Surface-Engine.git
+cd arbfree-vol-surface
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e .                                              # installs `arbfree` CLI + runtime deps
+pip install -r requirements-dev.txt                           # optional: pytest/ruff to run the suite
+pip install "arbfree-vol-surface[openbb]"                     # optional: OpenBB ingestion source
 arbfree --help                                                # repair | detect | price | fetch
 pytest tests/ -q                                              # full test suite
 python demo/yfinance/yfinance_demo.py                         # live SPY pipeline, 6 plots (needs network; --offline for synthetic)

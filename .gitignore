@@ -2,6 +2,7 @@
 .*/
 opencode.jsonc
 AGENTS.MD
+!/docs/AGENTS.MD
 .mcp*
 !.github/
 __pycache__/
@@ -13,7 +14,4 @@ coverage.lcov
 !roadmap.md
 !issues.md
 /mutants
-# Temporary mutmut configuration (mutation-testing campaign working file;
-# see docs/review_campaign.md). The repo's real build config lives in
-# pyproject.toml.
 setup.cfg
