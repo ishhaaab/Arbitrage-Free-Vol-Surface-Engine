@@ -5,6 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "arbfree-vol-surface"
 version = "0.1.0"
+description = "Arbitrage-free implied-volatility surfaces: hard-constrained eSSVI/SVI/SABR calibration, arbitrage detection & repair, Greeks, Dupire local vol"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "ishhaab", email = "ishaan2702@gmail.com" }]
+keywords = [
+  "implied-volatility",
+  "volatility-surface",
+  "svi",
+  "essvi",
+  "sabr",
+  "dupire",
+  "options",
+  "quantitative-finance",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
 requires-python = ">=3.11"
 dependencies = [
   "numpy",
