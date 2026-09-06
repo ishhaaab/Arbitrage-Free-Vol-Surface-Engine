@@ -14,13 +14,17 @@ concurrency:
 
 jobs:
   fast:
-    name: fast (default, excludes slow)
+    name: fast (${{ matrix.python-version }}, excludes slow)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
       - name: Install
         run: |
           python -m pip install -e .
@@ -29,6 +33,27 @@ jobs:
       # --cov-fail-under=85 enforces the coverage floor on the fast run.
       - name: Test
         run: python -m pytest tests/ -q
+
+  lint:
+    # Ruff enforces the rule set pinned in pyproject ([tool.ruff.lint]).
+    # basedpyright is a ratchet: .basedpyright/baseline.json records the
+    # pre-existing findings, so any NEW type error fails this job even
+    # though the baseline is not yet at zero.
+    name: lint + types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install -e .
+          python -m pip install ruff==0.16.6 basedpyright==1.39.10
+      - name: Ruff
+        run: python -m ruff check .
+      - name: basedpyright (baseline ratchet)
+        run: python -m basedpyright
 
   slow:
     # Slow tests (SABR->SVI mapping reproducers, eSSVI determinism
