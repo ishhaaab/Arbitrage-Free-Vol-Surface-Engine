@@ -14,6 +14,10 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
     """Maps each quoted strike in the slice to its total variance w = sigma**2 * T.
 
     Quotes whose price admits no implied vol (arb-violating) are dropped.
+    This includes non-positive and NaN prices: the IV input model rejects
+    them outright, and this map runs on *raw* quotes (detection/repair
+    step 1, before the cleaning layer), so they must be dropped here
+    rather than crash the sweep.
     When enough quotes are dropped that the caller can no longer fit the
     slice, a WARNING is logged with the drop count.
 
@@ -28,6 +32,11 @@ def slice_total_variance(surface: VolSurface, s: ExpirySlice) -> dict[float, flo
     n_dropped = 0
 
     for q in s.quotes:
+        if not q.price > 0.0:
+            # <= 0 or NaN: admits no implied vol, and ImpliedVolInput's
+            # gt=0 guard would raise. Detection runs pre-clean, so drop.
+            n_dropped += 1
+            continue
         iv_input = ImpliedVolInput(
             contract=OptionContract(
                 symbol="_",  # placeholder symbol; not used in any calc

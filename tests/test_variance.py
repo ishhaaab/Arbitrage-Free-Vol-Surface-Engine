@@ -80,3 +80,39 @@ def test_slice_total_variance_single_option() -> None:
     result = slice_total_variance(surface, slice_)
     expected = sigma ** 2 * T
     assert result[strike] == approx(expected, abs=1e-8)
+
+
+def test_slice_total_variance_drops_nonpositive_and_nan_prices(caplog) -> None:
+    """price <= 0 and NaN quotes are dropped, not a Pydantic crash.
+
+    Detection runs on *raw* pre-clean quotes (repair step 1; `arbfree
+    detect` loads with clean=False), so a single garbage price in the
+    chain must degrade to a drop-with-warning, not raise ValidationError
+    out of ImpliedVolInput's gt=0 guard.
+    """
+    import logging
+
+    spot = 100.0
+    T = 0.5
+    r = 0.05
+    q = 0.0
+
+    strike = 100.0
+    sigma = 0.20
+    price = price_floats(spot, strike, T, r, q, sigma, is_call=True)
+
+    quotes = [
+        Quote(strike=strike, option_type=OptionType.CALL, price=price),
+        Quote(strike=90.0, option_type=OptionType.PUT, price=0.0),
+        Quote(strike=110.0, option_type=OptionType.CALL, price=-1.0),
+        Quote(strike=120.0, option_type=OptionType.PUT, price=float("nan")),
+    ]
+    slice_ = ExpirySlice(expiry_time=T, quotes=quotes)
+    surface = VolSurface(spot=spot, risk_free=r, div_yield=q, slices=[slice_])
+
+    with caplog.at_level(logging.WARNING, logger="arbfree_vol.variance"):
+        result = slice_total_variance(surface, slice_)
+
+    assert list(result) == [strike], "only the valid-price strike survives"
+    assert result[strike] == approx(sigma ** 2 * T, abs=1e-8)
+    assert "3/4 quotes dropped" in caplog.text
