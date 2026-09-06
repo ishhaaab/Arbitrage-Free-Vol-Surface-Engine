@@ -14,8 +14,8 @@ discovery keeps the lenient warn-and-continue behavior.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 

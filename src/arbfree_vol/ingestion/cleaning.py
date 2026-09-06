@@ -4,13 +4,12 @@ Each rule can be enabled/disabled and configured.  Rejected quotes are
 preserved with the reason for auditability.
 """
 
-from arbfree_vol.models.surface import Quote, ExpirySlice
-from arbfree_vol.models.option import OptionType
-
+from dataclasses import dataclass
 from enum import Enum
 from math import log
-from dataclasses import dataclass
 
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote
 
 
 class RejectionRule(str, Enum):

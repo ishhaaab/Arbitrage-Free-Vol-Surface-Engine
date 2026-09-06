@@ -1,10 +1,12 @@
 """Tests for portfolio-level Greeks computed from a fitted surface."""
 
+import math
 from datetime import date
 
 import pytest
 from pytest import approx
 
+from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.models.option import (
     BlackScholesInput,
     OptionContract,
@@ -17,9 +19,6 @@ from arbfree_vol.surface.greeks import (
 )
 from arbfree_vol.surface.interpolate import iv_at
 from arbfree_vol.svi.model import SVIParams
-from arbfree_vol.models.fitted import FittedSlice, FittedSurface
-
-import math
 
 
 # ---------------------------------------------------------------------------

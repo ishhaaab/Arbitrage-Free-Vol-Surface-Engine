@@ -44,7 +44,6 @@ from arbfree_vol.ssvi.term_structure import (
     verify_hm_condition,
     verify_ssvi_calendar_free,
 )
-
 from tests.ground_truth.arbitrage_cases import (
     ALL_CASES,
     BOUNDARY_REPAIR_CASES,

@@ -1,6 +1,9 @@
-import sys; sys.path.insert(0, "src")
-import time
-from datetime import date
+import sys
+
+sys.path.insert(0, "src")
+
+import time  # noqa: E402
+from datetime import date  # noqa: E402
 
 from arbfree_vol.models.option import (
     BlackScholesInput,

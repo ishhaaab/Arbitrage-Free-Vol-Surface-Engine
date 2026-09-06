@@ -5,8 +5,10 @@ AGENTS.MD
 !/docs/AGENTS.MD
 .mcp*
 !.github/
+!.basedpyright/
 __pycache__/
 *.egg-info/
+build/
 /plots
 .coverage
 .coverage.*

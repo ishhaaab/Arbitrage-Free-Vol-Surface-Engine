@@ -2,26 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 import math
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
 
-from arbfree_vol.models.option import OptionType, OptionContract, BlackScholesInput
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.fitted import FittedSlice
-from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.dynamics import (
-    fit_surface_series,
-    total_variance_matrix,
-    pca_deformations,
     PCAResult,
     SurfaceSeries,
     SurfaceSnapshot,
     _expiry_buckets,
+    fit_surface_series,
+    pca_deformations,
     principal_mode_labels,
+    total_variance_matrix,
 )
+from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.models.option import BlackScholesInput, OptionContract, OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
+from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
 # ---------------------------------------------------------------------------
 # Constants

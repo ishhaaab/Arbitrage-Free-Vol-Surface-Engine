@@ -1,15 +1,13 @@
-from arbfree_vol.models.surface import VolSurface, get_r, get_q
-from arbfree_vol.svi.model import svi_total_variance
-from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.models.fitted import FittedSlice
-from arbfree_vol.repair.report import RepairReport
-
-from math import log, exp
+from math import exp, log
 
 import numpy as np
 from matplotlib.figure import Figure
 
-
+from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.models.surface import VolSurface, get_q, get_r
+from arbfree_vol.repair.report import RepairReport
+from arbfree_vol.svi.model import svi_total_variance
+from arbfree_vol.variance import slice_total_variance
 
 
 def plot_smiles(

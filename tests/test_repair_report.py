@@ -19,18 +19,18 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from arbfree_vol.models.fitted import (
-    FittedSlice,
-    FittedSSVISlice,
-    FittedSABRSlice,
-)
-from arbfree_vol.models.option import OptionType
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.arbitrage.report import (
     ArbitrageReport,
     ArbitrageViolation,
     ViolationType,
 )
+from arbfree_vol.models.fitted import (
+    FittedSABRSlice,
+    FittedSlice,
+    FittedSSVISlice,
+)
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.repair.report import RejectedQuote, RepairMetrics, RepairReport
 from arbfree_vol.sabr.model import SABRParams
 from arbfree_vol.ssvi.model import SSVIParams, eSSVISurfaceParams

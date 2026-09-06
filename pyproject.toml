@@ -76,3 +76,19 @@ include = ["src", "tests"]
 typeCheckingMode = "standard"
 pythonVersion = "3.11"
 reportMissingTypeStubs = false
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+# First enforcement set: real-bug rules (E4/E7/E9/F) plus import ordering.
+# Ruff's default selection has broadened across versions, so this pins
+# what CI enforces; broaden deliberately (RUF/BLE/DTZ/...) as the backlog
+# allows.  Type checking is ratcheted via basedpyright's baseline.json.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Standalone scripts bootstrap sys.path before importing the package.
+"bench/*.py" = ["E402"]
+"scripts/*.py" = ["E402"]

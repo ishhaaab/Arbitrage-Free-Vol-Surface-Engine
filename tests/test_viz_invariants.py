@@ -14,12 +14,13 @@ so the expected masked row is known by construction.
 from datetime import date
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import numpy as np
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.surface.interpolate import build_fitted_surface
 from arbfree_vol.viz.surface import plot_iv_heatmap
@@ -36,7 +37,7 @@ _TOL = 0.01  # make_fallback_mask tolerance
 
 
 def _bp(otype, K, sigma=0.2, tt=1.0):
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
     c = OptionContract(symbol="X", option_type=otype, strike=K, expiry_date=_DUMMY)
     m = BlackScholesInput(contract=c, spot=SPOT, expiry_time=tt,

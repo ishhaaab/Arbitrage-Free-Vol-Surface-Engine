@@ -1,14 +1,14 @@
 """Tests for the yfinance fetcher (mocked, no network calls)."""
 
 import logging
-from unittest.mock import patch, MagicMock
 from datetime import date, timedelta
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest import approx
 
-from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import VolSurface
 
 
 @patch("arbfree_vol.ingestion.yahoo.yf.Ticker")
@@ -88,8 +88,9 @@ def test_fetch_chain_falls_back_on_bad_rates(mock_date_class, mock_ticker_class,
     """When ^IRX or dividend yield is missing, the surface still builds
     with the documented fallbacks — and a WARNING states exactly which
     value was substituted and why (no silent defaults)."""
-    import pandas as pd
     from datetime import date as real_date
+
+    import pandas as pd
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker
@@ -143,8 +144,9 @@ def test_fetch_chain_no_fallback_warning_when_rates_available(
 ) -> None:
     """When ^IRX and dividendYield ARE available, no fallback warning is
     logged — a regression guard against logging on every call."""
-    import pandas as pd
     from datetime import date as real_date
+
+    import pandas as pd
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker
@@ -216,8 +218,9 @@ def test_fetch_chain_observed_zero_dividend_yield_is_preserved(
     the ticker info) must be preserved as q=0.0 — and the warning must
     say the yield was observed as zero, NOT that it was missing and
     substituted (the pre-fix bug conflated q==0 with missing)."""
-    import pandas as pd
     from datetime import date as real_date
+
+    import pandas as pd
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker
@@ -268,6 +271,7 @@ def test_fetch_chain_index_q_mix_is_logged(
     """When some index slices get a per-expiry parity q and others do
     not, the resulting MIXED q-quality surface is logged explicitly."""
     from datetime import date as real_date
+
     import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
@@ -309,6 +313,7 @@ def test_fetch_chain_index_q_all_fail_etf_fallback_logged(
     """All slices fail parity -> representative ETF yield fallback is
     logged, and the surface carries the ETF q."""
     from datetime import date as real_date
+
     import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
@@ -353,8 +358,10 @@ def test_fetch_chain_index_representative_zero_yield_preserved(
     surface q hardcoded to 0.0" — conflating an observed zero with
     missing data (commit 5bf429a aligned the primary paths; this pins
     the same semantics on the representative fallback)."""
-    import pandas as pd
     from datetime import date as real_date
+
+    import pandas as pd
+
     import arbfree_vol.ingestion.yahoo as yf_mod
 
     mock_ticker = MagicMock()
@@ -418,6 +425,7 @@ def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
     """All slices fail parity AND no representative ETF -> q=0.0
     fallback-of-last-resort is logged explicitly."""
     from datetime import date as real_date
+
     import arbfree_vol.ingestion.yahoo as yf_mod
 
     _mock_index_chain(mock_ticker_class)
@@ -447,8 +455,9 @@ def test_fetch_chain_index_q_all_fail_zero_fallback_logged(
 @patch("arbfree_vol.ingestion.yahoo.date")
 def test_fetch_chain_disable_quality_filter(mock_date_class, mock_ticker_class) -> None:
     """disable_quality_filter=True skips the filter and returns empty drops."""
-    import pandas as pd
     from datetime import date as real_date
+
+    import pandas as pd
 
     mock_ticker = MagicMock()
     mock_ticker_class.return_value = mock_ticker
@@ -535,6 +544,7 @@ def test_fetch_chain_supplied_curve_wins_over_irx(
     surface r is the curve's 1y rate and per-slice r(T) is threaded from
     it, while q still comes from the shared rate orchestration."""
     from datetime import date as real_date
+
     from arbfree_vol.rates import YieldTermStructure
 
     _basic_chain_mock(mock_ticker_class)

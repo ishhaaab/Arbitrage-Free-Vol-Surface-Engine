@@ -1,12 +1,10 @@
 from collections.abc import Callable
 from math import sqrt
 
-from arbfree_vol.svi.model import SVIParams, svi_total_variance, svi_g
-
-
-from scipy.optimize import least_squares
 import numpy as np
+from scipy.optimize import least_squares
 
+from arbfree_vol.svi.model import SVIParams, svi_g, svi_total_variance
 
 # Evaluation budget for the unconstrained warm-start fit used by the
 # constrained multi-start.  Empirically measured (2026-08-08, scipy

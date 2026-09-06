@@ -5,20 +5,23 @@ from datetime import date
 import numpy as np
 from pytest import approx
 
-from arbfree_vol.arbitrage.quote_detect import detect, _check_wide_spread
+from arbfree_vol.arbitrage.quote_detect import _check_wide_spread, detect
 from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
 from arbfree_vol.models.option import (
     BlackScholesInput,
+    OffendingQuote,
     OptionContract,
     OptionType,
-    OffendingQuote,
 )
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.pricing.black_scholes import price
-
 from tests.chain_helpers import (
-    SPOT, RISK_FREE, DIV_YIELD, T,
-    _bs_price, _surface,
+    DIV_YIELD,
+    RISK_FREE,
+    SPOT,
+    T,
+    _bs_price,
+    _surface,
 )
 
 

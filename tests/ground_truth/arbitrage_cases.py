@@ -39,9 +39,7 @@ from arbfree_vol.ssvi.model import (
     to_raw_svi_params,
 )
 from arbfree_vol.svi.model import SVIParams
-
 from tests.ground_truth.cases import GroundTruthCase
-
 
 # ---------------------------------------------------------------------------
 # Independent literal implementations (anti-circularity: these are the

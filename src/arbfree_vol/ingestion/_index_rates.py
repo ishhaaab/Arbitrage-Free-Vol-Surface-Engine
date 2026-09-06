@@ -26,8 +26,8 @@ fallbacks (``None`` / ``r=0.05, q=0.0``) instead of raising.
 import logging
 import math
 
-from arbfree_vol.models.surface import ExpirySlice
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice
 from arbfree_vol.rates import YieldTermStructure, build_fred_curve
 
 _logger = logging.getLogger(__name__)
@@ -68,8 +68,8 @@ def _estimate_index_dividend_yield(
     Returns the MEDIAN q across all usable ATM pairs, or None if
     estimation fails (no call/put pair, or invalid values).
     """
-    from statistics import median
     from math import exp, log
+    from statistics import median
 
     if slice_.expiry_time <= 0:
         return None

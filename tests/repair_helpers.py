@@ -8,9 +8,8 @@ builders.
 """
 from datetime import date
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
-
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 
 SPOT = 100.0
 R = 0.05
@@ -21,7 +20,7 @@ _DUMMY_DATE = date(2030, 1, 1)
 
 def _bs_price(otype: OptionType, strike: float,
               sigma: float = 0.2, tt: float = T) -> float:
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
 
     contract = OptionContract(
@@ -67,7 +66,8 @@ _DIP_TRUTH_ENGINE = [
 def _ssvi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
     """Price a surface from SSVI ground truth so the (k, w) data the
     engine sees matches the fitted model's conventions exactly."""
-    from math import sqrt, exp
+    from math import exp, sqrt
+
     from arbfree_vol.ssvi.model import ssvi_w
 
     ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]
@@ -108,7 +108,8 @@ _SVI_TRUTH_ENGINE = [
 def _svi_priced_surface(truth, n_strikes: int | None = None) -> VolSurface:
     """Price a surface from raw SVI ground truth so the (k, w) data the
     engine sees matches the fitted model's conventions exactly."""
-    from math import sqrt, exp
+    from math import exp, sqrt
+
     from arbfree_vol.svi.model import svi_total_variance
 
     ks = [-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0]

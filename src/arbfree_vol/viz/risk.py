@@ -45,8 +45,9 @@ def plot_greeks_heatmap(
     -------
     Figure
     """
-    from arbfree_vol.plotting.masking import make_fallback_mask
     import matplotlib
+
+    from arbfree_vol.plotting.masking import make_fallback_mask
 
     greeks = bucketed_greeks(
         fs, strikes, maturities, OptionType.CALL,

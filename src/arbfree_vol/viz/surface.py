@@ -4,8 +4,8 @@ from math import sqrt
 
 import matplotlib
 import numpy as np
-from matplotlib.figure import Figure
 from matplotlib import cm
+from matplotlib.figure import Figure
 from scipy.interpolate import griddata
 
 from arbfree_vol.models.fitted import FittedSlice
@@ -13,8 +13,8 @@ from arbfree_vol.plotting.masking import (
     FALLBACK_BAD_RGBA,
     fallback_legend_handle,
 )
-from arbfree_vol.svi.model import svi_total_variance
 from arbfree_vol.surface.interpolate import FittedSurface, iv_at
+from arbfree_vol.svi.model import svi_total_variance
 
 
 def plot_surface(

@@ -26,6 +26,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")  # headless: save to files, no GUI window
 
 import matplotlib.pyplot as plt
@@ -54,9 +55,9 @@ def _synthetic_series() -> list[tuple[date, "object"]]:
     from math import sqrt
 
     from arbfree_vol.models.option import OptionType
-    from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-    from arbfree_vol.svi.model import SVIParams, svi_total_variance
+    from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
     from arbfree_vol.pricing.black_scholes import price_floats
+    from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
     spot, r, q = 100.0, 0.05, 0.01
     exps = [0.25, 0.5, 1.0]
@@ -105,8 +106,10 @@ def main() -> None:
     pairs = _synthetic_series()
 
     from arbfree_vol.dynamics import (
-        fit_surface_series, total_variance_matrix, pca_deformations,
+        fit_surface_series,
+        pca_deformations,
         principal_mode_labels,
+        total_variance_matrix,
     )
     from arbfree_vol.surface.interpolate import iv_at
 

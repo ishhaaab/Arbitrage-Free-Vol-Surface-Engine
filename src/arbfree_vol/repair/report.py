@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
+
+from arbfree_vol.arbitrage.report import ArbitrageReport, ViolationType
+from arbfree_vol.models.fitted import FittedSABRSlice, FittedSlice, FittedSSVISlice
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import VolSurface
-from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice, FittedSABRSlice
-from arbfree_vol.arbitrage.report import ViolationType, ArbitrageReport
-
 
 
 @dataclass(frozen=True, slots=True)

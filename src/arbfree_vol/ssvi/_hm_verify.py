@@ -2,6 +2,7 @@
 
 import numpy as np
 from numpy.typing import NDArray
+
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 
 

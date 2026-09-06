@@ -21,6 +21,7 @@ import argparse
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")  # headless: save to files, no GUI window
 
 import matplotlib.pyplot as plt
@@ -94,9 +95,9 @@ def _synthetic_surface(ticker: str):
     from math import sqrt
 
     from arbfree_vol.models.option import OptionType
-    from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-    from arbfree_vol.svi.model import SVIParams, svi_total_variance
+    from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
     from arbfree_vol.pricing.black_scholes import price_floats
+    from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
     seed = sum(ord(c) for c in ticker)
     spot, r, q = 100.0, 0.05, 0.01

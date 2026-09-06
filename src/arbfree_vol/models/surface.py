@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 
 from arbfree_vol.models.option import OptionType
 
+
 class Quote(BaseModel): # one option quote
     # price has no constraint so the ingestion layer can construct raw
     # quotes from messy market data; the cleaning layer is responsible

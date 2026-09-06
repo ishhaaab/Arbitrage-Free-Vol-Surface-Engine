@@ -33,7 +33,6 @@ import pandas as pd
 
 from arbfree_vol.data.quality import filter_option_chain
 from arbfree_vol.ingestion import openbb as openbb_mod
-
 from tests.chain_helpers import _make_chain_df
 
 
@@ -270,6 +269,7 @@ class TestFixA_IngestionPaths:
         """yfinance fetch_chain: a NaN-OI strike drops as OI=missing,
         an observed OI=0 strike drops as OI=0<10 — never the same."""
         from datetime import date as real_date
+
         from arbfree_vol.ingestion.yahoo import fetch_chain
 
         mock_ticker = MagicMock()
@@ -442,6 +442,7 @@ class TestFixB_YfinanceFallbackWarnings:
     ) -> None:
         """^IRX empty → WARNING names the symbol and substitutes r=0.05."""
         from datetime import date as real_date
+
         from arbfree_vol.ingestion.yahoo import fetch_chain
 
         self._mock_fetch_chain(
@@ -468,6 +469,7 @@ class TestFixB_YfinanceFallbackWarnings:
         """dividendYield missing from ticker info → WARNING names the
         symbol and substitutes q=0.0."""
         from datetime import date as real_date
+
         from arbfree_vol.ingestion.yahoo import fetch_chain
 
         self._mock_fetch_chain(

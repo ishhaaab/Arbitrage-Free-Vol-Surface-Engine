@@ -2,6 +2,7 @@
 
 import numpy as np
 from numpy.typing import NDArray
+
 from arbfree_vol.ssvi.model import _GJ_STRICT_EPS
 
 # Margin applied to the two STRICT Gatheral-Jacquier condition-1

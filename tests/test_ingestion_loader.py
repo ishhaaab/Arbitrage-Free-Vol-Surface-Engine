@@ -5,7 +5,6 @@ from pathlib import Path
 
 from arbfree_vol.ingestion.loader import load_chain_csv
 
-
 SPOT = 100.0
 T = 0.5
 AS_OF = date(2024, 1, 15)

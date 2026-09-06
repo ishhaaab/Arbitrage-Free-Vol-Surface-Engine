@@ -15,14 +15,14 @@ from math import exp, sqrt
 import numpy as np
 from pytest import approx
 
-from arbfree_vol.models.option import OptionContract, OptionType, BlackScholesInput
+from arbfree_vol.models.option import BlackScholesInput, OptionContract, OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.pricing.black_scholes import price
 from arbfree_vol.repair.engine import repair
-from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
-from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.sabr.model import sabr_implied_vol
 from arbfree_vol.ssvi.model import essvi_w
+from arbfree_vol.surface.interpolate import build_fitted_surface, iv_at
+from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
 SPOT = 100.0
 R = 0.05

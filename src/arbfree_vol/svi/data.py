@@ -1,6 +1,6 @@
 from math import exp
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r, get_q
+from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_q, get_r
 
 
 def _forward_price(surface: VolSurface, s: ExpirySlice) -> float:

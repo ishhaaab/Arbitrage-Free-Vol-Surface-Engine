@@ -1,6 +1,8 @@
-from math import sqrt
-from pydantic import BaseModel, Field
 from dataclasses import dataclass
+from math import sqrt
+
+from pydantic import BaseModel, Field
+
 
 class SVIParams(BaseModel):
     a: float

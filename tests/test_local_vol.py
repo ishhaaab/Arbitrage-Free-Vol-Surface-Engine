@@ -8,13 +8,13 @@ import math
 import pytest
 from pytest import approx
 
-from arbfree_vol.svi.model import SVIParams
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.pricing.local_vol import (
-    dupire_at,
-    dupire,
     _d2w_dk2,
+    dupire,
+    dupire_at,
 )
+from arbfree_vol.svi.model import SVIParams
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +477,8 @@ class TestDupireDenominatorNan:
     def test_dupire_at_nan_at_extreme_wing(self) -> None:
         """A steep smile (large b, rho near -1) drives the Dupire
         denominator negative at extreme moneyness → dupire_at returns nan."""
-        from arbfree_vol.svi.model import SVIParams
         from arbfree_vol.models.fitted import FittedSlice, FittedSurface
+        from arbfree_vol.svi.model import SVIParams
 
         spot = 100.0
         r = 0.05
@@ -514,9 +514,11 @@ class TestDupireDenominatorNan:
         # K=50 on the steep smile drives the Dupire denominator NEGATIVE —
         # prove the mechanism directly, then confirm dupire_at maps it to nan.
         from arbfree_vol.pricing.local_vol import (
-            _dw_dk, _d2w_dk2, _dupire_denominator,
+            _d2w_dk2,
+            _dupire_denominator,
+            _dw_dk,
         )
-        from arbfree_vol.surface.interpolate import total_variance_at, _forward_at
+        from arbfree_vol.surface.interpolate import _forward_at, total_variance_at
 
         F_T = _forward_at(fs, 1.0)
         w = total_variance_at(fs, 50.0, 1.0)
@@ -592,8 +594,8 @@ class TestDupireSubTwoSliceFallbackMask:
     maturity (all-nan, no evaluation); any other row must fail clearly."""
 
     def _single_slice_surface(self) -> FittedSurface:
-        from arbfree_vol.svi.model import SVIParams
         from arbfree_vol.models.fitted import FittedSlice, FittedSurface
+        from arbfree_vol.svi.model import SVIParams
 
         spot = 100.0
         r = 0.05

@@ -1,12 +1,10 @@
 """Violation heatmap and bar charts."""
 
-from arbfree_vol.arbitrage.report import ArbitrageReport
-
 from collections import Counter
 
 from matplotlib.figure import Figure
 
-
+from arbfree_vol.arbitrage.report import ArbitrageReport
 
 
 def plot_violations_bar(report: ArbitrageReport) -> Figure:

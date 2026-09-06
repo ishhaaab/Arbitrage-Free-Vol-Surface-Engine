@@ -19,7 +19,6 @@ from math import exp, log, sqrt
 import numpy as np
 from pydantic import BaseModel, Field
 
-
 # Center-weighted log-moneyness grid for the SABR->SVI mapping.  The
 # traded-moneyness band (k in [-1, 1]) drives the reprice fit, so it
 # gets 100 of the 200 points; the +/- 3.0 wings stay fully sampled
@@ -209,6 +208,7 @@ def to_raw_svi_params(sabr_params: SABRParams,
         Fitted (a, b, rho, m, sigma) parameters.
     """
     from scipy.optimize import least_squares
+
     from arbfree_vol.svi.model import svi_total_variance
 
     if k_grid is None:

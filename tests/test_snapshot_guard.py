@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo
 
 from arbfree_vol.data.snapshot_guard import check_snapshot_time
 
-
 _EASTERN = ZoneInfo("US/Eastern")
 
 

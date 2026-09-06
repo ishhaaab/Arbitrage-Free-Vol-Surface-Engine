@@ -13,7 +13,6 @@ from arbfree_vol.data import audit
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 
-
 # ---------- helpers ----------
 
 

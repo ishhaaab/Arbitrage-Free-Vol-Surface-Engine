@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-
 from math import erf, exp, log, pi, sqrt
 
 _INV_SQRT2 = 1.0 / sqrt(2.0)

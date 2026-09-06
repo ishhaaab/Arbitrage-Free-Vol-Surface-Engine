@@ -10,6 +10,7 @@ Surface", J. Comput. Finance 22(5), 25-39, Prop 3.1.
 import numpy as np
 import pytest
 
+from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, to_raw_svi_params
 from arbfree_vol.ssvi.term_structure import (
     _GJ_CONDITION1_STRICT_EPS,
@@ -19,10 +20,7 @@ from arbfree_vol.ssvi.term_structure import (
     verify_hm_condition_breakdown,
     verify_ssvi_calendar_free,
 )
-from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
-
 from tests.repair_helpers import _DIP_TRUTH_ENGINE
-
 
 # ── Synthetic ground truth ──────────────────────────────────────────
 # Three slices with theta increasing and chi = theta*psi increasing.
@@ -680,6 +678,7 @@ def test_fit_slice_seed_adjustment_pins_floor_clip_and_prev_chi(monkeypatch) -> 
     prev_chi reset ``p0 = (prev_chi + eps_chi) / theta0``.
     """
     from scipy.optimize import OptimizeResult
+
     import arbfree_vol.ssvi.term_structure as ts
 
     points = _fit_points()

@@ -8,11 +8,11 @@ to a JSON fixture.  The fixture is used for determinism testing — the
 fitting pipeline should produce identical results when run on this
 fixture multiple times.
 """
-import sys
 import json
 import math
-from pathlib import Path
+import sys
 from datetime import date
+from pathlib import Path
 
 _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:

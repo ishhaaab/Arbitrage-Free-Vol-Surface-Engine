@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from pytest import approx
 
+from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.sabr.model import (
     SABRParams,
     clamp_to_sabr_domain,
@@ -11,7 +12,6 @@ from arbfree_vol.sabr.model import (
     sabr_total_variance,
     to_raw_svi_params,
 )
-from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.svi.model import svi_total_variance
 
 # Recovery tolerance for SABR calibration (beta is fixed, so recovery is

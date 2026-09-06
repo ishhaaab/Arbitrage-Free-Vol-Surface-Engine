@@ -24,14 +24,12 @@ pinned on Windows only, where they were verified.
 """
 
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
-from types import SimpleNamespace
 
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
-from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.ssvi.diagnostics import (
     _build_synthetic_data,
     _build_violation_info,
@@ -48,7 +46,8 @@ from arbfree_vol.ssvi.diagnostics import (
     try_random_restarts,
     try_warm_start,
 )
-
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
+from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 
 # ── Shared fixture ───────────────────────────────────────────────────
 

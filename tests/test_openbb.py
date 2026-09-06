@@ -4,7 +4,7 @@ import logging
 import sys
 import types
 from datetime import date, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -54,8 +54,9 @@ class TestOpenBBColumnMapping:
         """_normalise_columns keeps missing values as NaN (not 0.0) so the
         quality filter can distinguish a missing value from a genuinely
         observed zero (the missing-OI-as-0 bug class)."""
-        import pandas as pd
         import math
+
+        import pandas as pd
         df = pd.DataFrame({
             "open_interest": [None, 200],
             "volume": [float("nan"), 20],
@@ -100,6 +101,7 @@ class TestOpenBBRowToQuote:
         returned None.  Drives the same normalise-then-convert path the
         fetch pipeline uses for row conversion."""
         import pandas as pd
+
         from arbfree_vol.models.option import OptionType
 
         raw = pd.DataFrame({
@@ -130,6 +132,7 @@ class TestOpenBBExpirationParsing:
         date-only string so ``date.fromisoformat`` (used by fetch_chain's
         sort/parse path) cannot be broken by a time component."""
         from datetime import datetime as dt_cls
+
         import pandas as pd
 
         df = pd.DataFrame({
@@ -165,10 +168,11 @@ class TestOpenBBIndexDividendYield:
     def test_estimate_via_parity(self) -> None:
         """Verify q estimation matches the put-call parity rearrangement."""
         from datetime import date as date_cls
-        from arbfree_vol.models.option import OptionContract, BlackScholesInput
+
+        from arbfree_vol.models.option import BlackScholesInput, OptionContract
         from arbfree_vol.models.option import OptionType as OT
-        from arbfree_vol.pricing.black_scholes import price
         from arbfree_vol.models.surface import ExpirySlice, Quote
+        from arbfree_vol.pricing.black_scholes import price
 
         S, r, T, K = 100.0, 0.05, 1.0, 100.0
         q_true = 0.013

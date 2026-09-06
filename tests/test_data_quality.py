@@ -6,7 +6,6 @@ from arbfree_vol.data.quality import (
     DataQualityConfig,
     filter_option_chain,
 )
-
 from tests.chain_helpers import _make_chain_df
 
 

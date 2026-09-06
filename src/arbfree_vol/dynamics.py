@@ -24,9 +24,9 @@ from datetime import date
 
 import numpy as np
 
+from arbfree_vol.models.fitted import FittedSlice
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.repair.engine import repair
-from arbfree_vol.models.fitted import FittedSlice
 from arbfree_vol.svi.model import svi_total_variance
 
 _BUCKET_TOL = 1e-3

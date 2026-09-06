@@ -4,7 +4,7 @@ import logging
 from datetime import date
 
 from arbfree_vol.models.option import ImpliedVolInput, OptionContract
-from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_r, get_q
+from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_q, get_r
 from arbfree_vol.pricing.implied_vol import implied_vol
 
 _logger = logging.getLogger(__name__)

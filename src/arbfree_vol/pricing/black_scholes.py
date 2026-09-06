@@ -3,6 +3,7 @@
 from arbfree_vol.models.option import BlackScholesInput, OptionType
 from arbfree_vol.pricing._core import core, norm_cdf
 
+
 def price_floats(
     S: float, K: float, T: float, r: float, q: float, sigma: float, is_call: bool
 ) -> float:

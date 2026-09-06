@@ -8,17 +8,16 @@ expected title / legend labels.  Agg backend is pinned for determinism.
 
 from datetime import date
 
+import matplotlib
 import numpy as np
 import pytest
 
-import matplotlib
 matplotlib.use("Agg")
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType
-from arbfree_vol.repair.engine import repair
 from arbfree_vol.arbitrage.quote_detect import detect
-
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
+from arbfree_vol.repair.engine import repair
 
 _DUMMY = date(2030, 1, 1)
 SPOT = 100.0
@@ -26,7 +25,7 @@ R = 0.05
 
 
 def _bp(otype, K, sigma=0.2, tt=1.0):
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
     c = OptionContract(symbol="X", option_type=otype, strike=K, expiry_date=_DUMMY)
     m = BlackScholesInput(contract=c, spot=SPOT, expiry_time=tt,
@@ -166,8 +165,8 @@ def test_smile_model_comparison_returns_figure() -> None:
 
 
 def test_iv_heatmap_returns_figure() -> None:
-    from arbfree_vol.viz.surface import plot_iv_heatmap
     from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.surface import plot_iv_heatmap
 
     _, r = _two_expiry_surface()
     fs = build_fitted_surface(r)
@@ -192,8 +191,8 @@ def test_iv_heatmap_returns_figure() -> None:
 
 
 def test_dupire_heatmap_returns_figure() -> None:
-    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
     from arbfree_vol.pricing.local_vol import LocalVolSurface
+    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
 
     lv = LocalVolSurface(
         strikes=(90, 95, 100, 105, 110),
@@ -212,8 +211,8 @@ def test_dupire_heatmap_returns_figure() -> None:
 
 
 def test_greeks_heatmap_returns_figure() -> None:
-    from arbfree_vol.viz.risk import plot_greeks_heatmap
     from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
 
     _, r = _two_expiry_surface()
     fs = build_fitted_surface(r)
@@ -243,9 +242,9 @@ def test_greeks_heatmap_fallback_masking_content() -> None:
     heatmap must carry that mask cell-for-cell and keep the unmasked
     content equal to the bucketed Greek grid.
     """
-    from arbfree_vol.viz.risk import plot_greeks_heatmap
-    from arbfree_vol.surface.interpolate import build_fitted_surface
     from arbfree_vol.surface.greeks import bucketed_greeks
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
 
     _, r = _two_expiry_surface()
     fs = build_fitted_surface(r)
@@ -285,8 +284,8 @@ def test_greeks_heatmap_fallback_masking_content() -> None:
 def test_greeks_heatmap_no_fallback_masks_nothing() -> None:
     """Without fallback slices on a clean surface, no heatmap cell may be
     masked."""
-    from arbfree_vol.viz.risk import plot_greeks_heatmap
     from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
 
     _, r = _two_expiry_surface()
     fs = build_fitted_surface(r)
@@ -314,11 +313,11 @@ def test_masked_heatmaps_use_configured_bad_color() -> None:
     configured gray.  After plotting masked data, the effective colormap
     on the rendered mesh must carry the configured gray bad color.
     """
-    from arbfree_vol.viz.surface import plot_iv_heatmap
-    from arbfree_vol.viz.risk import plot_greeks_heatmap
-    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
-    from arbfree_vol.surface.interpolate import build_fitted_surface
     from arbfree_vol.pricing.local_vol import LocalVolSurface
+    from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.local_vol import plot_dupire_heatmap
+    from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.viz.surface import plot_iv_heatmap
 
     expected_bad = (0.5019607843137255, 0.5019607843137255,
                     0.5019607843137255, 0.5)
@@ -386,9 +385,9 @@ def test_masked_heatmaps_use_configured_bad_color() -> None:
 # ---------------------------------------------------------------------------
 
 def test_plot_surface_raises_with_less_than_two_slices() -> None:
-    from arbfree_vol.viz.surface import plot_surface
     from arbfree_vol.models.fitted import FittedSlice
     from arbfree_vol.svi.model import SVIParams
+    from arbfree_vol.viz.surface import plot_surface
 
     single = FittedSlice(
         expiry_time=1.0,
@@ -407,9 +406,9 @@ def test_plot_surface_raises_with_less_than_two_slices() -> None:
 
 
 def test_plot_heatmap_2d_raises_with_less_than_two_slices() -> None:
-    from arbfree_vol.viz.surface import plot_heatmap_2d
     from arbfree_vol.models.fitted import FittedSlice
     from arbfree_vol.svi.model import SVIParams
+    from arbfree_vol.viz.surface import plot_heatmap_2d
 
     single = FittedSlice(
         expiry_time=1.0,
@@ -426,9 +425,9 @@ def test_plot_heatmap_2d_raises_with_less_than_two_slices() -> None:
 
 def test_plot_heatmap_2d_raises_with_too_few_points() -> None:
     """Fewer than 5 data points across all slices -> ValueError."""
-    from arbfree_vol.viz.surface import plot_heatmap_2d
     from arbfree_vol.models.fitted import FittedSlice
     from arbfree_vol.svi.model import SVIParams
+    from arbfree_vol.viz.surface import plot_heatmap_2d
 
     sl1 = FittedSlice(
         expiry_time=0.5,
@@ -454,8 +453,8 @@ def test_plot_heatmap_2d_raises_with_too_few_points() -> None:
 
 
 def test_plot_iv_heatmap_raises_with_no_slices() -> None:
-    from arbfree_vol.viz.surface import plot_iv_heatmap
     from arbfree_vol.models.fitted import FittedSurface
+    from arbfree_vol.viz.surface import plot_iv_heatmap
 
     fs = FittedSurface(
         spot=100.0,
@@ -472,8 +471,8 @@ def test_plot_iv_heatmap_raises_with_no_slices() -> None:
 def test_plot_iv_heatmap_masks_out_of_range_cells() -> None:
     """iv_at raising ValueError for out-of-range strikes/expiries is
     absorbed: those grid cells stay NaN (masked) instead of aborting."""
-    from arbfree_vol.viz.surface import plot_iv_heatmap
     from arbfree_vol.surface.interpolate import build_fitted_surface
+    from arbfree_vol.viz.surface import plot_iv_heatmap
 
     # A surface whose slices have no fitted slices beyond their own range:
     # iv_at over a wider grid will raise ValueError on out-of-range cells.

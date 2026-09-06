@@ -1,21 +1,21 @@
 """Tests for the SSVI / eSSVI parameterization."""
 from math import sqrt
+
 import pytest
 from pytest import approx
 
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.ssvi.model import (
-    essvi_psi,
-    ssvi_w,
-    essvi_w,
-    ssvi_dw_dk,
-    ssvi_d2w_dk2,
-    to_raw_svi_params,
     essvi_arb_safe,
+    essvi_psi,
+    essvi_w,
     gatheral_jacquier_condition,
+    ssvi_d2w_dk2,
+    ssvi_dw_dk,
+    ssvi_w,
+    to_raw_svi_params,
 )
 from arbfree_vol.svi.model import svi_total_variance
-from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-
 
 # FIXTURE parameter set — NOT from any paper (Gatheral & Jacquier 2014 uses symbolic theta/phi
 # only; no concrete tuple theta=0.04,rho=-0.4,psi=0.5 appears there). Used for consistency tests.

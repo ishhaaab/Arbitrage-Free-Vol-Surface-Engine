@@ -12,14 +12,13 @@ import pytest
 
 from arbfree_vol.ssvi.model import SSVIParams, gatheral_jacquier_condition, ssvi_w
 from arbfree_vol.ssvi.term_structure import (
-    _butterfly_constraints,
     _GJ_CONDITION1_STRICT_EPS,
+    SequentialFitResult,
+    _butterfly_constraints,
     _hard_fit_is_degenerate_corner,
     _slice_rmse,
     verify_hm_condition_breakdown,
-    SequentialFitResult,
 )
-
 
 # ── Helper to build synthetic fitted_slices ──────────────────────────
 

@@ -35,8 +35,9 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")  # headless: save to files, no GUI window
 
 _OUT = Path(__file__).parent
@@ -94,7 +95,7 @@ def _build_synthetic() -> DataBundle:
     from math import sqrt
 
     from arbfree_vol.models.option import OptionType
-    from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
+    from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
     from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
     spot, r, q = 100.0, 0.05, 0.01
@@ -172,14 +173,13 @@ def _fetch_live() -> DataBundle:
 # 2. Repair with all three models
 # ---------------------------------------------------------------------------
 def run_repair(surface) -> dict[str, object]:
-    from arbfree_vol.repair.engine import repair
-
     # Pre-repair arbitrage report — used for the violations bar chart so the
     # plot always shows a real distribution (post-repair SVI is often 0).
     # Uses detect_with_forward so the chart's baseline matches the
     # violations_before column in the summary table (repair()'s internal
     # detection is forward-aware; plain detect() is not).
     from arbfree_vol.arbitrage.quote_detect import detect_with_forward
+    from arbfree_vol.repair.engine import repair
     before_report = detect_with_forward(surface)
 
     reports: dict[str, object] = {}
@@ -208,8 +208,8 @@ def run_repair(surface) -> dict[str, object]:
 # ---------------------------------------------------------------------------
 def build_and_analyze(reports, surface) -> tuple[object, list[float], list[float], object]:
     """FittedSurface from the eSSVI report, then Dupire + Greeks grids."""
-    from arbfree_vol.surface.interpolate import build_fitted_surface
     from arbfree_vol.pricing.local_vol import dupire
+    from arbfree_vol.surface.interpolate import build_fitted_surface
 
     essvi = reports["eSSVI"]
     fs = build_fitted_surface(essvi)
@@ -252,10 +252,10 @@ def build_and_analyze(reports, surface) -> tuple[object, list[float], list[float
 # 4. Plots
 # ---------------------------------------------------------------------------
 def save_plots(reports, surface, fs, strikes, maturities, lv, before_report) -> None:
-    from arbfree_vol.viz.surface import plot_surface, plot_iv_heatmap
-    from arbfree_vol.viz.smiles import plot_smiles
     from arbfree_vol.viz.local_vol import plot_dupire_heatmap
     from arbfree_vol.viz.risk import plot_greeks_heatmap
+    from arbfree_vol.viz.smiles import plot_smiles
+    from arbfree_vol.viz.surface import plot_iv_heatmap, plot_surface
     from arbfree_vol.viz.violations import plot_violations_bar
 
     fallback_Ts = list(reports["eSSVI"].fallback_slices)

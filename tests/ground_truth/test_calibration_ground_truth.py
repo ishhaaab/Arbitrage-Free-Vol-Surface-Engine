@@ -22,7 +22,6 @@ from pytest import approx
 from arbfree_vol.sabr.calibration import calibrate_sabr
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.svi.calibration import calibrate
-
 from tests.ground_truth.calibration_cases import (
     ALL_CALIBRATION_CASES,
     ESSVI_SLICE_RECOVERY,

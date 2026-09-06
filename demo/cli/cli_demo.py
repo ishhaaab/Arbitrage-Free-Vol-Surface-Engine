@@ -48,8 +48,8 @@ def run(cmd: list[str]) -> None:
 def build_chain_csv() -> None:
     """Write a clean 2-expiry SVI chain (with bid/ask so cleaning passes)."""
     from arbfree_vol.models.option import OptionType
-    from arbfree_vol.svi.model import SVIParams, svi_total_variance
     from arbfree_vol.pricing.black_scholes import price_floats
+    from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
     spot, r, q = 100.0, 0.05, 0.01
     params = {

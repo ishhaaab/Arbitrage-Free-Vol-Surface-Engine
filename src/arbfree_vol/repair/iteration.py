@@ -1,7 +1,7 @@
 
 from arbfree_vol.models.surface import VolSurface
-from arbfree_vol.repair.report import RepairReport
 from arbfree_vol.repair.engine import repair
+from arbfree_vol.repair.report import RepairReport
 
 
 def iterative_repair(surface: VolSurface, 

@@ -11,11 +11,12 @@ patches ``arbitrage.calendar.slice_total_variance`` to simulate a slice
 with empty total variance).
 """
 
-import numpy as np
 from math import log
 
+import numpy as np
+
 from arbfree_vol.arbitrage.report import ArbitrageViolation, ViolationType
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
 from arbfree_vol.variance import slice_total_variance
 
 

@@ -2,10 +2,9 @@
 
 from datetime import date
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.repair.iteration import iterative_repair
-
 
 SPOT = 100.0
 R = 0.05
@@ -15,7 +14,7 @@ _DUMMY = date(2030, 1, 1)
 
 
 def _bp(otype: OptionType, K: float, sigma: float = 0.2, tt: float = T) -> float:
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
     c = OptionContract(symbol="X", option_type=otype, strike=K, expiry_date=_DUMMY)
     m = BlackScholesInput(contract=c, spot=SPOT, expiry_time=tt,
@@ -168,7 +167,7 @@ def test_iterative_repair_stops_after_two_zero_rejections(monkeypatch) -> None:
         ArbitrageViolation,
         ViolationType,
     )
-    from arbfree_vol.repair.report import RepairReport, RepairMetrics
+    from arbfree_vol.repair.report import RepairMetrics, RepairReport
 
     surface = _clean_surface(n_strikes=7)
     cleaned = surface  # the fake repair never changes the surface
@@ -217,7 +216,7 @@ def test_iterative_repair_stops_when_cleaned_surface_is_none(monkeypatch) -> Non
         ArbitrageViolation,
         ViolationType,
     )
-    from arbfree_vol.repair.report import RepairReport, RepairMetrics
+    from arbfree_vol.repair.report import RepairMetrics, RepairReport
 
     surface = _clean_surface(n_strikes=7)
 

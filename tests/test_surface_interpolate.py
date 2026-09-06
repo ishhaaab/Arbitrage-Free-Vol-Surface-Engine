@@ -5,13 +5,13 @@ import math
 import pytest
 from pytest import approx
 
-from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.surface.interpolate import (
     build_fitted_surface,
-    total_variance_at,
     iv_at,
+    total_variance_at,
 )
+from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
 
 def _forward(T: float, spot: float = 100.0, r: float = 0.05, q: float = 0.0) -> float:
@@ -192,7 +192,7 @@ class TestBuildFittedSurface:
     def test_build_fitted_surface_raises_on_no_cleaned_surface(self) -> None:
         """A RepairReport with cleaned_surface=None raises ValueError."""
         from arbfree_vol.arbitrage.report import ArbitrageReport
-        from arbfree_vol.repair.report import RepairReport, RepairMetrics
+        from arbfree_vol.repair.report import RepairMetrics, RepairReport
 
         report = RepairReport(
             rejected=(),

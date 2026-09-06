@@ -1,10 +1,8 @@
 from statistics import mean
 
-from arbfree_vol.repair.report import RepairReport
-
 from matplotlib.figure import Figure
 
-
+from arbfree_vol.repair.report import RepairReport
 
 
 def plot_comparison(

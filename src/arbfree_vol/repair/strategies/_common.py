@@ -4,8 +4,8 @@ from enum import Enum, auto
 from math import log
 from typing import Protocol
 
-from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice, FittedSABRSlice
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
+from arbfree_vol.models.fitted import FittedSABRSlice, FittedSlice, FittedSSVISlice
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
 from arbfree_vol.variance import slice_total_variance
 
 _logger = logging.getLogger(__name__)

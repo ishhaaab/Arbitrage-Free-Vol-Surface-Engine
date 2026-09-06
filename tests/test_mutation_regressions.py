@@ -25,10 +25,13 @@ from arbfree_vol.arbitrage.svi_detect import _check_min_variance
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote
 from arbfree_vol.svi.model import SVIParams
-
 from tests.chain_helpers import (
-    SPOT, RISK_FREE, DIV_YIELD, T,
-    _bs_price, _surface,
+    DIV_YIELD,
+    RISK_FREE,
+    SPOT,
+    T,
+    _bs_price,
+    _surface,
 )
 
 
@@ -163,8 +166,8 @@ def test_sabr_reparametrisation_roundtrip_exact() -> None:
     import numpy as np
 
     from arbfree_vol.sabr.term_structure import (
-        EPS_FLOOR,
         _RHO_BOUND,
+        EPS_FLOOR,
         _alpha_from_u,
         _nu_from_u,
         _u_from_alpha,

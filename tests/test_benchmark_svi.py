@@ -13,9 +13,8 @@ from math import sqrt
 from pytest import approx
 
 from arbfree_vol.arbitrage.svi_detect import detect_svi, min_total_variance
-from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.ssvi.model import essvi_psi, gatheral_jacquier_condition
-
+from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
 # FIXTURE parameter set — NOT from any paper. The reconstructed Gatheral (2004) base case is
 # (a=0.04, b=0.4, rho=-0.4, sigma=0.1, m=0); the tuple below (sigma=0.15, m=0.05) was

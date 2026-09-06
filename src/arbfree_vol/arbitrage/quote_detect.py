@@ -1,10 +1,10 @@
 from math import exp
 
-from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
 from arbfree_vol.arbitrage.calendar import _check_calendar
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r, get_q
-from arbfree_vol.models.option import OptionType, OffendingQuote
+from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
 from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.models.option import OffendingQuote, OptionType
+from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_q, get_r
 
 
 def _parity_rhs(

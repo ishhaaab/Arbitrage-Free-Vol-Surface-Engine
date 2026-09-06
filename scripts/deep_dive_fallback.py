@@ -9,18 +9,19 @@ fit explain the fallback slice's own data on this snapshot.
 """
 
 import sys
-from math import sqrt, log
+from math import log, sqrt
 from pathlib import Path
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
+from arbfree_vol.ingestion.yahoo import fetch_chain
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.ingestion.yahoo import fetch_chain
-from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 
 def fetch_and_extract():
@@ -104,7 +105,7 @@ def main():
             # What happens if we force theta = prev_theta + eps and refit?
             # We can't directly, but we can check: does the predecessor fit
             # this data well at all?
-            print(f"\n  If we use predecessor params for this slice:")
+            print("\n  If we use predecessor params for this slice:")
             print(f"    RMSE = {prev_rmse:.8f}  (vs unconstrained = {unc_rmse:.8f})")
             print(f"    Ratio = {prev_rmse/unc_rmse:.1f}x worse" if unc_rmse > 0 else "    (unconstrained RMSE is 0)")
 
@@ -114,7 +115,7 @@ def main():
 
         # Check: what does the unconstrained fit's theta look like in the 
         # overall term structure?
-        print(f"\n  ATM vol term structure around this slice:")
+        print("\n  ATM vol term structure around this slice:")
         for T_i, p_i in sorted_fitted:
             atm_w = p_i.theta
             atm_vol = sqrt(atm_w / T_i) if T_i > 0 else 0

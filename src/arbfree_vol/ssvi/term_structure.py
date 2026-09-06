@@ -57,11 +57,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import minimize, Bounds
-
-from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
-from arbfree_vol.ssvi.calibration import fit_ssvi_slice
-from arbfree_vol.ssvi._constraints import _hard_constraints, _constrained_minimize
+from scipy.optimize import Bounds, minimize
 
 # Re-exports preserving the pre-split import surface: the pure leaf
 # helpers now live in the private sibling modules below, and importing
@@ -70,23 +66,26 @@ from arbfree_vol.ssvi._constraints import _hard_constraints, _constrained_minimi
 # unchanged.  Declared in ``__all__`` so linters treat them as the
 # module's public namespace rather than unused imports.
 from arbfree_vol.ssvi._butterfly import _GJ_CONDITION1_STRICT_EPS, _butterfly_constraints
+from arbfree_vol.ssvi._constraints import _constrained_minimize, _hard_constraints
 from arbfree_vol.ssvi._hm_margin import (
-    _EPS_THETA,
     _EPS_CHI,
-    _HM_BOUNDARY_MARGIN_THETA,
+    _EPS_THETA,
     _HM_BOUNDARY_MARGIN_CHI,
-    _HM_RMSE_RATIO_MAX,
+    _HM_BOUNDARY_MARGIN_THETA,
     _HM_RMSE_FLOOR,
-    _slice_rmse,
+    _HM_RMSE_RATIO_MAX,
     _hm_boundary_deltas,
+    _slice_rmse,
     _within_boundary_window,
 )
 from arbfree_vol.ssvi._hm_verify import (
-    verify_hm_condition,
-    verify_ssvi_calendar_free,
-    verify_hm_condition_breakdown,
     _hm_breakdown_entry,
+    verify_hm_condition,
+    verify_hm_condition_breakdown,
+    verify_ssvi_calendar_free,
 )
+from arbfree_vol.ssvi.calibration import fit_ssvi_slice
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 
 # Public namespace: the sequential fit API plus the re-exported leaf
 # helpers above (``from arbfree_vol.ssvi.term_structure import *``

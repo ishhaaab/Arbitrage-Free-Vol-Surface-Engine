@@ -17,8 +17,10 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from arbfree_vol.data.audit import load_spx_fixture  # noqa: E402
-from arbfree_vol.data.audit import extract_slice_data  # noqa: E402
+from arbfree_vol.data.audit import (
+    extract_slice_data,  # noqa: E402
+    load_spx_fixture,  # noqa: E402
+)
 from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential  # noqa: E402
 
 

@@ -1,14 +1,13 @@
 """Implied volatility solver with a Newton fast path and bounded Brent fallback."""
 
+from math import pi, sqrt
 from typing import cast
-from math import sqrt, pi
 
 from scipy.optimize import brentq
 
 from arbfree_vol.models.option import ImpliedVolInput, OptionType
-from arbfree_vol.pricing.black_scholes import price_floats
 from arbfree_vol.pricing._core import vega_floats
-
+from arbfree_vol.pricing.black_scholes import price_floats
 
 _NEWTON_ITERS = 5
 _NEWTON_TOL = 1e-8

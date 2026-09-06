@@ -1,8 +1,10 @@
-from arbfree_vol.svi.model import SVIParams, svi_g, svi_total_variance
-from arbfree_vol.arbitrage.report import ArbitrageViolation, ArbitrageReport, ViolationType
 from math import sqrt
+
 from numpy import linspace
 from scipy.optimize import minimize_scalar
+
+from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation, ViolationType
+from arbfree_vol.svi.model import SVIParams, svi_g, svi_total_variance
 
 
 def min_total_variance(params: SVIParams)-> float:

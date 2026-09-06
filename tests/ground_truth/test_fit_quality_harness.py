@@ -17,7 +17,6 @@ from pytest import approx
 
 from arbfree_vol.svi.calibration import calibrate
 from arbfree_vol.svi.model import svi_total_variance
-
 from tests.ground_truth.arbitrage_cases import SVI_ARB_FREE_FROM_ESSVI
 from tests.ground_truth.cases import build_svi_quote_surface
 from tests.ground_truth.fit_quality import (

@@ -16,10 +16,10 @@ import logging
 
 import numpy as np
 from numpy.typing import NDArray
-from scipy.optimize import Bounds, NonlinearConstraint, minimize, OptimizeResult
+from scipy.optimize import Bounds, NonlinearConstraint, OptimizeResult, minimize
 
-from arbfree_vol.ssvi.model import SSVIParams
 from arbfree_vol.ssvi._butterfly import _butterfly_constraints
+from arbfree_vol.ssvi.model import SSVIParams
 
 _logger = logging.getLogger(__name__)
 

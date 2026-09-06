@@ -1,7 +1,9 @@
-from enum import Enum
-from datetime import date
-from pydantic import BaseModel, Field
 from dataclasses import dataclass
+from datetime import date
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
 
 class OptionType(str, Enum):
     CALL= "call"

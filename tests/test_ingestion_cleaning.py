@@ -1,19 +1,18 @@
 """Tests for the quote cleaning module."""
-from arbfree_vol.models.surface import Quote, ExpirySlice
-from arbfree_vol.models.option import OptionType
 from arbfree_vol.ingestion.cleaning import (
     RejectionRule,
-    clean_quotes,
-    _check_negative_price,
-    _check_zero_price,
-    _check_zero_bid_or_ask,
     _check_crossed_market,
-    _check_wide_spread,
+    _check_deep_moneyness,
     _check_intrinsic_violation,
     _check_near_expiry,
-    _check_deep_moneyness,
+    _check_negative_price,
+    _check_wide_spread,
+    _check_zero_bid_or_ask,
+    _check_zero_price,
+    clean_quotes,
 )
-
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote
 
 SPOT = 100.0
 T = 0.5

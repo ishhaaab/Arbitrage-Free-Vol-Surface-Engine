@@ -30,11 +30,10 @@ module-level constants below.
 """
 
 from dataclasses import dataclass
-from math import log, nan, sqrt, isnan
+from math import isnan, log, nan, sqrt
 
-from arbfree_vol.surface.interpolate import FittedSurface, total_variance_at, _forward_at
 from arbfree_vol.pricing._fallback import _FB_TOL, _stencil_touches_fallback
-
+from arbfree_vol.surface.interpolate import FittedSurface, _forward_at, total_variance_at
 
 # Module-level tolerances  
 

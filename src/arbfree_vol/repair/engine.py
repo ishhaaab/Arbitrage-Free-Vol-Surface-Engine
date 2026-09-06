@@ -19,19 +19,19 @@ logic in its named step helper (``_detect_violations``, ``_reject_quotes``,
 flat 1-7 read.
 """
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
-from arbfree_vol.models.option import OptionType
-from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation
 from arbfree_vol.arbitrage.quote_detect import detect_with_forward
+from arbfree_vol.arbitrage.report import ArbitrageReport, ArbitrageViolation
 from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
 from arbfree_vol.repair.report import (
     RejectedQuote,
     RepairMetrics,
     RepairReport,
 )
-from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
-from arbfree_vol.repair.strategies import RepairStrategy, get_strategy, _PathFitResult
+from arbfree_vol.repair.strategies import RepairStrategy, _PathFitResult, get_strategy
 
 
 def _build_rejection_set(

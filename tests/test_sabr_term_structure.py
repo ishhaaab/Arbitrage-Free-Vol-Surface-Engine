@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from pytest import approx
 
-from arbfree_vol.sabr.model import SABRParams, sabr_total_variance
 from arbfree_vol.sabr.calibration import calibrate_sabr
+from arbfree_vol.sabr.model import SABRParams, sabr_total_variance
 from arbfree_vol.sabr.term_structure import (
     EPS_FLOOR,
     fit_sabr_term_structure,
@@ -166,6 +166,7 @@ def test_joint_fit_nonconvergence_falls_back_to_per_slice(monkeypatch, caplog) -
     fallback result from a converged joint fit — value-equals-per-slice
     is the fallback contract."""
     import logging
+
     import arbfree_vol.sabr.term_structure as ts
 
     slices = _make_synthetic_slices()

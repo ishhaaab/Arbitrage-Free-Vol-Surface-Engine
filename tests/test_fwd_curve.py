@@ -2,12 +2,12 @@
 import logging
 from datetime import date
 from math import exp, log
+
 from pytest import approx
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType
 from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
-
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 
 SPOT = 100.0
 R = 0.05
@@ -16,7 +16,7 @@ _DUMMY_DATE = date(2030, 1, 1)
 
 
 def _call_price(strike: float, sigma: float = 0.2, tt: float = T) -> float:
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
 
     contract = OptionContract(
@@ -31,7 +31,7 @@ def _call_price(strike: float, sigma: float = 0.2, tt: float = T) -> float:
 
 
 def _put_price(strike: float, sigma: float = 0.2, tt: float = T) -> float:
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
 
     contract = OptionContract(

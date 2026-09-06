@@ -3,8 +3,8 @@ from datetime import date
 
 from pytest import approx
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType, ImpliedVolInput, OptionContract
+from arbfree_vol.models.option import ImpliedVolInput, OptionContract, OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.pricing.black_scholes import price_floats
 from arbfree_vol.pricing.implied_vol import implied_vol
 from arbfree_vol.variance import slice_total_variance

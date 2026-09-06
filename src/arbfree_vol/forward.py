@@ -16,8 +16,8 @@ import logging
 from math import exp, log
 from statistics import median
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, get_r, get_q
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, VolSurface, get_q, get_r
 
 _logger = logging.getLogger(__name__)
 

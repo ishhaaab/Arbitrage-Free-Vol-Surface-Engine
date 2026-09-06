@@ -3,8 +3,8 @@
 from datetime import date
 
 import pytest
-from pytest import approx
 from pydantic import ValidationError
+from pytest import approx
 
 from arbfree_vol.models.option import (
     BlackScholesInput,

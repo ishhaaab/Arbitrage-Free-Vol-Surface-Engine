@@ -3,16 +3,15 @@ from math import log, sqrt
 from statistics import mean
 
 from arbfree_vol.models.fitted import FittedSlice
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
-from arbfree_vol.svi.calibration import calibrate_constrained
-from arbfree_vol.svi.model import svi_total_variance, SVIParams
-from arbfree_vol.variance import slice_total_variance
-
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
 from arbfree_vol.repair.strategies._common import (
     _PathFitResult,
-    _PrepStatus,
     _prepare_slice,
+    _PrepStatus,
 )
+from arbfree_vol.svi.calibration import calibrate_constrained
+from arbfree_vol.svi.model import SVIParams, svi_total_variance
+from arbfree_vol.variance import slice_total_variance
 
 _logger = logging.getLogger(__name__)
 

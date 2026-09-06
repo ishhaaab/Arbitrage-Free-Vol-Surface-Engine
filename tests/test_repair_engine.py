@@ -25,22 +25,27 @@ Shared constants and surface-builder helpers live in
 ``tests/repair_helpers.py``.
 """
 import logging
-import pytest
 
 import numpy as np
+import pytest
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
 from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.sabr.model import SABRParams
-
 from tests.repair_helpers import (
-    SPOT, R, Q, T,
     _DIP_TRUTH_ENGINE,
-    _bs_price, _clean_surface,
-    _dip_truth_surface, _svi_truth_surface,
+    SPOT,
+    Q,
+    R,
+    T,
+    _bs_price,
+    _clean_surface,
+    _dip_truth_surface,
+    _flat_bs_surface,
+    _forward_curve_missing,
     _ssvi_priced_surface,
-    _flat_bs_surface, _forward_curve_missing,
+    _svi_truth_surface,
 )
 
 
@@ -320,9 +325,11 @@ def test_repair_svi_path_fixes_calendar_violation() -> None:
     w_current(k) >= w_prev(k) on the k-grid, and the post-repair
     detect_svi_surface is clean.
     """
-    from math import exp, sqrt as _sqrt
-    from arbfree_vol.svi.model import SVIParams, svi_total_variance
+    from math import exp
+    from math import sqrt as _sqrt
+
     from arbfree_vol.arbitrage.svi_detect import detect_svi_surface
+    from arbfree_vol.svi.model import SVIParams, svi_total_variance
 
     # NOTE: these truth params are synthetic and chosen purely so the
     # short-dated slice's wings exceed the long-dated slice's wings
@@ -456,8 +463,8 @@ def test_repair_sabr_term_structure_reduces_violations() -> None:
     - Every SABRParams has alpha > 0, nu > 0, rho in (-1,1), beta == 0.5
     - Calendar violation count is small (<= 5)
     """
-    from arbfree_vol.sabr.term_structure import EPS_FLOOR
     from arbfree_vol.arbitrage.report import ViolationType
+    from arbfree_vol.sabr.term_structure import EPS_FLOOR
 
     surface = _flat_bs_surface([0.25, 0.5, 1.0])
     report = repair(surface, use_sabr=True)
@@ -781,7 +788,8 @@ def test_repair_infeasible_true_when_grid_finds_remaining_violations(monkeypatch
     load-bearing on ALL-HARD surfaces, not just fallback-containing ones.
     """
     import arbfree_vol.ssvi.term_structure as ts
-    from arbfree_vol.ssvi.model import SSVIParams, ssvi_w as _ssvi_w
+    from arbfree_vol.ssvi.model import SSVIParams
+    from arbfree_vol.ssvi.model import ssvi_w as _ssvi_w
 
     surface = _flat_bs_surface([0.25, 1.0])
 
@@ -1132,8 +1140,8 @@ def test_repair_essvi_failed_slices_sorted_with_no_forward(monkeypatch) -> None:
     which produces ``[0.5, 0.25]`` without the ordering contract.  The
     documented contract (``repair`` docstring) is chronological order,
     so the report must carry ``[0.25, 0.5]``."""
-    import arbfree_vol.ssvi.term_structure as ts
     import arbfree_vol.repair.engine as engine_mod
+    import arbfree_vol.ssvi.term_structure as ts
 
     truth = [
         (0.25, dict(theta=0.08, rho=-0.3, psi=0.5)),
@@ -1299,7 +1307,10 @@ def test_fit_slice_returns_none_for_few_points(caplog) -> None:
 def test_get_strategy_selects_strategy_class() -> None:
     """get_strategy() resolves the repair() model flags to strategy classes."""
     from arbfree_vol.repair.strategies import (
-        get_strategy, SVIStrategy, ESSVIStrategy, SABRStrategy,
+        ESSVIStrategy,
+        SABRStrategy,
+        SVIStrategy,
+        get_strategy,
     )
 
     assert isinstance(get_strategy(), SVIStrategy)
@@ -1312,7 +1323,7 @@ def test_get_strategy_selects_strategy_class() -> None:
 def test_strategy_names_pin_log_prefixes() -> None:
     """The strategy ``name`` attributes are the per-path log prefixes the
     caplog tests assert byte-for-byte (``"SVI"``, ``"eSSVI"``, ``"SABR"``)."""
-    from arbfree_vol.repair.strategies import SVIStrategy, ESSVIStrategy, SABRStrategy
+    from arbfree_vol.repair.strategies import ESSVIStrategy, SABRStrategy, SVIStrategy
 
     assert SVIStrategy().name == "SVI"
     assert ESSVIStrategy().name == "eSSVI"

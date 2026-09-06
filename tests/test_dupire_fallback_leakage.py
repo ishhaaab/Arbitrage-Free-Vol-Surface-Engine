@@ -9,10 +9,9 @@ import math
 
 import pytest
 
-from arbfree_vol.svi.model import SVIParams
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.pricing.local_vol import dupire
-
+from arbfree_vol.svi.model import SVIParams
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -348,8 +347,8 @@ class TestDupireFallbackLeakage:
         a fallback row that fails to mask, or an extra masked cell that
         is finite in the grid, fails the test.
         """
-        import numpy as np
         import matplotlib
+        import numpy as np
         matplotlib.use("Agg")
 
         from arbfree_vol.viz.local_vol import plot_dupire_heatmap
@@ -383,8 +382,8 @@ class TestDupireFallbackLeakage:
         no calendar-arb NaN leaks into the grid either: every cell is
         finite and the plotted mesh is fully unmasked.
         """
-        import numpy as np
         import matplotlib
+        import numpy as np
         matplotlib.use("Agg")
 
         from arbfree_vol.viz.local_vol import plot_dupire_heatmap

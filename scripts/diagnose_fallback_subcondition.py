@@ -26,22 +26,22 @@ Usage:
     python scripts/diagnose_fallback_subcondition.py
 """
 
-import sys
 import logging
-from pathlib import Path
+import sys
 from collections import Counter
+from pathlib import Path
 
 # Ensure project root on sys.path
 _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition_breakdown,
 )
 from arbfree_vol.variance import slice_total_variance
-from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
 
 _logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
@@ -206,7 +206,7 @@ def diagnose_source(label: str, surface) -> dict | None:
     counter = Counter()  # counts by sub-condition
     multi_count = 0
 
-    print(f"\n  Per-slice breakdown:")
+    print("\n  Per-slice breakdown:")
     print(f"  {'T':>8}  {'prev_T':>8}  {'theta':>10}  {'chi':>10}  "
           f"{'ratio':>8}  {'FAILS':<30}")
     print(f"  {'-' * 78}")
@@ -237,14 +237,14 @@ def diagnose_source(label: str, surface) -> dict | None:
         "multi": multi_count,
     }
 
-    print(f"\n  Breakdown:")
+    print("\n  Breakdown:")
     print(f"    theta violations: {aggregate['theta']}/{n_fallback}")
     print(f"    chi violations:   {aggregate['chi']}/{n_fallback}")
     print(f"    ratio violations: {aggregate['ratio']}/{n_fallback}")
     print(f"    multi-condition:  {aggregate['multi']}/{n_fallback}")
-    print(f"    (ratio is only counted where chi increases; where chi dips")
-    print(f"     the ratio is N/A — a derived consequence, not a separate")
-    print(f"     model failure)")
+    print("    (ratio is only counted where chi increases; where chi dips")
+    print("     the ratio is N/A — a derived consequence, not a separate")
+    print("     model failure)")
 
     return {
         "label": label,
@@ -277,18 +277,18 @@ def print_comparison(all_results: dict[str, dict | None]):
               f"{agg['ratio']:>6} {agg['multi']:>6}")
 
     # Interpretation
-    print(f"\n  Interpretation:")
-    print(f"  - theta violations (PRIMARY) = data wants lower ATM variance")
-    print(f"    at this maturity than the predecessor. Likely a data artifact")
-    print(f"    (event risk, microstructure noise) or a genuine short-end feature.")
-    print(f"  - chi violations (PRIMARY) = theta*psi dips, often correlated")
-    print(f"    with theta dips (if theta drops, chi likely drops too).")
-    print(f"  - ratio violations (DERIVED) = theta and chi are both increasing,")
-    print(f"    but the cross-slice slope condition |(rho*chi)'| / chi' <= 1")
-    print(f"    fails. This is a structural H&M limitation.")
-    print(f"  - ratio is only evaluated where chi increases.  Where chi dips,")
-    print(f"    the ratio is N/A (undefined) — a chi dip is the primary failure,")
-    print(f"    and the old clamped denominator produced a huge misleading ratio.")
+    print("\n  Interpretation:")
+    print("  - theta violations (PRIMARY) = data wants lower ATM variance")
+    print("    at this maturity than the predecessor. Likely a data artifact")
+    print("    (event risk, microstructure noise) or a genuine short-end feature.")
+    print("  - chi violations (PRIMARY) = theta*psi dips, often correlated")
+    print("    with theta dips (if theta drops, chi likely drops too).")
+    print("  - ratio violations (DERIVED) = theta and chi are both increasing,")
+    print("    but the cross-slice slope condition |(rho*chi)'| / chi' <= 1")
+    print("    fails. This is a structural H&M limitation.")
+    print("  - ratio is only evaluated where chi increases.  Where chi dips,")
+    print("    the ratio is N/A (undefined) — a chi dip is the primary failure,")
+    print("    and the old clamped denominator produced a huge misleading ratio.")
 
     # Key finding
     has_data = {k: v for k, v in all_results.items() if v is not None}
@@ -305,15 +305,15 @@ def print_comparison(all_results: dict[str, dict | None]):
               f"(only where chi increases; N/A where chi dips)")
 
         if total_ratio == 0 and total_theta > 0:
-            print(f"\n  => ALL fallbacks are data-driven (theta/chi violations).")
-            print(f"     No structural H&M limitations found — the ratio condition")
-            print(f"     is satisfied wherever chi increases.")
+            print("\n  => ALL fallbacks are data-driven (theta/chi violations).")
+            print("     No structural H&M limitations found — the ratio condition")
+            print("     is satisfied wherever chi increases.")
         elif total_ratio > 0 and total_theta == 0:
-            print(f"\n  => ALL fallbacks are model-driven (ratio violations).")
-            print(f"     The H&M slope condition is the binding constraint.")
+            print("\n  => ALL fallbacks are model-driven (ratio violations).")
+            print("     The H&M slope condition is the binding constraint.")
         else:
-            print(f"\n  => Mixed: some data-driven (theta/chi) and some")
-            print(f"     model-driven (ratio) fallbacks.")
+            print("\n  => Mixed: some data-driven (theta/chi) and some")
+            print("     model-driven (ratio) fallbacks.")
 
 
 # ── Main ─────────────────────────────────────────────────────────────

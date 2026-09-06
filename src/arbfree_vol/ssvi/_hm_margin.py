@@ -2,6 +2,7 @@
 
 from math import sqrt
 from statistics import mean
+
 from arbfree_vol.ssvi.model import SSVIParams, ssvi_w
 
 # Floors applied to the two Hendriks-Martini calendar constraints in

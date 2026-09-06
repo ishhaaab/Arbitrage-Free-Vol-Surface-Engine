@@ -15,7 +15,7 @@ secondary fallback) and threads ``r(T)`` per slice via
 working because a flat curve's ``zero_rate(T)`` is constant.
 """
 
-from arbfree_vol.rates.curve import YieldTermStructure, Pillar
+from arbfree_vol.rates.curve import Pillar, YieldTermStructure
 from arbfree_vol.rates.fred import (
     FRED_SOFR_SERIES,
     FRED_TREASURY_SERIES,

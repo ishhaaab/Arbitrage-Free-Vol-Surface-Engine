@@ -7,14 +7,22 @@ model API; adding a model family means adding one strategy module here.
 """
 from arbfree_vol.repair.strategies._common import (
     RepairStrategy as RepairStrategy,
+)
+from arbfree_vol.repair.strategies._common import (
     _PathFitResult as _PathFitResult,
-    _PrepStatus as _PrepStatus,
-    _SlicePrep as _SlicePrep,
+)
+from arbfree_vol.repair.strategies._common import (
     _prepare_slice as _prepare_slice,
 )
-from arbfree_vol.repair.strategies.svi import SVIStrategy
+from arbfree_vol.repair.strategies._common import (
+    _PrepStatus as _PrepStatus,
+)
+from arbfree_vol.repair.strategies._common import (
+    _SlicePrep as _SlicePrep,
+)
 from arbfree_vol.repair.strategies.essvi import ESSVIStrategy
 from arbfree_vol.repair.strategies.sabr import SABRStrategy
+from arbfree_vol.repair.strategies.svi import SVIStrategy
 
 
 def get_strategy(use_ssvi: bool = False, use_sabr: bool = False) -> RepairStrategy:

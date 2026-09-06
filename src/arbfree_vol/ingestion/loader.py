@@ -8,19 +8,15 @@ function arguments or inferred from the data (spot= first row's value
 if all rows agree; r, q default to 0.05 and 0.0).
 """
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType
-from arbfree_vol.ingestion.cleaning import clean_quotes, RejectionRecord
-
-
 import csv
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 
+from arbfree_vol.ingestion.cleaning import RejectionRecord, clean_quotes
+from arbfree_vol.models.option import OptionType
+from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
 from arbfree_vol.rates import YieldTermStructure
 from arbfree_vol.time import DayCount
-
-
 
 _REQUIRED_FIELDS=  ("strike", "expiry", "option_type", "price")
 

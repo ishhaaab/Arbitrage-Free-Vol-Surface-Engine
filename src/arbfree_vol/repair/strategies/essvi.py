@@ -3,20 +3,19 @@ from math import sqrt
 from statistics import mean
 
 from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice
-from arbfree_vol.models.surface import VolSurface, ExpirySlice
-from arbfree_vol.ssvi.model import ssvi_w, to_raw_svi_params, SSVIParams
+from arbfree_vol.models.surface import ExpirySlice, VolSurface
+from arbfree_vol.repair.strategies._common import (
+    _PathFitResult,
+    _prepare_slice,
+    _PrepStatus,
+)
+from arbfree_vol.ssvi.model import SSVIParams, ssvi_w, to_raw_svi_params
 from arbfree_vol.ssvi.term_structure import (
     fit_ssvi_surface_sequential,
     verify_hm_condition,
     verify_ssvi_calendar_free,
 )
 from arbfree_vol.svi.model import SVIParams
-
-from arbfree_vol.repair.strategies._common import (
-    _PathFitResult,
-    _PrepStatus,
-    _prepare_slice,
-)
 
 _logger = logging.getLogger(__name__)
 

@@ -5,11 +5,10 @@ helpers using synthetic data and mocked yfinance calls.
 """
 
 from datetime import date
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote
-
 
 # ── _get_dividend_yield tests ────────────────────────────────────────
 
@@ -59,7 +58,7 @@ def test_get_dividend_yield_missing_returns_none() -> None:
 def test_estimate_index_dividend_yield_via_parity() -> None:
     """Verify q estimation matches the put-call parity rearrangement."""
     from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
 
     S, r, T, K = 100.0, 0.05, 1.0, 100.0
@@ -142,7 +141,7 @@ def test_estimate_index_dividend_yield_near_zero_expiry_returns_float() -> None:
     estimable — put-call parity recovers q from the tiny C-P gap.
     """
     from arbfree_vol.ingestion._index_rates import _estimate_index_dividend_yield
-    from arbfree_vol.models.option import OptionContract, BlackScholesInput
+    from arbfree_vol.models.option import BlackScholesInput, OptionContract
     from arbfree_vol.pricing.black_scholes import price
 
     S, r, T, K = 100.0, 0.05, 0.001, 100.0
@@ -261,6 +260,7 @@ def test_representative_dividend_yield_observed_zero_is_preserved(
     commit 5bf429a: present-zero is an observation, absent/None/NaN is
     missing."""
     import logging
+
     from arbfree_vol.ingestion._index_rates import _get_representative_dividend_yield
 
     mock_ticker = MagicMock()

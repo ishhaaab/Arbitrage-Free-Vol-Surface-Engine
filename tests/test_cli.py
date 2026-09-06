@@ -18,10 +18,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from arbfree_vol.cli import main, build_parser
+from arbfree_vol.cli import build_parser, main
 from arbfree_vol.config import load_config
 from arbfree_vol.pricing.black_scholes import price_floats
-
 
 # ── helpers ─────────────────────────────────────────────────────────
 
@@ -298,8 +297,8 @@ def test_fetch_mocked(capsys) -> None:
 
 
 def test_fetch_with_repair_mocked(tmp_path: Path, capsys) -> None:
-    from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
     from arbfree_vol.models.option import OptionType
+    from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
     # minimal real surface so repair can run without mocking it
     surface = VolSurface(
         spot=100.0, risk_free=0.05, div_yield=0.0,

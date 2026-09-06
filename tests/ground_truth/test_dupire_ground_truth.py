@@ -42,7 +42,6 @@ from pytest import approx
 
 from arbfree_vol.pricing.local_vol import dupire
 from arbfree_vol.surface.interpolate import total_variance_at
-
 from tests.ground_truth.dupire_cases import (
     CONSTANT_VOL_INTERIOR_ROWS,
     CONSTANT_VOL_MATURITIES,
@@ -193,7 +192,6 @@ def test_nonflat_surface_total_variance_matches_svi_interpolation() -> None:
     r != q" behaviour that makes the surface NOT ``w = T*f(k)``.
     """
     from arbfree_vol.surface.interpolate import _forward_at
-
     from tests.ground_truth.dupire_cases import _svi_literal_w
 
     fs = build_nonflat_svi_surface()
