@@ -1,12 +1,24 @@
-"""PCA-based surface dynamics analysis on time-series of fitted SVI surfaces.
+"""PCA-based surface dynamics analysis on time-series of fitted vol surfaces.
 
-Provides tools to collect fitted SVI parameter surfaces across multiple
-snapshot dates, build a parameter matrix, and perform PCA via SVD to
-identify the dominant modes of deformation (Level, Tilt, Curvature).
+Provides tools to collect fitted surfaces across multiple snapshot dates,
+evaluate each fitted smile on a fixed log-moneyness grid of total
+variances, and perform PCA via SVD to identify the dominant modes of
+deformation (Level, Tilt, Curvature).
+
+The feature basis is total variance w(k) on a grid, NOT the raw SVI
+parameters: SVI fits are non-unique (numerically distinct parameter
+vectors can describe the same smile — the flat-smile case b=0 is an
+exact example, and the round-trip calibration tests document the
+near-degeneracy), so PCA over parameter coordinates mixes parametrization
+noise into the modes.  w(k) on a fixed grid is the observable the smile
+actually quotes: identical smiles produce identical rows no matter which
+(a, b, rho, m, sigma) vector the optimizer happened to return, and all
+three model families feed the grid through their common raw-SVI mapping.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -15,6 +27,7 @@ import numpy as np
 from arbfree_vol.models.surface import VolSurface
 from arbfree_vol.repair.engine import repair
 from arbfree_vol.models.fitted import FittedSlice
+from arbfree_vol.svi.model import svi_total_variance
 
 _BUCKET_TOL = 1e-3
 _NAN_DROP_THRESHOLD = 0.5
@@ -37,7 +50,7 @@ class SurfaceSeries:
 
 @dataclass(frozen=True, slots=True)
 class PCAResult:
-    """Result of PCA decomposition on the parameter matrix.
+    """Result of PCA decomposition on the feature matrix.
 
     Components are the principal directions in feature space (each is a
     length-n_features array).  Scores give the projection of each snapshot
@@ -103,51 +116,65 @@ def _expiry_buckets(snapshots: tuple[SurfaceSnapshot, ...]) -> tuple[float, ...]
 
 
 # ---------------------------------------------------------------------------
-# Parameter matrix construction
+# Total-variance grid matrix construction
 # ---------------------------------------------------------------------------
 
+# Default log-moneyness knots: 13 points spanning [-0.30, 0.30].  This
+# brackets the liquid range of a typical US equity chain (a +/-20% strike
+# span is k ~ +/-0.20); callers can pass any grid.
+_DEFAULT_K_GRID: tuple[float, ...] = tuple(
+    np.linspace(-0.30, 0.30, 13).tolist()
+)
 
-_PARAM_NAMES = ["a", "b", "rho", "m", "sigma"]
 
-
-def parameter_matrix(
+def total_variance_matrix(
     series: SurfaceSeries,
-) -> tuple[np.ndarray, tuple[float, ...], tuple[str, ...]]:
-    """Build the n_snapshots × n_features parameter matrix.
+    k_grid: Sequence[float] = _DEFAULT_K_GRID,
+) -> tuple[np.ndarray, tuple[float, ...], np.ndarray, tuple[str, ...]]:
+    """Build the n_snapshots x n_features matrix of total variances w(k).
 
-    Each column corresponds to one parameter of one expiry bucket.  Columns
-    are ordered by bucket then parameter name:
+    Each feature is a fitted slice's total variance evaluated at one
+    (expiry bucket, log-moneyness knot) pair.  Columns are ordered by
+    bucket then knot ascending:
 
-        bucket0_a, bucket0_b, bucket0_rho, bucket0_m, bucket0_sigma,
-        bucket1_a, ...
+        bucket0_k-0.30, bucket0_k-0.25, ..., bucket1_k-0.30, ...
 
     Missing slices (present in some snapshots but not others) produce
     ``np.nan`` entries.
 
+    Why this basis instead of raw SVI parameters: the SVI parametrization
+    is non-identifiable (distinct parameter vectors can produce the same
+    smile), so a parameter matrix is not a well-posed PCA object.  The
+    w(k) grid is the observable, and identical smiles produce identical
+    rows regardless of which parameter vector the optimizer returned.
+
     Parameters
     ----------
     series : SurfaceSeries
-        The fitted surface series.
+        The fitted surface series (from :func:`fit_surface_series`).
+    k_grid : sequence of float
+        Log-moneyness knots at which to evaluate each fitted smile.
+        Defaults to 13 knots spanning [-0.30, 0.30].
 
     Returns
     -------
-    matrix : np.ndarray, shape (n_snapshots, n_features)
+    matrix : np.ndarray, shape (n_snapshots, n_buckets * n_knots)
     expiry_buckets : tuple of float
         The unique expiry buckets (sorted).
-    param_labels : tuple of str
-        Human-readable label for each column, e.g. ``"1.000_a"``.
+    knots : np.ndarray
+        The knots actually used, as a float array.
+    labels : tuple of str
+        Human-readable label for each column, e.g. ``"1.000_k-0.30"``.
     """
+    knots = np.asarray(list(k_grid), dtype=float)
     buckets = _expiry_buckets(series.snapshots)
-    n_buckets = len(buckets)
-    n_features = n_buckets * 5
-    n_snapshots = len(series.snapshots)
 
-    matrix = np.full((n_snapshots, n_features), np.nan)
-
-    param_labels: list[str] = []
+    labels: list[str] = []
     for b in buckets:
-        for pname in _PARAM_NAMES:
-            param_labels.append(f"{b:.3f}_{pname}")
+        for k in knots:
+            labels.append(f"{b:.3f}_k{k:+.2f}")
+
+    matrix = np.full((len(series.snapshots), len(labels)), np.nan)
 
     for i, sn in enumerate(series.snapshots):
         for j, bucket in enumerate(buckets):
@@ -156,15 +183,16 @@ def parameter_matrix(
                 if abs(fs.expiry_time - bucket) <= _BUCKET_TOL:
                     matched = fs
                     break
-            if matched is not None:
-                base = j * 5
-                matrix[i, base] = matched.params.a
-                matrix[i, base + 1] = matched.params.b
-                matrix[i, base + 2] = matched.params.rho
-                matrix[i, base + 3] = matched.params.m
-                matrix[i, base + 4] = matched.params.sigma
+            if matched is None:
+                continue
+            p = matched.params
+            base = j * len(knots)
+            for kk, k in enumerate(knots):
+                matrix[i, base + kk] = svi_total_variance(
+                    float(k), p.a, p.b, p.rho, p.m, p.sigma
+                )
 
-    return matrix, buckets, tuple(param_labels)
+    return matrix, buckets, knots, tuple(labels)
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +201,9 @@ def parameter_matrix(
 
 
 def pca_deformations(
-    matrix: np.ndarray, n_components: int = 3
+    matrix: np.ndarray, n_components: int = 3, *, standardize: bool = True
 ) -> PCAResult:
-    """Perform PCA via SVD on the (n_snapshots × n_features) parameter matrix.
+    """Perform PCA via SVD on the (n_snapshots × n_features) feature matrix.
 
     Handling of missing data
     ------------------------
@@ -183,8 +211,16 @@ def pca_deformations(
        50 %) are dropped entirely.
     2. Remaining NaN values are imputed with the column mean (``np.nanmean``).
     3. Columns are centred by subtracting the (imputed) column mean.
+    4. When ``standardize`` is True (default), columns are then scaled to
+       unit variance (correlation PCA).  The w(k) grid mixes expiry buckets
+       whose total-variance levels differ by an order of magnitude, so
+       without scaling the long-dated buckets would dominate PC1 for scale
+       reasons alone.  Zero-variance columns are left unscaled — they
+       carry no information after centring.  With ``standardize=False``
+       the PCA runs on the plain covariance matrix.
 
-    PCA is then performed via ``numpy.linalg.svd`` on the centred matrix.
+    PCA is then performed via ``numpy.linalg.svd`` on the centred (and
+    optionally scaled) matrix.
     The number of components returned is capped at
     ``min(n_components, n_features_retained, n_snapshots - 1)``.
 
@@ -223,8 +259,12 @@ def pca_deformations(
     if len(inds[0]) > 0:
         X[inds] = col_mean[inds[1]]
 
-    # ---- Step 3: centre ----
+    # ---- Step 3: centre, then optionally scale to unit variance ----
     X_centered = X - X.mean(axis=0)
+    if standardize:
+        col_std = X_centered.std(axis=0)
+        col_std = np.where(col_std > 0.0, col_std, 1.0)
+        X_centered = X_centered / col_std
 
     # ---- Step 4: SVD ----
     n_snapshots, n_features_retained = X_centered.shape

@@ -1,9 +1,15 @@
 """Surface dynamics: PCA over a time series of fitted vol surfaces.
 
-Shows how the fitted SVI surface moves through time.  We build a
-series of surface snapshots, fit each one, stack the fitted parameters
-into a matrix, run SVD-based PCA, and report the dominant deformation
+Shows how the fitted vol surface moves through time.  We build a
+series of surface snapshots, fit each one, evaluate every fitted smile
+on a fixed log-moneyness grid of total variances w(k), run SVD-based
+PCA on the standardized grid matrix, and report the dominant deformation
 modes (Level / Tilt / Curvature).
+
+The w(k) grid is the feature basis rather than the raw SVI parameters:
+SVI fits are non-unique (distinct parameter vectors can describe the
+same smile), so PCA over parameters would mix parametrization noise
+into the modes.  w(k) is the observable the smile actually quotes.
 
 This runs on a deterministic synthetic time series (no network, identical
 output every run) — the same input the repair pipeline would produce if
@@ -99,12 +105,13 @@ def main() -> None:
     pairs = _synthetic_series()
 
     from arbfree_vol.dynamics import (
-        fit_surface_series, parameter_matrix, pca_deformations,
+        fit_surface_series, total_variance_matrix, pca_deformations,
         principal_mode_labels,
     )
     from arbfree_vol.surface.interpolate import iv_at
 
-    # Fit each snapshot through the repair pipeline (SVI), then stack.
+    # Fit each snapshot through the repair pipeline (SVI), then evaluate
+    # every fitted smile on the shared log-moneyness grid.
     series = fit_surface_series(pairs)
     # Map snapshot date -> original surface (for spot/r/q in the plots).
     surf_by_date = {d: s for d, s in pairs}
@@ -112,9 +119,10 @@ def main() -> None:
           f"({series.snapshots[0].snapshot_date} -> "
           f"{series.snapshots[-1].snapshot_date})")
 
-    matrix, buckets, labels = parameter_matrix(series)
-    print(f"  Parameter matrix: {matrix.shape[0]} snapshots x "
-          f"{matrix.shape[1]} features")
+    matrix, buckets, knots, labels = total_variance_matrix(series)
+    print(f"  Total-variance grid matrix: {matrix.shape[0]} snapshots x "
+          f"{matrix.shape[1]} features "
+          f"({len(buckets)} buckets x {len(knots)} knots, standardized)")
     print(f"  Expiry buckets: {[round(b, 3) for b in buckets]}")
 
     result = pca_deformations(matrix, n_components=3)
@@ -140,7 +148,7 @@ def main() -> None:
     plt.close(fig)
     print("\nSaved: dynamics_pca_variance.png")
 
-    # Plot 2 — component loadings across expiry/parameter features.
+    # Plot 2 — component loadings across (expiry, moneyness) features.
     # Only the top feature-loading columns per component are shown.
     fig, axes = plt.subplots(len(evs), 1, figsize=(10, 3.2 * len(evs)),
                              sharex=True)

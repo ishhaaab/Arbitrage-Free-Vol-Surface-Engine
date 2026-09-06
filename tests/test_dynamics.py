@@ -1,8 +1,8 @@
-"""Tests for the surface dynamics module (PCA on SVI parameter time-series)."""
+"""Tests for the surface dynamics module (PCA on a total-variance grid)."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import math
 
 import numpy as np
@@ -10,12 +10,15 @@ import pytest
 
 from arbfree_vol.models.option import OptionType, OptionContract, BlackScholesInput
 from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
+from arbfree_vol.models.fitted import FittedSlice
 from arbfree_vol.svi.model import SVIParams, svi_total_variance
 from arbfree_vol.dynamics import (
     fit_surface_series,
-    parameter_matrix,
+    total_variance_matrix,
     pca_deformations,
     PCAResult,
+    SurfaceSeries,
+    SurfaceSnapshot,
     _expiry_buckets,
     principal_mode_labels,
 )
@@ -133,34 +136,99 @@ def _surface_from_svi_params_multi(
     return VolSurface(spot=SPOT, risk_free=R, div_yield=Q, slices=slices)
 
 
-# ---------------------------------------------------------------------------
-# Tests for parameter matrix shape and NaN handling
-# ---------------------------------------------------------------------------
+def _snapshot_with_params(
+    params_by_expiry: dict[float, SVIParams], day: date
+) -> SurfaceSnapshot:
+    """Build a SurfaceSnapshot directly from hand-set SVI parameters.
 
-
-class TestParameterMatrix:
-    """Shape and missing-data behaviour of parameter_matrix()."""
-
-    def test_parameter_matrix_consistent_shape(self) -> None:
-        """Two snapshots each with two expiry buckets -> shape (2, 2*5)."""
-        base_params = SVIParams(a=0.0, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
-
-        surf1 = _surface_from_svi_params_multi(
-            {0.5: base_params, 1.0: base_params}
+    Bypasses the repair pipeline so matrix tests can pin exact parameter
+    vectors (including degenerate ones like b=0) without depending on
+    optimizer outcomes.
+    """
+    slices = tuple(
+        FittedSlice(
+            expiry_time=expiry,
+            params=p,
+            rmse=0.0,
+            forward_price=SPOT * math.exp(R * expiry),
+            n_quotes_total=9,
+            n_quotes_used=9,
         )
-        surf2 = _surface_from_svi_params_multi(
-            {0.5: base_params, 1.0: base_params}
-        )
+        for expiry, p in params_by_expiry.items()
+    )
+    return SurfaceSnapshot(snapshot_date=day, fitted_slices=slices)
 
-        surfaces: list[tuple[date, VolSurface]] = [
-            (date(2030, 1, 1), surf1),
-            (date(2030, 1, 2), surf2),
-        ]
-        series = fit_surface_series(surfaces)
-        matrix, buckets, labels = parameter_matrix(series)
 
-        # Two buckets -> 10 features
-        assert matrix.shape == (2, 10), f"Expected (2, 10), got {matrix.shape}"
+# ---------------------------------------------------------------------------
+# Tests for the total-variance grid matrix
+# ---------------------------------------------------------------------------
+
+
+class TestTotalVarianceMatrix:
+    """Shape, values, and identifiability of total_variance_matrix()."""
+
+    def test_matrix_shape_buckets_times_knots(self) -> None:
+        """Two buckets on the default 13-knot grid -> shape (2, 26)."""
+        p = SVIParams(a=0.04, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
+        series = SurfaceSeries((
+            _snapshot_with_params({0.5: p, 1.0: p}, date(2030, 1, 1)),
+            _snapshot_with_params({0.5: p, 1.0: p}, date(2030, 1, 2)),
+        ))
+
+        matrix, buckets, knots, labels = total_variance_matrix(series)
+
+        assert matrix.shape == (2, 26)
+        assert buckets == (0.5, 1.0)
+        assert len(knots) == 13
+        assert len(labels) == 26
+
+    def test_matrix_entries_are_total_variance_on_grid(self) -> None:
+        """Each entry is the fitted slice's w(k) at its (bucket, knot)."""
+        p = SVIParams(a=0.04, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
+        series = SurfaceSeries((
+            _snapshot_with_params({1.0: p}, date(2030, 1, 1)),
+        ))
+        grid = (-0.2, 0.0, 0.1)
+
+        matrix, _, knots, labels = total_variance_matrix(series, k_grid=grid)
+
+        expected = [svi_total_variance(k, p.a, p.b, p.rho, p.m, p.sigma) for k in grid]
+        assert np.allclose(matrix[0], expected, rtol=1e-12)
+        assert np.allclose(knots, grid)
+        assert labels == ("1.000_k-0.20", "1.000_k+0.00", "1.000_k+0.10")
+
+    def test_flat_smile_rows_invariant_to_parameter_vector(self) -> None:
+        """b=0 is an exact SVI degeneracy: w(k) = a for every k, whatever
+        (rho, m, sigma) say.  Two snapshots with identical flat smiles but
+        wildly different parameter vectors must produce identical matrix
+        rows — the property the w(k) basis exists to guarantee.  (The old
+        raw-parameter matrix failed this: rho/m/sigma columns differed.)"""
+        p1 = SVIParams(a=0.04, b=0.0, rho=-0.7, m=0.10, sigma=0.50)
+        p2 = SVIParams(a=0.04, b=0.0, rho=0.30, m=-0.20, sigma=0.90)
+        series = SurfaceSeries((
+            _snapshot_with_params({1.0: p1}, date(2030, 1, 1)),
+            _snapshot_with_params({1.0: p2}, date(2030, 1, 2)),
+        ))
+
+        matrix, _, _, _ = total_variance_matrix(series)
+
+        assert np.allclose(matrix[0], matrix[1])
+        assert np.allclose(matrix[0], 0.04)
+
+    def test_missing_slice_rows_are_nan(self) -> None:
+        """A snapshot without a bucket gets NaN across that bucket's knots;
+        present buckets are NaN-free."""
+        p = SVIParams(a=0.04, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
+        series = SurfaceSeries((
+            _snapshot_with_params({0.5: p, 1.0: p}, date(2030, 1, 1)),
+            _snapshot_with_params({0.5: p}, date(2030, 1, 2)),
+        ))
+
+        matrix, _, knots, _ = total_variance_matrix(series)
+        long_cols = slice(len(knots), 2 * len(knots))
+
+        assert np.all(np.isnan(matrix[1, long_cols]))
+        assert not np.any(np.isnan(matrix[0]))
 
     def test_expiry_buckets_union(self) -> None:
         """_expiry_buckets returns the union of all expiries across snapshots."""
@@ -200,11 +268,10 @@ class TestParameterMatrix:
             (date(2030, 1, 2), surf2),
         ]
         series = fit_surface_series(surfaces)
-        matrix, buckets, labels = parameter_matrix(series)
+        matrix, buckets, knots, labels = total_variance_matrix(series)
 
         # Long-dated columns (bucket ~1.0) should be NaN in row 1
-        # Index: 0-4 are bucket 0.5, 5-9 are bucket 1.0
-        long_cols = slice(5, 10)
+        long_cols = slice(len(knots), 2 * len(knots))
         assert np.all(np.isnan(matrix[1, long_cols])), (
             "Row 1 (missing long slice) should be NaN for long-dated columns"
         )
@@ -212,23 +279,77 @@ class TestParameterMatrix:
         # PCA should not crash
         result = pca_deformations(matrix, n_components=2)
         assert isinstance(result, PCAResult)
-        # n_features should be 10 (no column dropped since nan_frac = 0.5
+        # n_features should be 26 (no column dropped since nan_frac = 0.5
         # is not > _NAN_DROP_THRESHOLD)
-        assert result.n_features == 10
+        assert result.n_features == 26
 
-    def test_param_labels_format(self) -> None:
-        """Labels follow the pattern '{bucket:.3f}_{param}'."""
-        base_params = SVIParams(a=0.0, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
-        surf = _surface_from_svi_params_multi({0.5: base_params, 1.0: base_params})
-        series = fit_surface_series([(date(2030, 1, 1), surf)])
-        _, _, labels = parameter_matrix(series)
+    def test_labels_encode_bucket_then_knot(self) -> None:
+        """Labels follow '{bucket:.3f}_k{knot:+.2f}', knots ascending."""
+        p = SVIParams(a=0.04, b=0.3, rho=-0.4, m=0.0, sigma=0.25)
+        series = SurfaceSeries((
+            _snapshot_with_params({0.5: p, 1.0: p}, date(2030, 1, 1)),
+        ))
+        _, _, knots, labels = total_variance_matrix(series)
 
-        assert labels[0] == "0.500_a"
-        assert labels[1] == "0.500_b"
-        assert labels[2] == "0.500_rho"
-        assert labels[3] == "0.500_m"
-        assert labels[4] == "0.500_sigma"
-        assert labels[5] == "1.000_a"
+        assert labels[0] == "0.500_k-0.30"
+        assert labels[1] == "0.500_k-0.25"
+        assert labels[12] == "0.500_k+0.30"
+        assert labels[13] == "1.000_k-0.30"
+
+
+class TestStandardization:
+    """Behaviour of pca_deformations' standardize flag."""
+
+    def test_standardized_pca_equals_manual_zscore_pca(self) -> None:
+        """standardize=True on M is exactly PCA on the manually
+        z-scored matrix with standardize=False (same SVD, same signs)."""
+        rng = np.random.RandomState(5)
+        scales = np.array([1.0, 10.0, 100.0, 1000.0])
+        matrix = rng.normal(size=(12, 4)) * scales
+
+        result = pca_deformations(matrix, n_components=3, standardize=True)
+        z = (matrix - matrix.mean(axis=0)) / matrix.std(axis=0)
+        manual = pca_deformations(z, n_components=3, standardize=False)
+
+        assert np.allclose(np.asarray(result.scores), np.asarray(manual.scores))
+        for c1, c2 in zip(result.components, manual.components):
+            assert np.allclose(c1, c2)
+
+    def test_standardization_stops_long_tenor_dominance(self) -> None:
+        """Two buckets drifting by very different absolute amounts.
+
+        Without scaling, PC1's loading mass sits almost entirely on the
+        large-drift (long-dated) bucket — a pure scale artifact, not
+        surface structure.  With standardize=True (default) both buckets
+        are unit-variance, so a single common factor splits its loadings
+        evenly across them.
+        """
+        snaps = []
+        for i in range(12):
+            a1 = 0.010 + 0.010 * i / 11   # short bucket drifts 0.010 total
+            a2 = 0.050 + 0.100 * i / 11   # long bucket drifts 0.100 total
+            p1 = SVIParams(a=a1, b=0.10, rho=-0.2, m=0.0, sigma=0.30)
+            p2 = SVIParams(a=a2, b=0.10, rho=-0.2, m=0.0, sigma=0.30)
+            day = date(2030, 1, 1) + timedelta(days=i)
+            snaps.append(_snapshot_with_params({0.25: p1, 2.0: p2}, day))
+        series = SurfaceSeries(tuple(snaps))
+
+        matrix, _, knots, _ = total_variance_matrix(series)
+        nk = len(knots)
+
+        def short_bucket_share(comp: np.ndarray) -> float:
+            comp = np.asarray(comp)
+            return float(np.abs(comp[:nk]).sum() / np.abs(comp).sum())
+
+        raw = pca_deformations(matrix, n_components=1, standardize=False)
+        std = pca_deformations(matrix, n_components=1, standardize=True)
+
+        assert short_bucket_share(raw.components[0]) < 0.10, (
+            "unstandardized PC1 must be dominated by the long bucket"
+        )
+        assert 0.40 < short_bucket_share(std.components[0]) < 0.60, (
+            "standardized PC1 must split loadings across both buckets"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -299,13 +420,13 @@ class TestPCA:
 
         centred = matrix - matrix.mean(axis=0)
 
-        result_k2 = pca_deformations(matrix, n_components=2)
+        result_k2 = pca_deformations(matrix, n_components=2, standardize=False)
         recon_k2 = np.asarray(result_k2.scores) @ np.vstack(result_k2.components)
         assert np.allclose(recon_k2, centred, atol=1e-10), (
             "k=2 reconstruction must reproduce the centred matrix"
         )
 
-        result_k1 = pca_deformations(matrix, n_components=1)
+        result_k1 = pca_deformations(matrix, n_components=1, standardize=False)
         recon_k1 = np.asarray(result_k1.scores) @ np.vstack(result_k1.components)
         assert not np.allclose(recon_k1, centred, atol=1e-10), (
             "k=1 reconstruction must NOT match: the matrix has two "
@@ -354,7 +475,13 @@ class TestPCA:
         """A drift in rho across 20 snapshots yields a dominant first PC.
 
         Rho moves linearly from -0.5 to -0.1 while all other SVI params
-        stay fixed.  The first component should capture >95 % of variance.
+        stay fixed.  The first component should capture >90 % of variance.
+
+        (The threshold is 0.90, not 0.95: on the w(k) grid every knot
+        carries the calibration noise of all five parameters, so PC2
+        holds a few percent of systematic fit-tolerance residue that the
+        old raw-parameter basis hid inside its near-constant columns.
+        Dominance is the claim, not purity.)
         """
         from datetime import timedelta
 
@@ -370,12 +497,12 @@ class TestPCA:
             )
 
         series = fit_surface_series(surfaces)
-        matrix, _, _ = parameter_matrix(series)
+        matrix, _, _, _ = total_variance_matrix(series)
         result = pca_deformations(matrix, n_components=3)
 
-        assert result.explained_variance_ratio[0] > 0.95, (
+        assert result.explained_variance_ratio[0] > 0.90, (
             f"First component explains {result.explained_variance_ratio[0]:.4f}, "
-            f"expected > 0.95"
+            f"expected > 0.90"
         )
 
     def test_two_parameter_rotation_two_components_dominate(self) -> None:
@@ -402,7 +529,7 @@ class TestPCA:
             )
 
         series = fit_surface_series(surfaces)
-        matrix, _, _ = parameter_matrix(series)
+        matrix, _, _, _ = total_variance_matrix(series)
         result = pca_deformations(matrix, n_components=5)
 
         cumul = sum(result.explained_variance_ratio[:2])
