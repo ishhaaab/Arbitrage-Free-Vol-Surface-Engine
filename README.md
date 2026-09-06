@@ -1,6 +1,13 @@
 # arbfree-vol-surface
 
+[![CI](https://github.com/ishhaaab/Arbitrage-Free-Vol-Surface-Engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ishhaaab/Arbitrage-Free-Vol-Surface-Engine/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Turns a messy option chain into a clean implied vol surface that won't blow up exotic pricers. You give it raw quotes and it hands back a calibrated surface you can query for IV, Greeks, local vol, and PCA modes. The slices fit with hard-constrained eSSVI satisfy the Gatheral–Jacquier conditions and a grid-based calendar check. Slices that fall back to an unconstrained per-slice fit are not arbitrage-free; they get flagged in `RepairReport.fallback_slices` / `repair_infeasible` rather than passed off as clean.
+
+![Fitted SPY vol surface with local vol](demo/yfinance/yfinance_demo_surface.png)
+*Live SPY chain → repaired eSSVI surface, sliced by expiry (demo 1 below; fallback slices are grayed out in the heatmaps).*
 
 ## Why this exists
 
@@ -24,14 +31,14 @@ Three smile models: raw SVI (Gatheral 2004), eSSVI (Gatheral–Jacquier 2014), a
 
 ```bash
 git clone https://github.com/ishhaaab/Arbitrage-Free-Vol-Surface-Engine.git
-cd arbfree-vol-surface
+cd Arbitrage-Free-Vol-Surface-Engine
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -e .                                              # installs `arbfree` CLI + runtime deps
 pip install -r requirements-dev.txt                           # optional: pytest/ruff to run the suite
-pip install "arbfree-vol-surface[openbb]"                     # optional: OpenBB ingestion source
+pip install -e ".[openbb]"                                    # optional: OpenBB ingestion source
 arbfree --help                                                # repair | detect | price | fetch
-pytest tests/ -q                                              # full test suite
+pytest tests/ -q                                              # fast suite (85% coverage floor enforced); add `-m slow` for the nightly set
 python demo/yfinance/yfinance_demo.py                         # live SPY pipeline, 6 plots (needs network; --offline for synthetic)
 python demo/ticker_compare/ticker_compare.py                  # cross-ticker SVI/eSSVI/SABR, 3 plots (SPY/QQQ/IWM; --offline available)
 python demo/dynamics_pca/dynamics_pca.py                      # PCA over a surface time series, 3 plots (synthetic by default)
@@ -102,8 +109,12 @@ ATM term structure, a ~30-day smile overlay, and median fit RMSE per model
 ### 3. Surface dynamics via PCA (`demo/dynamics_pca/`)
 
 `python demo/dynamics_pca/dynamics_pca.py` fits a time series of surfaces,
-stacks the fitted SVI parameters into a matrix, and runs SVD-based PCA to find
-the dominant deformation modes (Level / Tilt / Curvature). It runs on a
+evaluates every fitted smile on a fixed log-moneyness grid of total
+variances, and runs SVD-based PCA on the standardized grid to find the
+dominant deformation modes (Level / Tilt / Curvature). The grid is the
+feature basis — not the raw SVI parameters — because SVI fits are
+non-unique: identical smiles must produce identical rows regardless of
+which parameter vector the optimizer returned. It runs on a
 deterministic synthetic time series (no network) — collecting real daily
 snapshots is a roadmap item.
 
@@ -130,7 +141,7 @@ does. No network, no setup — the fastest way to see the toolkit work.
 - `svi/`, `ssvi/`, `sabr/` the three smile models and their calibrators.
 - `repair/` the orchestrator that cleans, detects, fits, and re-validates.
 - `surface/` the query layer: `iv_at` and portfolio Greeks.
-- `dynamics.py` SVD-based PCA over a surface time series (no sklearn).
+- `dynamics.py` SVD-based PCA over a surface time series on a standardized total-variance grid (no sklearn).
 - `viz/` the matplotlib plots.
 - `cli.py` + `config.yaml` — `arbfree` CLI (`repair`/`detect`/`price`/`fetch`) with YAML defaults; flags override file.
 
