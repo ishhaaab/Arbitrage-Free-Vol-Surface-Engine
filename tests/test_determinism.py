@@ -1,8 +1,5 @@
-"""Determinism regression test for the eSSVI sequential fit.
+"""Cross-process determinism checks on the public frozen snapshot."""
 
-Verifies that the fitting pipeline produces identical output when run
-twice on the same saved fixture in separate process invocations.
-"""
 import json
 import subprocess
 import sys
@@ -10,117 +7,69 @@ from pathlib import Path
 
 import pytest
 
-_FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "spx_sample.json"
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parents[1]
+_CSV = _ROOT / "data" / "spx_2026-07-31.csv"
+_METADATA = _ROOT / "data" / "spx_2026-07-31_metadata.json"
 
-_CHILD_SCRIPT = """
+_CHILD = """
 import json
 import sys
-from math import log
+from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, __PROJECT_ROOT__)
+sys.path.insert(0, __SRC__)
+from arbfree_vol.calibration import calibrate_surface
+from arbfree_vol.ingestion.loader import load_chain_csv
 
-from arbfree_vol.models.surface import VolSurface, ExpirySlice, Quote
-from arbfree_vol.models.option import OptionType
-from arbfree_vol.forward import estimate_forward_curve, populate_per_slice_r
-from arbfree_vol.ssvi.term_structure import fit_ssvi_surface_sequential
-from arbfree_vol.variance import slice_total_variance
-
-data = json.loads(Path(__FIXTURE_PATH__).read_text(encoding="utf-8"))
-slices = []
-for sl_data in data["slices"]:
-    quotes = [
-        Quote(
-            strike=q["strike"],
-            option_type=OptionType(q["option_type"]),
-            price=q["price"],
-            bid=q.get("bid"),
-            ask=q.get("ask"),
-        )
-        for q in sl_data["quotes"]
-        if q["price"] is not None
-    ]
-    if quotes:
-        slices.append(ExpirySlice(
-            expiry_time=sl_data["expiry_time"],
-            risk_free=sl_data.get("risk_free"),
-            div_yield=sl_data.get("div_yield"),
-            quotes=quotes,
-        ))
-
-surface = VolSurface(
-    spot=data["spot"],
-    risk_free=data["risk_free"],
-    div_yield=data["div_yield"],
-    slices=slices,
+metadata = json.loads(Path(__METADATA__).read_text(encoding="utf-8"))
+surface, rejected = load_chain_csv(
+    __CSV__,
+    spot=metadata["spot"],
+    as_of=date.fromisoformat(metadata["as_of"]),
+    risk_free=metadata["risk_free"],
+    div_yield=metadata["dividend_yield"],
 )
-fwd_curve = estimate_forward_curve(surface)
-populate_per_slice_r(surface, fwd_curve)
-slices_data = []
-for sl in sorted(surface.slices, key=lambda s: s.expiry_time):
-    forward = fwd_curve.get(sl.expiry_time)
-    if forward is None:
-        continue
-    strike_w = slice_total_variance(surface, sl)
-    if len(strike_w) < 5:
-        continue
-    points = [(log(strike / forward), w) for strike, w in strike_w.items()]
-    points.sort()
-    slices_data.append((sl.expiry_time, points))
-
-result = fit_ssvi_surface_sequential(slices_data)
+report = calibrate_surface(surface, rejected=rejected)
 print(json.dumps({
-    "fallback_slices": result.fallback_slices,
-    "failed_slices": result.failed_slices,
-    "fitted_slices": [
-        {"T": T, "theta": p.theta, "rho": p.rho, "psi": p.psi}
-        for T, p in result.fitted_slices
+    "fallback": report.fallback_slices,
+    "failed": report.failed_slices,
+    "params": [
+        [item.expiry_time, item.ssvi.theta, item.ssvi.rho, item.ssvi.psi]
+        for item in report.fitted_ssvi_slices
     ],
+    "certificate": {
+        "variance": report.certificate.min_total_variance,
+        "density": report.certificate.min_butterfly_density,
+        "calendar": report.certificate.min_calendar_margin,
+        "certified": report.certificate.certified,
+    },
 }))
-""".replace(
-    "__PROJECT_ROOT__", repr(str(_PROJECT_ROOT))
-).replace(
-    "__FIXTURE_PATH__", repr(str(_FIXTURE_PATH))
-)
+""".replace("__SRC__", repr(str(_ROOT / "src"))).replace(
+    "__METADATA__", repr(str(_METADATA))
+).replace("__CSV__", repr(str(_CSV)))
 
 
-def _run_fit_subprocess() -> dict:
-    """Run the fit in a fresh Python subprocess and return parsed JSON."""
+def _run() -> dict:
     result = subprocess.run(
-        [sys.executable, "-c", _CHILD_SCRIPT],
+        [sys.executable, "-c", _CHILD],
+        cwd=_ROOT,
         capture_output=True,
         text=True,
-        timeout=60,
-        cwd=_PROJECT_ROOT,
+        timeout=120,
     )
-    if result.returncode != 0:
-        pytest.fail(f"Child process failed: {result.stderr}")
+    if result.returncode:
+        pytest.fail(result.stderr)
     return json.loads(result.stdout.strip())
 
 
 @pytest.mark.slow
-# Slow: spawns 2 subprocesses that each run the full eSSVI sequential fit
-# on the SPX fixture (~23s).
-def test_determinism_fallback_lists_match() -> None:
-    """Identical input must produce identical fallback and failed lists."""
-    if not _FIXTURE_PATH.exists():
-        pytest.skip(f"Fixture not found: {_FIXTURE_PATH}")
-
-    run1 = _run_fit_subprocess()
-    run2 = _run_fit_subprocess()
-    assert run1["fallback_slices"] == run2["fallback_slices"]
-    assert run1["failed_slices"] == run2["failed_slices"]
+def test_frozen_snapshot_failure_state_is_deterministic() -> None:
+    first, second = _run(), _run()
+    assert first["fallback"] == second["fallback"]
+    assert first["failed"] == second["failed"]
+    assert first["certificate"] == second["certificate"]
 
 
 @pytest.mark.slow
-# Slow: spawns 2 subprocesses that each run the full eSSVI sequential fit
-# on the SPX fixture (~23s).
-def test_determinism_fitted_params_match() -> None:
-    """Identical input must produce identical fitted parameters."""
-    if not _FIXTURE_PATH.exists():
-        pytest.skip(f"Fixture not found: {_FIXTURE_PATH}")
-
-    run1 = _run_fit_subprocess()
-    run2 = _run_fit_subprocess()
-    assert run1["fitted_slices"] == run2["fitted_slices"]
+def test_frozen_snapshot_parameters_are_deterministic() -> None:
+    assert _run()["params"] == _run()["params"]

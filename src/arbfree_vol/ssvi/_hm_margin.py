@@ -13,7 +13,7 @@ _EPS_THETA: float = 1e-9
 _EPS_CHI: float = 1e-6
 
 # ── Post-fit margin check for degenerate H&M boundary corners (m66) ──
-# docs/code_review_findings.md §6.7: a hard eSSVI fit can converge to a
+# A hard SSVI fit can converge to a
 # feasible-but-wrong corner pinned ON the H&M Prop 3.1 boundary (theta
 # and/or chi pinned at their eps floors, parameters equal to the
 # predecessor's) with an anomalously bad per-slice RMSE, and the optimizer

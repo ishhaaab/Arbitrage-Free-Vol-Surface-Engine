@@ -27,7 +27,7 @@ def test_load_minimal_chain() -> None:
 """
     path = _write_csv(csv)
     surface, rejected = load_chain_csv(
-        path, spot=SPOT, as_of=AS_OF, clean=False
+        path, spot=SPOT, risk_free=0.05, as_of=AS_OF, clean=False
     )
 
     assert len(surface.slices) == 1
@@ -42,7 +42,7 @@ def test_load_chain_with_bid_ask() -> None:
 """
     path = _write_csv(csv)
     surface, rejected = load_chain_csv(
-        path, spot=SPOT, as_of=AS_OF, clean=False
+        path, spot=SPOT, risk_free=0.05, as_of=AS_OF, clean=False
     )
 
     assert surface.slices[0].quotes[0].bid == 9.5
@@ -56,7 +56,7 @@ def test_load_chain_groups_by_expiry() -> None:
 """
     path = _write_csv(csv)
     surface, _ = load_chain_csv(
-        path, spot=SPOT, as_of=AS_OF, clean=False
+        path, spot=SPOT, risk_free=0.05, as_of=AS_OF, clean=False
     )
 
     assert len(surface.slices) == 2
@@ -72,7 +72,7 @@ def test_load_chain_with_cleaning_rejects_bad() -> None:
 """
     path = _write_csv(csv)
     surface, rejected = load_chain_csv(
-        path, spot=SPOT, as_of=AS_OF, clean=True
+        path, spot=SPOT, risk_free=0.05, as_of=AS_OF, clean=True
     )
 
     assert len(surface.slices) == 1

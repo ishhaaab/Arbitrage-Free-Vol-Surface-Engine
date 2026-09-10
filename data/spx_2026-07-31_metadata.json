@@ -1,0 +1,10 @@
+{
+  "symbol": "^SPX",
+  "source": "Yahoo Finance via yfinance",
+  "as_of": "2026-07-31",
+  "spot": 7437.63,
+  "risk_free": 0.03675,
+  "dividend_yield": -0.01641213248263252,
+  "day_count": "ACT/365F",
+  "notes": "Frozen option-chain snapshot. Rates and dividend yield are fixed inputs recorded when the snapshot was collected."
+}

@@ -7,7 +7,6 @@ from pytest import approx
 
 from arbfree_vol.models.fitted import FittedSlice, FittedSurface
 from arbfree_vol.surface.interpolate import (
-    build_fitted_surface,
     iv_at,
     total_variance_at,
 )
@@ -184,29 +183,6 @@ class TestTotalVarianceAt:
 
 
 # ── build_fitted_surface tests ───────────────────────────────────────────────
-
-
-class TestBuildFittedSurface:
-    """Tests for ``build_fitted_surface`` from a RepairReport."""
-
-    def test_build_fitted_surface_raises_on_no_cleaned_surface(self) -> None:
-        """A RepairReport with cleaned_surface=None raises ValueError."""
-        from arbfree_vol.arbitrage.report import ArbitrageReport
-        from arbfree_vol.repair.report import RepairMetrics, RepairReport
-
-        report = RepairReport(
-            rejected=(),
-            fitted_slices=(),
-            remaining_violations=ArbitrageReport(violations=[]),
-            metrics=RepairMetrics(
-                n_rejected=0, n_total_quotes=0,
-                n_slices_input=0, n_slices_fitted=0,
-                n_violations_before=0, n_violations_after=0,
-            ),
-            cleaned_surface=None,
-        )
-        with pytest.raises(ValueError, match="no cleaned_surface"):
-            build_fitted_surface(report)
 
 
 # ── Edge behaviour tests ─────────────────────────────────────────────────────

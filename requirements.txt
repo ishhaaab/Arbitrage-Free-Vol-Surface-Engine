@@ -1,13 +1,4 @@
-# Runtime dependencies. pyproject.toml is the source of truth (CI installs
-# via `pip install -e .`); this file mirrors it for plain
-# `pip install -r requirements.txt` workflows.
-numpy>=1.26
-scipy>=1.11
-pandas>=2.0
-pydantic>=2.0
-pyyaml>=6.0
-matplotlib>=3.8
-yfinance
-
-# Optional data source, lazily imported only when used:
-#   pip install openbb      (or `pip install "arbfree-vol-surface[openbb]"`)
+numpy>=1.26,<3
+scipy>=1.11,<2
+pydantic>=2,<3
+matplotlib>=3.8,<4

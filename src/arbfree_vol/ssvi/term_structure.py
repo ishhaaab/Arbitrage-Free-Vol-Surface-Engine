@@ -1,4 +1,4 @@
-"""Calendar-arbitrage-free eSSVI term-structure calibration.
+"""Sequentially constrained SSVI term-structure calibration.
 
 Fits SSVI slices sequentially by increasing maturity, enforcing the
 Hendriks & Martini (2019) Prop 3.1 no-calendar-spread condition as
@@ -115,7 +115,7 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class SequentialFitResult:
-    """Result of a sequential eSSVI term-structure fit.
+    """Result of a sequential SSVI term-structure fit.
 
     Attributes
     ----------
@@ -281,7 +281,7 @@ def _hard_fit_is_degenerate_corner(
     params: SSVIParams,
     points: list[tuple[float, float]],
 ) -> bool:
-    """Detect a hard eSSVI fit pinned on the H&M Prop 3.1 boundary.
+    """Detect a hard SSVI fit pinned on the H&M Prop 3.1 boundary.
 
     A fit is flagged through either of two paths:
 
@@ -384,14 +384,14 @@ def _fit_one_slice(
         if last_valid_prev is not None and _hard_fit_is_degenerate_corner(last_valid_prev, params, pts):
             _theta_delta, _chi_delta, _ratio = _hm_boundary_deltas(last_valid_prev, params)
             _logger.warning(
-                "eSSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback",
+                "SSVI hard fit for T=%.4f is a degenerate H&M boundary corner (theta_delta=%.3e, chi_delta=%.3e, ratio=%.6f, hard_rmse=%.4e); routing to fallback",
                 expiry, _theta_delta, _chi_delta, _ratio, _slice_rmse(params, pts),
             )
             raise RuntimeError("hard fit is a degenerate H&M boundary corner")
         return ("hard", params)
     except RuntimeError as e:
         _logger.warning(
-            "eSSVI hard-constrained fit failed for T=%.4f (%s); "
+            "SSVI hard-constrained fit failed for T=%.4f (%s); "
             "falling back to unconstrained per-slice fit",
             expiry, e,
         )
@@ -399,7 +399,7 @@ def _fit_one_slice(
         params = fit_ssvi_slice(pts)
     except (RuntimeError, ValueError) as e2:
         _logger.error(
-            "eSSVI fallback fit also failed for T=%.4f (%s); "
+            "SSVI fallback fit also failed for T=%.4f (%s); "
             "skipping this slice",
             expiry, e2,
         )

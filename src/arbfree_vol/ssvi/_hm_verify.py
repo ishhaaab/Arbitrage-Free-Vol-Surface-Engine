@@ -14,11 +14,11 @@ def verify_hm_condition(
     """Check the Hendriks-Martini Prop 3.1 no-calendar-spread conditions.
 
     These parameter conditions are NECESSARY for the absence of
-    calendar-spread arbitrage between two eSSVI slices (with
+    calendar-spread arbitrage between two SSVI slices (with
     maturity-dependent rho).  They are treated as sufficient by this
     implementation, but that is NOT established: a documented
     counterexample pair passes all three conditions yet crosses in the
-    wings (docs/issues.md, "eSSVI calendar certificate is grid-based").
+    wings, so the numerical calendar check remains required.
     The full Hendriks & Martini sufficient statement (Prop 3.5) adds a
     disjunction this code does not enforce.  Until it is implemented,
     ``verify_ssvi_calendar_free`` (the dense-grid check) is the
@@ -86,7 +86,7 @@ def verify_ssvi_calendar_free(
     k_grid: NDArray[np.float64] | None = None,
     tol: float = 1e-4,
 ) -> bool:
-    """Post-fit calendar-arbitrage verification on native eSSVI slices.
+    """Post-fit calendar-arbitrage verification on native SSVI slices.
 
     ``verify_hm_condition`` checks the necessary H&M parameter conditions
     (treated by this codebase as sufficient — see its docstring for the
@@ -101,8 +101,7 @@ def verify_ssvi_calendar_free(
     params_seq : list of SSVIParams
         Ordered by ascending maturity.
     k_grid : NDArray[np.float64], optional
-        Log-moneyness grid.  Defaults to ``linspace(-3, 3, 241)`` — the
-        same range the SABR-to-SVI mapping uses.
+        Log-moneyness grid. Defaults to ``linspace(-3, 3, 241)``.
     tol : float
         Absolute tolerance on the total-variance gap (the codebase's de
         facto arb tolerance of ``1e-4``).

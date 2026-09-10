@@ -4,7 +4,7 @@ from enum import Enum, auto
 from math import log
 from typing import Protocol
 
-from arbfree_vol.models.fitted import FittedSABRSlice, FittedSlice, FittedSSVISlice
+from arbfree_vol.models.fitted import FittedSlice, FittedSSVISlice
 from arbfree_vol.models.surface import ExpirySlice, VolSurface
 from arbfree_vol.variance import slice_total_variance
 
@@ -29,17 +29,12 @@ class _SlicePrep:
 class _PathFitResult:
     """Accumulated per-path fit outcome, replacing heterogeneous tuples.
 
-    Each ``_repair_*`` helper returns one of these with only the fields
-    relevant to its model populated; ``repair()`` reads them by name.
-    Adding a new bookkeeping dimension is now a one-file change instead
-    of a signature + unpacking + report ripple.
+    Each strategy returns fitted slices and explicit failure state.
     """
     fitted: list[FittedSlice]
     failed_slices: list[float]
     fitted_ssvi: list[FittedSSVISlice] = field(default_factory=list)
-    fitted_sabr: list[FittedSABRSlice] = field(default_factory=list)
     fallback_slices: list[float] = field(default_factory=list)
-    sabr_mapping_failed: list[float] = field(default_factory=list)
     repair_infeasible: bool = False
 
 
@@ -49,15 +44,14 @@ def _prepare_slice(
     fwd_curve: dict[float, float],
     path: str,
 ) -> _SlicePrep:
-    """Shared per-slice prep for all three repair paths.
+    """Shared per-slice preparation for raw SVI and constrained SSVI.
 
     Applies the identical bookkeeping semantics each path used to
     implement inline: a slice with no forward estimate is a FAILURE
     (recorded by the caller in its failed list), a slice with fewer
-    than 5 (k, w) points is a SKIP (neither fitted nor recorded),
+    than 5 (k, w) points is also a failure,
     and the forward check wins over the point-count check.  ``path``
-    is the model name used in the no-forward warning (``"SVI"``,
-    ``"eSSVI"``, ``"SABR"``) so the per-path log text is preserved.
+    is the model name used in the no-forward warning.
     """
     F = fwd_curve.get(sl.expiry_time)
     if F is None:
@@ -84,12 +78,6 @@ def _prepare_slice(
 
 
 class RepairStrategy(Protocol):
-    """Fit contract implemented by every model repair strategy.
-
-    ``name`` is the per-path log prefix (``"SVI"``, ``"eSSVI"``,
-    ``"SABR"``); its exact value is load-bearing — the no-forward
-    warning text is asserted by tests.  ``fit`` consumes the cleaned
-    surface and forward curve and returns the accumulated outcome.
-    """
+    """Fit contract implemented by each calibration strategy."""
     name: str
     def fit(self, cleaned_surface: VolSurface, fwd_curve: dict[float, float]) -> _PathFitResult: ...

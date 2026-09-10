@@ -76,12 +76,13 @@ def test_calibrate_constrained_recovers_known_params() -> None:
 def test_calibrate_constrained_clean_input_is_arb_free() -> None:
     """Clean SVI data should produce an arb-free fit under constrained
     calibration."""
-    from arbfree_vol.arbitrage.svi_detect import detect_svi
+    from arbfree_vol.models.fitted import FittedSlice
+    from arbfree_vol.verification import verify_surface
 
     points = _points_from(TRUE_FLAT, np.linspace(-0.4, 0.4, 9))
     fit = calibrate_constrained(points)
-    report = detect_svi(fit)
-    assert report.is_arbitrage_free
+    fitted = FittedSlice(1, fit, 0, 100, 9, 9)
+    assert verify_surface([fitted]).certified
 
 
 # Noise fixture for the adversarial test below.
@@ -112,7 +113,8 @@ def test_calibrate_constrained_better_than_unconstrained_on_noisy_input() -> Non
     """On a noisy aggressive SVI smile, unconstrained ``calibrate()``
     produces a butterfly-violating curve while ``calibrate_constrained()``
     does not."""
-    from arbfree_vol.arbitrage.svi_detect import detect_svi
+    from arbfree_vol.models.fitted import FittedSlice
+    from arbfree_vol.verification import verify_surface
 
     ks = np.linspace(-0.5, 0.5, 15)
     noisy_points = _noisy_points_from(TRUE2, ks)
@@ -120,14 +122,14 @@ def test_calibrate_constrained_better_than_unconstrained_on_noisy_input() -> Non
     fit_unconstrained = calibrate(noisy_points)
     fit_constrained = calibrate_constrained(noisy_points)
 
-    unconstrained_report = detect_svi(fit_unconstrained)
-    constrained_report = detect_svi(fit_constrained)
+    unconstrained_report = verify_surface([FittedSlice(1, fit_unconstrained, 0, 100, 15, 15)])
+    constrained_report = verify_surface([FittedSlice(1, fit_constrained, 0, 100, 15, 15)])
 
-    assert not unconstrained_report.is_arbitrage_free, (
+    assert not unconstrained_report.certified, (
         "Unconstrained fit must produce a butterfly violation "
         "to demonstrate constrained > unconstrained"
     )
-    assert constrained_report.is_arbitrage_free, (
+    assert constrained_report.certified, (
         "Constrained fit must remain arb-free on the same noisy data"
     )
 

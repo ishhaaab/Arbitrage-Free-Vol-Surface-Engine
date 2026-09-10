@@ -18,7 +18,7 @@ from arbfree_vol.models.fitted import FittedSurface
 from arbfree_vol.svi.model import svi_total_variance
 
 if TYPE_CHECKING:
-    from arbfree_vol.repair.report import RepairReport
+    from arbfree_vol.report import CalibrationReport
 
 # ---------------------------------------------------------------------------
 # Module-level tolerance constants (no-hardcoding rule)
@@ -26,14 +26,15 @@ if TYPE_CHECKING:
 _EXACT_EXPIRY_TOL: float = 1e-10
 
 
-def build_fitted_surface(report: RepairReport) -> FittedSurface:
-    """Construct a ``FittedSurface`` from a completed ``RepairReport``.
+def build_fitted_surface(
+    report: CalibrationReport, *, allow_uncertified: bool = False
+) -> FittedSurface:
+    """Construct a queryable surface from a calibration report.
 
     Parameters
     ----------
     report:
-        Output of ``repair()`` containing cleaned surface and fitted
-        SVI slices.
+        Output of ``calibrate_surface()``.
 
     Returns
     -------
@@ -43,14 +44,15 @@ def build_fitted_surface(report: RepairReport) -> FittedSurface:
     Raises
     ------
     ValueError
-        If ``report.cleaned_surface`` is ``None`` (no valid surface
-        survived the repair process).
+        If the calibration is not certified, unless ``allow_uncertified``
+        is explicitly true.
     """
-    cleaned = report.cleaned_surface
-    if cleaned is None:
+    if not report.certificate.certified and not allow_uncertified:
         raise ValueError(
-            "RepairReport has no cleaned_surface; cannot build FittedSurface"
+            "CalibrationReport is not certified on its numerical domain; "
+            "pass allow_uncertified=True to inspect it explicitly"
         )
+    cleaned = report.cleaned_surface
 
     spot = cleaned.spot
     risk_free = cleaned.risk_free

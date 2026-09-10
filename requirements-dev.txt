@@ -5,6 +5,3 @@ pytest>=8.0
 pytest-cov
 ruff>=0.6
 basedpyright>=1.18
-
-# Mutation testing is configured in setup.cfg ([mutmut]); install on demand:
-#   pip install mutmut

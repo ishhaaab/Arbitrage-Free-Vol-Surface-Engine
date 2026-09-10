@@ -1,4 +1,4 @@
-"""Calibration: fit SSVI / eSSVI to observed (k, w) points."""
+"""Fit one SSVI slice to observed log-moneyness and total variance."""
 
 import numpy as np
 from scipy.optimize import least_squares
@@ -36,4 +36,3 @@ def fit_ssvi_slice(points: list[tuple[float, float]]) -> SSVIParams:
         raise RuntimeError(f"SSVI calibration failed: {result.message}")
     theta, rho, psi= result.x
     return SSVIParams(theta=float(theta), rho=float(rho), psi=float(psi))
-

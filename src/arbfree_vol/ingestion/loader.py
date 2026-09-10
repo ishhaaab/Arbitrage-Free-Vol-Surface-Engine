@@ -1,12 +1,4 @@
-"""Load option chain data from CSV files into a VolSurface.
-
-CSV schema (one row per quote):
-    timestamp, underlying, expiry, strike, option_type, bid, ask, price
-
-Surface level fields (spot, risk_free, div_yield) can be supplied via
-function arguments or inferred from the data (spot= first row's value
-if all rows agree; r, q default to 0.05 and 0.0).
-"""
+"""Load a dated European option-chain CSV using ACT/365F."""
 
 import csv
 from datetime import date, datetime
@@ -15,106 +7,78 @@ from pathlib import Path
 from arbfree_vol.ingestion.cleaning import RejectionRecord, clean_quotes
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote, VolSurface
-from arbfree_vol.rates import YieldTermStructure
-from arbfree_vol.time import DayCount
 
-_REQUIRED_FIELDS=  ("strike", "expiry", "option_type", "price")
-
-
-def _parse_expiry(
-    value: str,
-    as_of: date | None,
-    day_count: DayCount | str = "ACT/365F",
-) -> float:
-    """Parse an expiry string (YYYY-MM-DD) and return years to expiry."""
-    exp = datetime.strptime(value, "%Y-%m-%d").date()
-    ref = as_of or date.today()
-    if exp < ref:
-        raise ValueError(f"Option is expired: expiry {exp.isoformat()} precedes {ref.isoformat()}")
-    dc = DayCount(day_count) if isinstance(day_count, str) else day_count
-    return dc.year_fraction(ref, exp)
+_REQUIRED_FIELDS = ("strike", "expiry", "option_type", "price")
 
 
 def _parse_option_type(value: str) -> OptionType:
-    v=  value.strip().lower()
-    if v in ("call", "c"):
+    normalized = value.strip().lower()
+    if normalized in ("call", "c"):
         return OptionType.CALL
-    
-    if v in ("put", "p"):
+    if normalized in ("put", "p"):
         return OptionType.PUT
-    
     raise ValueError(f"Unknown option type: {value!r}")
 
 
-def _safe_float(value: str | None) -> float | None:
-    if value is None or value== "":
-        return None
-    return float(value)
+def _optional_float(value: str | None) -> float | None:
+    return None if value in (None, "") else float(value)
 
 
 def load_chain_csv(
     path: str | Path,
+    *,
     spot: float,
-    risk_free: float | YieldTermStructure = 0.05,
+    as_of: date,
+    risk_free: float,
     div_yield: float = 0.0,
-    as_of: date | None = None,
     clean: bool = True,
-    day_count: DayCount | str = "ACT/365F",
-    calendar: object | None = None,
 ) -> tuple[VolSurface, list[RejectionRecord]]:
-    """Load a CSV option chain and return a VolSurface + rejection log.
-
-    ``risk_free`` may be a flat ``float`` (back-compat) or a
-    :class:`YieldTermStructure` — per-slice ``r(T)`` is then threaded
-    via ``ExpirySlice.risk_free``.
-
-    ``day_count`` selects the year-fraction for ``T`` (default
-    ``ACT/365F`` = ``days/365.0``).  ``calendar`` is accepted for API
-    parity with the live fetchers; CSV expiries are exchange dates, not
-    rolled.
-    """
-    by_T: dict[float, list[Quote]]=  {}
-    all_rejected: list[RejectionRecord]=  []
-
-    with open(path, newline="", encoding="utf-8") as f:
-        reader=  csv.DictReader(f)
+    """Return a surface and cleaning audit from the documented CSV schema."""
+    by_expiry: dict[float, list[Quote]] = {}
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        missing = [field for field in _REQUIRED_FIELDS if field not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"Missing required fields: {missing}")
         for row in reader:
-            missing=  [f for f in _REQUIRED_FIELDS if f not in row]
-            if missing:
-                raise ValueError(f"Missing required fields: {missing}")
+            expiry = datetime.strptime(row["expiry"], "%Y-%m-%d").date()
+            days = (expiry - as_of).days
+            if days <= 0:
+                raise ValueError(f"Option expiry {expiry.isoformat()} is not after as_of")
+            maturity = days / 365.0
+            quote = Quote(
+                strike=float(row["strike"]),
+                option_type=_parse_option_type(row["option_type"]),
+                price=float(row["price"]),
+                bid=_optional_float(row.get("bid")),
+                ask=_optional_float(row.get("ask")),
+            )
+            by_expiry.setdefault(maturity, []).append(quote)
 
-            strike=  float(row["strike"])
-            T=  _parse_expiry(row["expiry"], as_of, day_count)
-            otype=  _parse_option_type(row["option_type"])
-            price=  float(row["price"])
-            bid=  _safe_float(row.get("bid"))
-            ask=  _safe_float(row.get("ask"))
-
-            q=  Quote(strike=strike, option_type=otype, price=price, bid=bid, ask=ask)
-            by_T.setdefault(T, []).append(q)
-
-    slices: list[ExpirySlice]=  []
-    for T, quotes in by_T.items():
-        sl=  ExpirySlice(expiry_time=T, quotes=quotes)
+    slices: list[ExpirySlice] = []
+    rejected: list[RejectionRecord] = []
+    for maturity, quotes in sorted(by_expiry.items()):
+        expiry_slice = ExpirySlice(expiry_time=maturity, quotes=quotes)
         if clean:
-            kept, rejected=  clean_quotes(sl, spot)
-            all_rejected.extend(rejected)
-            if not kept:
-                continue  # drop empty slices after cleaning
-            sl=  ExpirySlice(expiry_time=T, quotes=kept)
-        slices.append(sl)
+            result = clean_quotes(
+                expiry_slice,
+                spot,
+                risk_free=risk_free,
+                div_yield=div_yield,
+            )
+            rejected.extend(result.rejected_quotes)
+            if not result.accepted_quotes:
+                continue
+            expiry_slice = ExpirySlice(
+                expiry_time=maturity, quotes=list(result.accepted_quotes)
+            )
+        slices.append(expiry_slice)
 
     if not slices:
         raise ValueError("No slices survived cleaning")
-
-    # Thread per-slice r(T) if a curve was supplied
-    is_curve = isinstance(risk_free, YieldTermStructure)
-    surface_r = 0.05 if is_curve else float(risk_free)
-    for sl in slices:
-        if is_curve:
-            sl.risk_free = risk_free.zero_rate(sl.expiry_time)  # type: ignore[union-attr]
-
-    return (
-        VolSurface(spot=spot, risk_free=surface_r, div_yield=div_yield, slices=slices),
-        all_rejected,
-    )
+    return VolSurface(
+        spot=spot,
+        risk_free=risk_free,
+        div_yield=div_yield,
+        slices=slices,
+    ), rejected

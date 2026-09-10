@@ -1,262 +1,87 @@
-"""Tests for the quote cleaning module."""
-from arbfree_vol.ingestion.cleaning import (
-    RejectionRule,
-    _check_crossed_market,
-    _check_deep_moneyness,
-    _check_intrinsic_violation,
-    _check_near_expiry,
-    _check_negative_price,
-    _check_wide_spread,
-    _check_zero_bid_or_ask,
-    _check_zero_price,
-    clean_quotes,
-)
+from math import exp
+
+import pytest
+
+from arbfree_vol.ingestion.cleaning import RejectionRule, clean_quotes
 from arbfree_vol.models.option import OptionType
 from arbfree_vol.models.surface import ExpirySlice, Quote
 
-SPOT = 100.0
-T = 0.5
+
+def _clean(quote: Quote, **kwargs):
+    expiry_slice = ExpirySlice(expiry_time=kwargs.pop("expiry", 0.5), quotes=[quote])
+    return clean_quotes(expiry_slice, 100.0, **kwargs)
 
 
-def test_negative_price_rejected() -> None:
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=-1.0)
-    assert _check_negative_price(q) is not None
+@pytest.mark.parametrize("price", [0.0, -1.0, float("nan")])
+def test_rejects_nonpositive_or_nonfinite_price(price: float) -> None:
+    result = _clean(Quote(strike=100, option_type=OptionType.CALL, price=price, bid=1, ask=2))
+    assert result.rejected_quotes[0].rule is RejectionRule.INVALID_PRICE
 
 
-def test_crossed_market_rejected() -> None:
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=6.0, ask=5.0)
-    rec = _check_crossed_market(q)
-    assert rec is not None
-    assert rec.rule == RejectionRule.CROSSED_MARKET
+@pytest.mark.parametrize(
+    ("bid", "ask"), [(None, 2.0), (1.0, None), (0.0, 2.0), (2.0, 1.0)]
+)
+def test_rejects_missing_zero_or_crossed_market(bid: float | None, ask: float | None) -> None:
+    result = _clean(Quote(strike=100, option_type=OptionType.CALL, price=1.5, bid=bid, ask=ask))
+    assert result.rejected_quotes[0].rule is RejectionRule.INVALID_MARKET
 
 
-def test_wide_spread_rejected() -> None:
-    # bid=5, ask=15 -> spread=10, mid=10, ratio=1.0 > 0.5
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=10.0, bid=5.0, ask=15.0)
-    rec = _check_wide_spread(q, max_ratio=0.5)
-    assert rec is not None
-    assert rec.rule == RejectionRule.WIDE_SPREAD
+def test_rejects_wide_spread() -> None:
+    result = _clean(Quote(strike=100, option_type=OptionType.CALL, price=1, bid=0.5, ask=1.5))
+    assert result.rejected_quotes[0].rule is RejectionRule.WIDE_SPREAD
 
 
-def test_narrow_spread_kept() -> None:
-    # bid=9, ask=11 -> ratio=0.2
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=10.0, bid=9.0, ask=11.0)
-    assert _check_wide_spread(q, max_ratio=0.5) is None
-
-
-def test_intrinsic_violation_call_otm_is_not_a_violation() -> None:
-    # spot=100, strike=110 (OTM call), price=0.5 -> intrinsic is 0, so any
-    # positive price is fine.  This is the NON-violation side of the OTM
-    # case; the genuine violation side (ITM call priced below intrinsic)
-    # is covered by test_intrinsic_violation_call_itm below.
-    sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-    q = Quote(strike=110.0, option_type=OptionType.CALL, price=0.5)
-    rec = _check_intrinsic_violation(sl, q, SPOT)
-    assert rec is None  # OTM call can have any positive price
-
-
-def test_intrinsic_violation_call_itm() -> None:
-    # spot=100, strike=80 (ITM call), intrinsic=20, price=10 -> violation
-    sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-    q = Quote(strike=80.0, option_type=OptionType.CALL, price=10.0)
-    rec = _check_intrinsic_violation(sl, q, SPOT)
-    assert rec is not None
-    assert rec.rule == RejectionRule.INTRINSIC_VIOLATION
-
-
-def test_intrinsic_violation_put_itm() -> None:
-    # spot=100, strike=120 (ITM put), intrinsic=20, price=10 -> violation
-    sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.PUT, price=5.0)])
-    q = Quote(strike=120.0, option_type=OptionType.PUT, price=10.0)
-    rec = _check_intrinsic_violation(sl, q, SPOT)
-    assert rec is not None
-
-
-def test_near_expiry_rejected() -> None:
-    sl = ExpirySlice(expiry_time=1.0 / 365.0, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)])  # 1 day
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)
-    rec = _check_near_expiry(sl, q, min_T=7.0 / 365.0)
-    assert rec is not None
-    assert rec.rule == RejectionRule.NEAR_EXPIRY
-
-
-def test_far_expiry_kept() -> None:
-    sl = ExpirySlice(expiry_time=0.5, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)
-    assert _check_near_expiry(sl, q, min_T=7.0 / 365.0) is None
-
-
-def test_deep_moneyness_rejected() -> None:
-    sl = ExpirySlice(expiry_time=1.0, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-    # strike=500, spot=100 -> k = ln(5) ≈ 1.609, > 1.5
-    q = Quote(strike=500.0, option_type=OptionType.CALL, price=0.1)
-    rec = _check_deep_moneyness(sl, q, SPOT, max_k=1.5)
-    assert rec is not None
-    assert rec.rule == RejectionRule.DEEP_MONEYNESS
-
-
-def test_atm_moneyness_kept() -> None:
-    sl = ExpirySlice(expiry_time=1.0, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)
-    assert _check_deep_moneyness(sl, q, SPOT, max_k=1.5) is None
-
-
-def test_clean_quotes_keeps_clean_and_rejects_bad() -> None:
-    # 1 clean, 1 with crossed market, 1 with negative price
-    q_clean = Quote(strike=100.0, option_type=OptionType.CALL, price=10.0, bid=9.0, ask=11.0)
-    q_crossed = Quote(strike=110.0, option_type=OptionType.CALL, price=5.0, bid=6.0, ask=5.0)
-    q_neg = Quote(strike=120.0, option_type=OptionType.CALL, price=-1.0)
-
-    sl = ExpirySlice(
-        expiry_time=0.5,
-        quotes=[q_clean, q_crossed, q_neg],
+def test_rejects_near_expiry() -> None:
+    result = _clean(
+        Quote(strike=100, option_type=OptionType.CALL, price=2, bid=1.9, ask=2.1),
+        expiry=1 / 365,
     )
-
-    kept, rejected = clean_quotes(sl, spot=SPOT)
-
-    assert len(kept) == 1
-    assert kept[0].strike == 100.0
-    assert len(rejected) == 2
-    rules = {r.rule for r in rejected}
-    assert RejectionRule.CROSSED_MARKET in rules
-    assert RejectionRule.NEGATIVE_PRICE in rules
+    assert result.rejected_quotes[0].rule is RejectionRule.NEAR_EXPIRY
 
 
-# ---------------------------------------------------------------------------
-# Exact-boundary tests for the remaining cleaning rules
-# ---------------------------------------------------------------------------
-
-
-def test_zero_price_exactly_rejected() -> None:
-    """The zero-price rule rejects only price == 0 exactly."""
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=0.0)
-    rec = _check_zero_price(q)
-    assert rec is not None
-    assert rec.rule == RejectionRule.ZERO_PRICE
-
-
-def test_tiny_positive_price_kept() -> None:
-    """Any positive price — even 1e-12 — passes the zero-price rule."""
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1e-12)
-    assert _check_zero_price(q) is None
-
-
-def test_zero_bid_or_ask_exactly_rejected() -> None:
-    """bid == 0 or ask == 0 violates; missing sides are fine (only the
-    price check is mandatory) and small-but-positive values pass."""
-    q_zero_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=0.0, ask=10.0)
-    rec = _check_zero_bid_or_ask(q_zero_bid)
-    assert rec is not None
-    assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
-    assert "bid=0.0" in rec.detail
-
-    q_zero_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0, ask=0.0)
-    assert _check_zero_bid_or_ask(q_zero_ask) is not None
-
-
-def test_zero_bid_or_ask_missing_side_rejected() -> None:
-    """A quote with either side missing has no two-sided market data
-    (its only price can come from a lastPrice fallback) — rejected
-    under ZERO_BID_OR_ASK naming the missing side.  Regression:
-    pre-fix, a missing side short-circuited the rule entirely (the N1
-    no-quote path — NaN/NaN rows surviving cleaning)."""
-    q_missing_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, ask=10.0)
-    q_missing_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0)
-    for q, side in ((q_missing_bid, "bid"), (q_missing_ask, "ask")):
-        rec = _check_zero_bid_or_ask(q)
-        assert rec is not None
-        assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
-        assert f"missing: {side}" in rec.detail
-
-
-def test_zero_bid_or_ask_mixed_zero_and_missing_side_rejected() -> None:
-    """Mixed zero/missing sides are rejected: an absent side is a
-    no-market-data signal regardless of the present side's value —
-    bid=0/ask=None and bid=None/ask=0 both carry an absent side."""
-    q_zero_bid_missing_ask = Quote(
-        strike=100.0, option_type=OptionType.CALL, price=5.0, bid=0.0
+def test_uses_discounted_european_call_lower_bound() -> None:
+    maturity = 1.0
+    rate = 0.05
+    dividend = 0.02
+    strike = 80.0
+    lower = 100 * exp(-dividend * maturity) - strike * exp(-rate * maturity)
+    quote = Quote(
+        strike=strike,
+        option_type=OptionType.CALL,
+        price=lower - 0.01,
+        bid=lower - 0.02,
+        ask=lower,
     )
-    q_missing_bid_zero_ask = Quote(
-        strike=100.0, option_type=OptionType.CALL, price=5.0, ask=0.0
+    result = _clean(quote, expiry=maturity, risk_free=rate, div_yield=dividend)
+    assert result.rejected_quotes[0].rule is RejectionRule.PRICE_BOUND
+
+
+def test_uses_discounted_european_put_lower_bound() -> None:
+    maturity = 1.0
+    rate = 0.05
+    dividend = 0.02
+    strike = 120.0
+    lower = strike * exp(-rate * maturity) - 100 * exp(-dividend * maturity)
+    quote = Quote(
+        strike=strike,
+        option_type=OptionType.PUT,
+        price=lower - 0.01,
+        bid=lower - 0.02,
+        ask=lower,
     )
-    assert _check_zero_bid_or_ask(q_zero_bid_missing_ask) is not None
-    assert _check_zero_bid_or_ask(q_missing_bid_zero_ask) is not None
+    result = _clean(quote, expiry=maturity, risk_free=rate, div_yield=dividend)
+    assert result.rejected_quotes[0].rule is RejectionRule.PRICE_BOUND
 
 
-def test_zero_bid_or_ask_both_sides_missing_rejected() -> None:
-    """Both bid and ask absent — the N1 no-quote path — is rejected:
-    the quote carries no market data at all (price can only be a
-    stale lastPrice fallback)."""
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=None, ask=None)
-    rec = _check_zero_bid_or_ask(q)
-    assert rec is not None
-    assert rec.rule == RejectionRule.ZERO_BID_OR_ASK
-    assert "missing: bid, ask" in rec.detail
+def test_records_only_first_rejection_reason() -> None:
+    quote = Quote(strike=100, option_type=OptionType.CALL, price=-1, bid=2, ask=1)
+    result = _clean(quote)
+    assert len(result.rejected_quotes) == 1
+    assert result.rejected_quotes[0].rule is RejectionRule.INVALID_PRICE
 
 
-def test_zero_bid_or_ask_small_positive_values_pass() -> None:
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=0.02, bid=0.01, ask=0.02)
-    assert _check_zero_bid_or_ask(q) is None
-
-
-def test_negative_bid_or_ask_flagged_with_detail() -> None:
-    """Negative bid/ask are NEGATIVE_PRICE violations naming the field."""
-    q_bid = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=-1.0, ask=10.0)
-    rec = _check_negative_price(q_bid)
-    assert rec is not None
-    assert rec.rule == RejectionRule.NEGATIVE_PRICE
-    assert "bid=-1.0" in rec.detail
-
-    q_ask = Quote(strike=100.0, option_type=OptionType.CALL, price=5.0, bid=5.0, ask=-1.0)
-    rec = _check_negative_price(q_ask)
-    assert rec is not None
-    assert rec.rule == RejectionRule.NEGATIVE_PRICE
-    assert "ask=-1.0" in rec.detail
-
-
-def test_near_expiry_exact_cutoff_kept() -> None:
-    """The rule rejects only expiry_time < min_T: equality at the cutoff
-    is kept."""
-    min_T = 7.0 / 365.0
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)
-    sl = ExpirySlice(expiry_time=min_T, quotes=[q])
-    assert _check_near_expiry(sl, q, min_T) is None
-
-
-def test_near_expiry_just_below_cutoff_rejected() -> None:
-    """One floating-point step below the cutoff is rejected."""
-    min_T = 7.0 / 365.0
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=1.0)
-    sl = ExpirySlice(expiry_time=min_T - 1e-9, quotes=[q])
-    rec = _check_near_expiry(sl, q, min_T)
-    assert rec is not None
-    assert rec.rule == RejectionRule.NEAR_EXPIRY
-
-
-def test_wide_spread_exact_boundary_kept() -> None:
-    """bid=3, ask=5 -> mid=4 -> ratio = (5-3)/4 = 0.5 == max_ratio.  The
-    rule rejects only ratio > max_ratio, so equality is kept."""
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=4.0, bid=3.0, ask=5.0)
-    assert _check_wide_spread(q, max_ratio=0.5) is None
-
-
-def test_wide_spread_just_above_boundary_rejected() -> None:
-    q = Quote(strike=100.0, option_type=OptionType.CALL, price=4.0, bid=2.99, ask=5.0)
-    rec = _check_wide_spread(q, max_ratio=0.5)
-    assert rec is not None
-    assert rec.rule == RejectionRule.WIDE_SPREAD
-
-
-def test_intrinsic_violation_exact_tolerance_boundary() -> None:
-    """spot=100, strike=80 -> intrinsic=20; the rule rejects only
-    price < intrinsic - 1e-6.  Just above the tolerance: kept; just
-    below: rejected."""
-    sl = ExpirySlice(expiry_time=T, quotes=[Quote(strike=100.0, option_type=OptionType.CALL, price=10.0)])
-
-    q_above = Quote(strike=80.0, option_type=OptionType.CALL, price=20.0 - 5e-7)
-    assert _check_intrinsic_violation(sl, q_above, SPOT) is None
-
-    q_below = Quote(strike=80.0, option_type=OptionType.CALL, price=20.0 - 2e-6)
-    rec = _check_intrinsic_violation(sl, q_below, SPOT)
-    assert rec is not None
-    assert rec.rule == RejectionRule.INTRINSIC_VIOLATION
+def test_accepts_valid_quote() -> None:
+    quote = Quote(strike=100, option_type=OptionType.CALL, price=6, bid=5.9, ask=6.1)
+    result = _clean(quote, risk_free=0.05)
+    assert result.accepted_quotes == (quote,)
+    assert not result.rejected_quotes

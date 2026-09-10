@@ -1,4 +1,4 @@
-"""Hard-constraint builders and the constrained optimizer for eSSVI fits.
+"""Hard-constraint builders and the constrained optimizer for SSVI fits.
 
 Extracted from ``term_structure._fit_slice`` so the H&M Prop 3.1
 constraint math and the trust-constr → SLSQP retry are unit-testable in
@@ -6,7 +6,7 @@ isolation and the sequential-fit module stays a thinner orchestrator.
 
 ``minimize_fn`` is a parameter of ``_constrained_minimize`` (rather than
 an import inside this module) so callers pass their own ``minimize``
-binding — the eSSVI tests patch ``term_structure.minimize`` to script
+    binding because tests patch ``term_structure.minimize`` to script
 optimizer statuses, and that patch must keep working.
 """
 
@@ -119,7 +119,7 @@ def _constrained_minimize(
       hard-constrained arb-free and skip the fallback bookkeeping.
 
     ``minimize_fn`` defaults to scipy's ``minimize`` and is injectable so
-    the eSSVI tests can script optimizer statuses by patching the
+    tests can script optimizer statuses by patching the
     caller's ``minimize`` binding.
 
     Raises ``RuntimeError`` if both attempts fail to converge.
@@ -167,7 +167,7 @@ def _constrained_minimize(
 
     if not success:
         raise RuntimeError(
-            f"eSSVI slice fit failed after retry: {result.message}"
+            f"SSVI slice fit failed after retry: {result.message}"
         )
 
     return result

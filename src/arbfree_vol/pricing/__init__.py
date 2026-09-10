@@ -1,1 +1,1 @@
-"""Pricing, Greeks, and implied-volatility routines."""
+"""Black-Scholes pricing and implied-volatility inversion."""

@@ -18,7 +18,7 @@ from arbfree_vol.svi.model import SVIParams, svi_g, svi_total_variance
 # scipy's default ~500-eval full failure (~1.1s per slice).  150 sits
 # 1.3x above the most demanding clean case while cutting the
 # real-fixture warm-start waste from ~8.5s (default budget) to ~2.6s
-# across the 7-slice SPX fixture, bringing repair() wall time to ~1.4x
+# across the 7-slice SPX fixture, keeping calibration runtime bounded
 # of the pre-multi-start code (measured 7.37s vs 5.28s median).
 _WARM_START_MAX_NFEV = 150
 

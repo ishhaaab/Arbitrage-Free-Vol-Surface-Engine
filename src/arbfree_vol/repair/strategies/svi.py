@@ -23,9 +23,8 @@ def _fit_slice(sl: ExpirySlice,
 
     """Fit SVI to one cleaned slice using the estimated forward price.
 
-    Returns None if fewer than 5 (k, w) points are available (a SKIP,
-    mirroring the eSSVI path — tiny slices are neither fitted nor
-    recorded as failed).  A calibration failure (``RuntimeError`` from
+    Returns None if fewer than 5 (k, w) points are available. The caller
+    records that expiry as failed. A calibration failure (``RuntimeError`` from
     ``calibrate_constrained``) PROPAGATES to the caller, which records
     the slice in ``failed_slices`` — a slice must not vanish with zero
     record.
@@ -89,6 +88,7 @@ class SVIStrategy:
                 failed_slices.append(prep.expiry_time)
                 continue
             if prep.status is _PrepStatus.TOO_FEW:
+                failed_slices.append(prep.expiry_time)
                 continue
             assert prep.forward is not None
             try:
@@ -96,7 +96,7 @@ class SVIStrategy:
             except RuntimeError as exc:
                 # Honest bookkeeping: a slice whose calibration fails
                 # entirely is recorded in failed_slices (mirroring the
-                # eSSVI path), not silently dropped from the report.
+                # SSVI path), not silently dropped from the report.
                 _logger.warning(
                     "SVI constrained calibration failed for slice T=%.4f: "
                     "%s; slice recorded as failed",

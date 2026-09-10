@@ -1,11 +1,4 @@
-"""SSVI / eSSVI surface formulas.
-
-Gatheral & Jacquier (2014) SSVI builds a surface thats arbitrage-free
-by construction when the angle function ``psi(theta)`` satisfies the
-Gatheral-Jacquier condition.  The eSSVI specialization uses
-``psi = eta / theta**gamma`` — a power-law decay thats safe for
-``0 <= gamma <= 1, eta > 0``.
-"""
+"""SSVI slice formulas and butterfly-condition diagnostics."""
 
 from math import sqrt
 
@@ -19,7 +12,7 @@ from pydantic import BaseModel, Field
 # This is the SINGLE source of truth shared by BOTH consumers:
 #   - the public diagnostic ``gatheral_jacquier_condition(..., strict=True)``
 #     (used only when strict=True), and
-#   - the production eSSVI optimizer constraint path in
+#   - the production SSVI optimizer constraint path in
 #     ``ssvi/term_structure.py`` (which imports this constant under the
 #     alias ``_GJ_CONDITION1_STRICT_EPS``).
 # The two paths can never diverge: strict mode applies to condition 1 ONLY
@@ -40,23 +33,6 @@ class SSVIParams(BaseModel):
     psi: float= Field(..., gt=0)
 
 
-class eSSVISurfaceParams(BaseModel):
-    """eSSVI wing function: psi(theta)= eta / theta**gamma.
-
-    - ``eta``:   power-law coefficient, > 0
-    - ``gamma``: power-law exponent, in [0, 1] for arb-free surfaces
-    """
-    eta: float= Field(..., gt=0)
-    gamma: float= Field(..., ge=0, le=1)
-
-
-def essvi_psi(theta: float, eta: float, gamma: float) -> float:
-    """eSSVI angle function: psi = eta / theta**gamma."""
-    if theta <= 0:
-        raise ValueError(f"theta must be positive, got {theta}")
-    return eta / (theta ** gamma)
-
-
 def ssvi_w(k: float, theta: float, rho: float, psi: float) -> float:
     """SSVI total variance at log-moneyness ``k``.
 
@@ -64,11 +40,6 @@ def ssvi_w(k: float, theta: float, rho: float, psi: float) -> float:
         w = (theta / 2) * (1 + rho*psi*k + sqrt((psi*k + rho)**2 + (1 - rho**2)))
     """
     return (theta / 2.0) * (1.0 + rho * psi * k + sqrt((psi * k + rho) ** 2 + (1.0 - rho ** 2)))
-
-
-def essvi_w(k: float, theta: float, rho: float, eta: float, gamma: float) -> float:
-    """eSSVI total variance: SSVI with psi set to eta / theta**gamma."""
-    return ssvi_w(k, theta, rho, essvi_psi(theta, eta, gamma))
 
 
 def ssvi_dw_dk(k: float, theta: float, rho: float, psi: float) -> float:
@@ -120,7 +91,7 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float,
         modes.
 
         ``_GJ_STRICT_EPS`` (1e-9) is the SAME canonical constant the
-        production eSSVI optimizer constraint path uses (it imports it
+        production SSVI optimizer constraint path uses (it imports it
         as ``_GJ_CONDITION1_STRICT_EPS`` in ``ssvi/term_structure.py``),
         so this public diagnostic and the calibration path apply the
         same strictness to condition 1 and cannot diverge.
@@ -143,26 +114,6 @@ def gatheral_jacquier_condition(theta: float, rho: float, psi: float,
         # than relying on downstream comparisons of exact floats).
         return min(first_residual - _GJ_STRICT_EPS, second_residual)
     return min(first_residual, second_residual)
-
-
-def essvi_params_in_bounds(theta: float, eta: float, gamma: float) -> bool:
-    """Check structural bounds on eSSVI power-law parameters.
-
-    Returns ``True`` when ``0 <= gamma <= 1`` and ``eta > 0``.
-    This checks the necessary structural bounds on the eSSVI wing
-    function but does NOT verify the full Gatheral-Jacquier condition
-    ``theta * psi * (1+|rho|) <= 4`` — that requires evaluating every
-    slice's (theta, rho) pair against the wing function.  Use
-    :func:`gatheral_jacquier_condition` or
-    :func:`arbfree_vol.arbitrage.svi_detect.detect_svi_surface` for a
-    complete no-arbitrage check.
-    """
-    return 0.0 <= gamma <= 1.0 and eta > 0.0
-
-
-# Backwards-compatible name.  This check only validates parameter bounds; it
-# does not establish that a surface is arbitrage-free.
-essvi_arb_safe = essvi_params_in_bounds
 
 
 def to_raw_svi_params(theta: float, rho: float, psi: float) -> tuple[float, float, float, float, float]:

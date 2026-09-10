@@ -1,4 +1,4 @@
-"""Tests for the SSVI / eSSVI parameterization."""
+"""Tests for the SSVI parameterization."""
 from math import sqrt
 
 import pytest
@@ -6,9 +6,6 @@ from pytest import approx
 
 from arbfree_vol.ssvi.calibration import fit_ssvi_slice
 from arbfree_vol.ssvi.model import (
-    essvi_arb_safe,
-    essvi_psi,
-    essvi_w,
     gatheral_jacquier_condition,
     ssvi_d2w_dk2,
     ssvi_dw_dk,
@@ -30,18 +27,6 @@ def test_ssvi_atm_value() -> None:
     # At k=0, w(0) = theta (ATM total variance).
     w0 = ssvi_w(0.0, 0.04, -0.4, 0.5)
     assert w0 == approx(0.04, abs=1e-12)
-
-
-def test_ssvi_eSSVI_consistency() -> None:
-    # eSSVI with psi=eta/theta**gamma should match ssvi_w directly.
-    eta, gamma = 0.5, 0.5
-    theta, rho = 0.04, -0.4
-    psi = essvi_psi(theta, eta, gamma)
-
-    for k in [-1.0, -0.5, 0.0, 0.5, 1.0]:
-        a = ssvi_w(k, theta, rho, psi)
-        b = essvi_w(k, theta, rho, eta, gamma)
-        assert a == approx(b, abs=1e-12)
 
 
 def test_calibration_recovers_known_params() -> None:
@@ -122,18 +107,6 @@ def test_to_raw_svi_matches_ssvi_across_range() -> None:
         )
 
 
-def test_essvi_arb_safe_default_params() -> None:
-    # 0 <= gamma <= 1, eta > 0 is the arb-safe range.
-    assert essvi_arb_safe(0.04, 0.5, 0.5)
-    assert essvi_arb_safe(0.04, 0.5, 0.0)
-    assert essvi_arb_safe(0.04, 0.5, 1.0)
-    # Out-of-range gamma is flagged.
-    assert not essvi_arb_safe(0.04, 0.5, 1.5)
-    # eta <= 0 is flagged.
-    assert not essvi_arb_safe(0.04, 0.0, 0.5)
-    assert not essvi_arb_safe(0.04, -0.1, 0.5)
-
-
 def test_gj_safe_params_positive_residual() -> None:
     # theta=0.04, rho=0.0, psi=0.5  -> 4 - 0.04*0.5*1 = 3.98
     residual = gatheral_jacquier_condition(0.04, 0.0, 0.5)
@@ -185,17 +158,6 @@ def test_ssvi_dw_dk_at_zero_closed_form() -> None:
         got = ssvi_dw_dk(0.0, theta, rho, psi)
         expected = theta * rho * psi
         assert got == approx(expected, abs=1e-12)
-
-
-def test_essvi_psi_raises_on_nonpositive_theta() -> None:
-    """essvi_psi raises ValueError for theta <= 0."""
-    with pytest.raises(ValueError):
-        essvi_psi(theta=0.0, eta=0.5, gamma=0.5)
-    with pytest.raises(ValueError):
-        essvi_psi(theta=-1.0, eta=0.5, gamma=0.5)
-    # Sanity: positive theta returns normally
-    result = essvi_psi(theta=0.04, eta=0.5, gamma=0.5)
-    assert result == approx(0.5 / (0.04 ** 0.5), abs=1e-12)
 
 
 def test_to_raw_svi_raises_on_nonpositive_psi() -> None:
