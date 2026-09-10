@@ -8,6 +8,8 @@ It loads a frozen SPX option snapshot, cleans quotes, estimates one forward per 
 
 The project does not claim a globally arbitrage-free surface. Its certificate is discrete and limited to the domain printed in the report.
 
+![Constrained SSVI implied-volatility surface](assets/study/surface.png)
+
 ## Reproduce the study
 
 ```bash
@@ -64,6 +66,16 @@ On the committed snapshot, using NumPy 2.5.2 and SciPy 1.18.1, the study produce
 Raw SVI fitted all seven expiries in this environment. Its failure list is still part of the report because the baseline is a comparison fit, not the certified output.
 
 Optimizer results and runtime can change with NumPy and SciPy versions. `summary.json` records the installed versions for every run.
+
+### Study figures
+
+The fitted smiles compare market observations with the unconstrained baseline and the constrained model. The certificate plot shows the worst variance, butterfly-density, and adjacent-calendar margin at each expiry; the dashed line is the acceptance threshold.
+
+| Smile fits | Numerical certificate |
+|---|---|
+| [![Observed smiles and calibrated fits](assets/study/smiles.png)](assets/study/smiles.png) | [![Numerical certificate margins](assets/study/constraints.png)](assets/study/constraints.png) |
+
+These committed images are snapshots of the canonical run. Regenerate them with `python demo/run_study.py --output assets/study`.
 
 ## Method
 

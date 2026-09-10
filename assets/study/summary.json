@@ -1,0 +1,73 @@
+{
+  "dataset_source": "Yahoo Finance via yfinance",
+  "dataset_timestamp": "2026-07-31",
+  "dependency_versions": [
+    [
+      "numpy",
+      "2.5.2"
+    ],
+    [
+      "scipy",
+      "1.18.1"
+    ],
+    [
+      "pydantic",
+      "2.13.5"
+    ],
+    [
+      "matplotlib",
+      "3.11.1"
+    ]
+  ],
+  "input_quotes": 2645,
+  "accepted_quotes": 2617,
+  "forwards": [
+    [
+      0.038356164383561646,
+      7473.062055317873
+    ],
+    [
+      0.07123287671232877,
+      7478.095019648425
+    ],
+    [
+      0.11506849315068493,
+      7489.151472987312
+    ],
+    [
+      0.16712328767123288,
+      7500.8327646776115
+    ],
+    [
+      0.33424657534246577,
+      7546.270095736631
+    ],
+    [
+      0.6657534246575343,
+      7643.45868165245
+    ],
+    [
+      0.915068493150685,
+      7715.169035427009
+    ]
+  ],
+  "raw_svi_failed_slices": [],
+  "fallback_slices": [],
+  "failed_slices": [],
+  "certificate": {
+    "k_min": -1.5,
+    "k_max": 1.5,
+    "grid_size": 241,
+    "tolerance": 0.0001,
+    "min_total_variance": 3.0807259061659506e-05,
+    "min_butterfly_density": 0.24984402124952046,
+    "min_calendar_margin": 5.2870390700899713e-05,
+    "certified": true
+  },
+  "runtime_seconds": 16.583556399999907,
+  "raw_svi_rmse": 0.007594688153030979,
+  "constrained_ssvi_rmse": 0.002725724045231766,
+  "rejection_counts": {
+    "european_price_bound": 28
+  }
+}

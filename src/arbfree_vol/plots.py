@@ -1,7 +1,5 @@
 """Three figures used by the reproducible calibration study."""
 
-from math import sqrt
-
 import numpy as np
 from matplotlib.figure import Figure
 
@@ -14,14 +12,23 @@ def plot_smiles(report: CalibrationReport) -> Figure:
     constrained = {item.expiry_time: item for item in report.fitted_slices}
     baseline = {item.expiry_time: item for item in report.raw_svi_slices}
     maturities = sorted(set(constrained) | set(baseline))
-    figure = Figure(figsize=(11, 3.2 * len(maturities)))
+    columns = 2
+    rows = (len(maturities) + columns - 1) // columns
+    figure = Figure(figsize=(12, 3.2 * rows))
     for index, maturity in enumerate(maturities, start=1):
-        axis = figure.add_subplot(len(maturities), 1, index)
+        axis = figure.add_subplot(rows, columns, index)
         observed = constrained.get(maturity) or baseline[maturity]
         points = observed.data_points or ()
         if points:
-            axis.scatter(*zip(*points), s=9, alpha=0.5, color="#555555", label="Observed")
-        grid = np.linspace(report.certificate.k_min, report.certificate.k_max, 300)
+            axis.scatter(*zip(*points), s=10, alpha=0.45, color="#555555", label="Observed")
+            observed_k = [point[0] for point in points]
+            padding = max(0.04, 0.08 * (max(observed_k) - min(observed_k)))
+            k_min = max(report.certificate.k_min, min(observed_k) - padding)
+            k_max = min(report.certificate.k_max, max(observed_k) + padding)
+        else:
+            k_min = report.certificate.k_min
+            k_max = report.certificate.k_max
+        grid = np.linspace(k_min, k_max, 300)
         for label, fitted, color in (
             ("Raw SVI baseline", baseline.get(maturity), "#b04a3a"),
             ("Constrained SSVI", constrained.get(maturity), "#1f5a7a"),
@@ -32,8 +39,20 @@ def plot_smiles(report: CalibrationReport) -> Figure:
             values = [svi_total_variance(float(k), p.a, p.b, p.rho, p.m, p.sigma) for k in grid]
             axis.plot(grid, values, color=color, linewidth=1.4, label=label)
         axis.set(title=f"T = {maturity:.3f} years", xlabel="log(K/F)", ylabel="total variance")
-        axis.legend(frameon=False)
-    figure.tight_layout()
+        axis.grid(alpha=0.15)
+    for index in range(len(maturities) + 1, rows * columns + 1):
+        figure.add_subplot(rows, columns, index).set_visible(False)
+    handles, labels = figure.axes[0].get_legend_handles_labels()
+    figure.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.975),
+        ncol=3,
+        frameon=False,
+    )
+    figure.suptitle("Observed smiles and calibrated fits", y=0.995)
+    figure.tight_layout(rect=(0, 0, 1, 0.92))
     return figure
 
 
@@ -41,11 +60,11 @@ def plot_surface(report: CalibrationReport) -> Figure:
     """Plot constrained SSVI implied volatility on the certificate grid."""
     ordered = sorted(report.fitted_slices, key=lambda item: item.expiry_time)
     grid = np.linspace(report.certificate.k_min, report.certificate.k_max, 241)
-    maturities = [item.expiry_time for item in ordered]
-    values = np.array(
+    slice_maturities = np.array([item.expiry_time for item in ordered])
+    slice_variances = np.array(
         [
             [
-                sqrt(variance / item.expiry_time) if variance >= 0 else float("nan")
+                variance
                 for k in grid
                 for variance in [
                     svi_total_variance(float(k), p.a, p.b, p.rho, p.m, p.sigma)
@@ -55,11 +74,29 @@ def plot_surface(report: CalibrationReport) -> Figure:
             for p in [item.params]
         ]
     )
-    figure = Figure(figsize=(10, 5))
+    maturities = np.linspace(slice_maturities[0], slice_maturities[-1], 180)
+    variances = np.array(
+        [np.interp(maturities, slice_maturities, column) for column in slice_variances.T]
+    ).T
+    values = np.sqrt(np.maximum(variances, 0.0) / maturities[:, None])
+    figure = Figure(figsize=(10, 5.4))
     axis = figure.add_subplot(111)
-    mesh = axis.pcolormesh(grid, maturities, values, shading="auto", cmap="viridis")
+    mesh = axis.contourf(grid, maturities, values, levels=30, cmap="viridis")
     figure.colorbar(mesh, ax=axis, label="implied volatility")
-    axis.set(xlabel="log(K/F)", ylabel="maturity in years", title="Constrained SSVI surface")
+    axis.set(
+        xlabel="log(K/F)",
+        ylabel="maturity in years",
+        title="Constrained SSVI implied-volatility surface",
+    )
+    axis.scatter(
+        np.zeros_like(slice_maturities),
+        slice_maturities,
+        marker="|",
+        color="white",
+        alpha=0.8,
+        label="calibrated expiries",
+    )
+    axis.legend(loc="upper right", frameon=False, labelcolor="white")
     figure.tight_layout()
     return figure
 
